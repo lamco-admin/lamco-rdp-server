@@ -1,0 +1,254 @@
+# =============================================================================
+# lamco-rdp-server Configuration File
+# =============================================================================
+#
+# This is the authoritative configuration template for lamco-rdp-server.
+# Copy this file to config.toml and adjust paths for your environment.
+#
+# Configuration is validated on startup. Invalid values will cause the server
+# to exit with an error message.
+#
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# SERVER CONFIGURATION
+# -----------------------------------------------------------------------------
+[server]
+# Address and port to listen on (format: "ip:port")
+listen_addr = "0.0.0.0:3389"
+
+# Maximum concurrent RDP connections
+max_connections = 10
+
+# Session timeout in seconds (0 = no timeout)
+session_timeout = 0
+
+# Use XDG Desktop Portals for screen capture (required for Wayland)
+use_portals = true
+
+# -----------------------------------------------------------------------------
+# SECURITY CONFIGURATION
+# -----------------------------------------------------------------------------
+[security]
+# Path to TLS certificate file (PEM format)
+cert_path = "/etc/lamco-rdp-server/cert.pem"
+
+# Path to TLS private key file (PEM format)
+key_path = "/etc/lamco-rdp-server/key.pem"
+
+# Enable Network Level Authentication (NLA)
+enable_nla = false
+
+# Authentication method: "pam" or "none"
+# - "pam": Use PAM for system authentication
+# - "none": No authentication (testing only!)
+auth_method = "none"
+
+# Require TLS 1.3 or higher
+require_tls_13 = false
+
+# -----------------------------------------------------------------------------
+# VIDEO CONFIGURATION
+# -----------------------------------------------------------------------------
+[video]
+# Video encoder: "auto", "openh264", "vaapi"
+# - "auto": Automatically select best available
+# - "openh264": Software H.264 encoding (portable)
+# - "vaapi": Hardware encoding via VA-API (Intel/AMD)
+encoder = "auto"
+
+# VA-API device path (for hardware encoding)
+vaapi_device = "/dev/dri/renderD128"
+
+# Target frames per second
+target_fps = 30
+
+# Video bitrate in kbps
+bitrate = 4000
+
+# Enable damage tracking for efficient updates
+damage_tracking = true
+
+# Cursor rendering mode: "metadata", "embedded", "hidden"
+# - "metadata": Client-side cursor (lowest latency)
+# - "embedded": Cursor composited into video frames
+# - "hidden": No cursor rendering
+cursor_mode = "metadata"
+
+# -----------------------------------------------------------------------------
+# VIDEO PIPELINE CONFIGURATION
+# -----------------------------------------------------------------------------
+[video_pipeline.processor]
+target_fps = 30
+max_queue_depth = 30
+adaptive_quality = true
+damage_threshold = 0.05
+drop_on_full_queue = true
+enable_metrics = true
+
+[video_pipeline.dispatcher]
+channel_size = 30
+priority_dispatch = true
+max_frame_age_ms = 150
+enable_backpressure = true
+high_water_mark = 0.8
+low_water_mark = 0.5
+load_balancing = true
+
+[video_pipeline.converter]
+buffer_pool_size = 8
+enable_simd = true
+damage_threshold = 0.75
+enable_statistics = true
+
+# -----------------------------------------------------------------------------
+# INPUT CONFIGURATION
+# -----------------------------------------------------------------------------
+[input]
+# Use libei for input injection (required for Wayland)
+use_libei = true
+
+# Keyboard layout: "auto" or XKB layout name (e.g., "us", "de")
+keyboard_layout = "auto"
+
+# Enable touch input support
+enable_touch = false
+
+# -----------------------------------------------------------------------------
+# CLIPBOARD CONFIGURATION
+# -----------------------------------------------------------------------------
+[clipboard]
+# Enable clipboard synchronization
+enabled = true
+
+# Maximum clipboard data size in bytes (10 MB)
+max_size = 10485760
+
+# Rate limiting: minimum ms between clipboard events (0 = disabled)
+rate_limit_ms = 200
+
+# Allowed MIME types (empty = all allowed)
+allowed_types = []
+
+# -----------------------------------------------------------------------------
+# MULTI-MONITOR CONFIGURATION
+# -----------------------------------------------------------------------------
+[multimon]
+# Enable multi-monitor support
+enabled = true
+
+# Maximum number of monitors
+max_monitors = 4
+
+# -----------------------------------------------------------------------------
+# PERFORMANCE CONFIGURATION
+# -----------------------------------------------------------------------------
+[performance]
+# Number of encoder threads (0 = auto)
+encoder_threads = 0
+
+# Number of network threads (0 = auto)
+network_threads = 0
+
+# Frame buffer pool size
+buffer_pool_size = 16
+
+# Enable zero-copy operations where possible
+zero_copy = true
+
+# Adaptive FPS settings (optional - has defaults)
+[performance.adaptive_fps]
+enabled = true
+min_fps = 5
+max_fps = 30
+high_activity_threshold = 0.30
+medium_activity_threshold = 0.10
+low_activity_threshold = 0.01
+
+# Latency governor settings (optional - has defaults)
+[performance.latency]
+mode = "balanced"
+interactive_max_delay_ms = 16
+balanced_max_delay_ms = 33
+quality_max_delay_ms = 100
+balanced_damage_threshold = 0.02
+quality_damage_threshold = 0.05
+
+# -----------------------------------------------------------------------------
+# LOGGING CONFIGURATION
+# -----------------------------------------------------------------------------
+[logging]
+# Log level: "trace", "debug", "info", "warn", "error"
+level = "info"
+
+# Enable metrics collection
+metrics = true
+
+# Log directory (optional - omit for console only)
+# log_dir = "/var/log/lamco-rdp-server"
+
+# =============================================================================
+# OPTIONAL SECTIONS (have sensible defaults if omitted)
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# EGFX CONFIGURATION (Graphics Pipeline Extension)
+# -----------------------------------------------------------------------------
+[egfx]
+enabled = true
+h264_level = "auto"
+h264_bitrate = 5000
+zgfx_compression = "never"
+max_frames_in_flight = 3
+frame_ack_timeout = 5000
+codec = "avc420"
+qp_min = 10
+qp_max = 40
+qp_default = 23
+avc444_aux_bitrate_ratio = 0.5
+color_matrix = "auto"
+color_range = "auto"
+avc444_enabled = true
+avc444_enable_aux_omission = true
+avc444_max_aux_interval = 30
+avc444_aux_change_threshold = 0.05
+avc444_force_aux_idr_on_return = false
+
+# -----------------------------------------------------------------------------
+# DAMAGE TRACKING CONFIGURATION
+# -----------------------------------------------------------------------------
+[damage_tracking]
+enabled = true
+method = "diff"
+tile_size = 64
+diff_threshold = 0.05
+merge_distance = 32
+
+# -----------------------------------------------------------------------------
+# HARDWARE ENCODING CONFIGURATION
+# -----------------------------------------------------------------------------
+[hardware_encoding]
+enabled = false
+vaapi_device = "/dev/dri/renderD128"
+enable_dmabuf_zerocopy = true
+fallback_to_software = true
+quality_preset = "balanced"
+prefer_nvenc = true
+
+# -----------------------------------------------------------------------------
+# DISPLAY CONFIGURATION
+# -----------------------------------------------------------------------------
+[display]
+allow_resize = true
+allowed_resolutions = []
+dpi_aware = false
+allow_rotation = false
+
+# -----------------------------------------------------------------------------
+# ADVANCED VIDEO CONFIGURATION
+# -----------------------------------------------------------------------------
+[advanced_video]
+enable_frame_skip = true
+scene_change_threshold = 0.7
+intra_refresh_interval = 300
+enable_adaptive_quality = false
