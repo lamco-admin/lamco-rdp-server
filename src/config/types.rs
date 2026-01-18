@@ -423,7 +423,7 @@ pub struct LoggingConfig {
 }
 
 /// Video pipeline configuration
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VideoPipelineConfig {
     /// Frame processor configuration
     pub processor: ProcessorConfig,
@@ -536,6 +536,16 @@ impl Default for ConverterConfig {
     }
 }
 
+impl Default for VideoPipelineConfig {
+    fn default() -> Self {
+        Self {
+            processor: ProcessorConfig::default(),
+            dispatcher: DispatcherConfig::default(),
+            converter: ConverterConfig::default(),
+        }
+    }
+}
+
 /// EGFX (Graphics Pipeline Extension) configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EgfxConfig {
@@ -556,6 +566,13 @@ pub struct EgfxConfig {
 
     /// Frame acknowledgment timeout (ms)
     pub frame_ack_timeout: u64,
+
+    /// Periodic IDR keyframe interval in seconds (0 = disabled)
+    /// Forces a full IDR keyframe at regular intervals to clear accumulated artifacts.
+    /// Recommended: 5-10 seconds for VDI, 2-3 for unreliable networks.
+    /// Default: 5 seconds
+    #[serde(default = "default_periodic_idr_interval")]
+    pub periodic_idr_interval: u32,
 
     /// Video codec preference: "auto", "avc420", "avc444"
     /// - "auto": Use best available codec (AVC444 if client supports V10+, else AVC420)
@@ -583,7 +600,6 @@ pub struct EgfxConfig {
     /// - "bt709": BT.709 for HD content
     /// - "bt601": BT.601 for SD content
     /// - "srgb": sRGB for computer graphics
-    ///
     /// Default: "auto" (OpenH264-compatible for AVC420/AVC444 consistency)
     #[serde(default = "default_color_matrix")]
     pub color_matrix: String,
@@ -592,7 +608,6 @@ pub struct EgfxConfig {
     /// - "auto": Use matrix default (limited for broadcast compatibility)
     /// - "limited": TV range (Y: 16-235, UV: 16-240) - recommended
     /// - "full": PC range (Y: 0-255, UV: 0-255) - maximum dynamic range
-    ///
     /// Default: "auto" (limited range for compatibility)
     #[serde(default = "default_color_range")]
     pub color_range: String,
@@ -615,7 +630,6 @@ pub struct EgfxConfig {
     /// - 10-20: Responsive to color changes, higher bandwidth
     /// - 30-40: Balanced (recommended)
     /// - 60-120: Aggressive omission, static content optimized
-    ///
     /// Default: 30 frames (1 second @ 30fps)
     #[serde(default = "default_aux_interval")]
     pub avc444_max_aux_interval: u32,
@@ -625,7 +639,6 @@ pub struct EgfxConfig {
     /// - 0.0: Any change triggers update
     /// - 0.05: 5% changed (balanced, recommended)
     /// - 0.1: 10% changed (aggressive)
-    ///
     /// Default: 0.05 (5%)
     #[serde(default = "default_aux_threshold")]
     pub avc444_aux_change_threshold: f32,
@@ -654,6 +667,10 @@ fn default_false() -> bool {
     false
 }
 
+fn default_periodic_idr_interval() -> u32 {
+    5 // 5 seconds - clears artifacts regularly without excessive bandwidth
+}
+
 fn default_color_matrix() -> String {
     "auto".to_string()
 }
@@ -675,6 +692,7 @@ impl Default for EgfxConfig {
             zgfx_compression: "never".to_string(),
             max_frames_in_flight: 3,
             frame_ack_timeout: 5000,
+            periodic_idr_interval: 5, // Force IDR every 5 seconds to clear artifacts
             codec: "auto".to_string(), // Use best available (AVC444 if supported, else AVC420)
             qp_min: 10,
             qp_max: 40,
@@ -694,32 +712,128 @@ impl Default for EgfxConfig {
 }
 
 /// Damage tracking configuration
+///
+/// Controls how frame changes are detected to optimize bandwidth.
+/// Smaller tiles and lower thresholds = more sensitive (detects small changes like typing)
+/// Larger tiles and higher thresholds = less sensitive (better for video/animations)
+///
+/// ## Sensitivity Tuning
+///
+/// For **text/office work** (typing must be detected) - NEW DEFAULTS:
+/// - `tile_size: 16` - Matches FreeRDP's 16x16 tiles for maximum sensitivity
+/// - `diff_threshold: 0.01` - 1% threshold catches single characters
+/// - `pixel_threshold: 1` - Maximum sensitivity pixel comparison
+///
+/// For **video/streaming** (prioritize bandwidth):
+/// - `tile_size: 128` - Larger tiles reduce overhead
+/// - `diff_threshold: 0.10` - Higher threshold (10% required)
+/// - `pixel_threshold: 8` - Less sensitive to subtle changes
+///
+/// ## How Detection Works
+///
+/// 1. Frame is divided into tiles of `tile_size` x `tile_size` pixels
+/// 2. Each tile is compared to the previous frame
+/// 3. Pixels differing by more than `pixel_threshold` (in any RGB channel) are counted
+/// 4. If changed pixels exceed `diff_threshold` fraction of tile, tile is marked dirty
+/// 5. Dirty tiles are merged if within `merge_distance` pixels
+/// 6. Regions smaller than `min_region_area` are discarded
+///
+/// ## Example: New Defaults Ensure Typing Is Detected
+///
+/// With new defaults (tile_size=16, diff_threshold=0.01):
+/// - Tile area = 16×16 = 256 pixels
+/// - Threshold = 256 × 0.01 = 2.56 → 3 pixels must change
+/// - A typed character ≈ 10×14 = 140 pixels
+/// - 140 > 3 → tile marked dirty ✓
+///
+/// This matches FreeRDP's approach (16x16 tiles) for reliable detection.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DamageTrackingConfig {
     /// Enable damage region detection
+    ///
+    /// When enabled, only changed regions are encoded and sent,
+    /// significantly reducing bandwidth for static content.
     pub enabled: bool,
 
     /// Detection method: "pipewire", "diff", "hybrid"
+    ///
+    /// - "diff": CPU-based pixel differencing (most compatible)
+    /// - "pipewire": Use PipeWire damage hints if available
+    /// - "hybrid": Combine both methods
     pub method: String,
 
     /// Tile size for differencing (pixels)
+    ///
+    /// Smaller values = more sensitive, more CPU overhead
+    /// Larger values = less sensitive, less CPU overhead
+    ///
+    /// Recommended: 32 for text work, 64 for general use, 128 for video
+    #[serde(default = "default_tile_size")]
     pub tile_size: usize,
 
-    /// Difference threshold (0.0-1.0)
+    /// Fraction of tile pixels that must differ to mark tile as dirty (0.0-1.0)
+    ///
+    /// Lower values = more sensitive (detects smaller changes)
+    /// Higher values = less sensitive (ignores minor changes)
+    ///
+    /// Recommended: 0.02 for text work, 0.05 for general use, 0.10 for video
+    #[serde(default = "default_diff_threshold")]
     pub diff_threshold: f32,
 
-    /// Merge distance for adjacent tiles (pixels)
+    /// Pixel difference threshold for RGB comparison
+    ///
+    /// Pixels differing by less than this value (in any RGB channel) are
+    /// considered identical. Higher values ignore subtle color variations.
+    ///
+    /// Recommended: 2 for text work, 4 for general use, 8 for video
+    #[serde(default = "default_pixel_threshold")]
+    pub pixel_threshold: u8,
+
+    /// Merge distance for adjacent dirty tiles (pixels)
+    ///
+    /// Dirty tiles within this distance are merged into larger regions
+    /// to reduce encoding overhead.
+    #[serde(default = "default_merge_distance")]
     pub merge_distance: u32,
+
+    /// Minimum region area to encode (pixels²)
+    ///
+    /// Regions smaller than this are discarded as noise.
+    /// Set to 1 to encode all detected changes.
+    #[serde(default = "default_min_region_area")]
+    pub min_region_area: u64,
+}
+
+fn default_tile_size() -> usize {
+    16 // 16x16 tiles for maximum sensitivity (FreeRDP uses 16x16)
+}
+
+fn default_diff_threshold() -> f32 {
+    0.01 // 1% threshold - very sensitive, catches single-character changes
+}
+
+fn default_pixel_threshold() -> u8 {
+    1 // Single pixel difference threshold for maximum sensitivity
+}
+
+fn default_merge_distance() -> u32 {
+    16
+}
+
+fn default_min_region_area() -> u64 {
+    64 // 8x8 pixel minimum
 }
 
 impl Default for DamageTrackingConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true, // Enable by default for bandwidth savings
             method: "diff".to_string(),
-            tile_size: 64,
-            diff_threshold: 0.05,
-            merge_distance: 32,
+            tile_size: default_tile_size(),
+            diff_threshold: default_diff_threshold(),
+            pixel_threshold: default_pixel_threshold(),
+            merge_distance: default_merge_distance(),
+            min_region_area: default_min_region_area(),
         }
     }
 }

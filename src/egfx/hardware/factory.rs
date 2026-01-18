@@ -183,7 +183,7 @@ fn try_nvenc(
 
     let encoder = NvencEncoder::new(config, width, height, preset)?;
 
-    debug!(" NVENC encoder initialized: {}x{}", width, height);
+    info!("✅ NVENC encoder initialized: {}x{}", width, height);
 
     Ok(Box::new(encoder))
 }

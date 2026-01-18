@@ -1,0 +1,32 @@
+[package]
+name = "lamco-rdp-clipboard"
+version = "0.2.2"
+edition = "2021"
+rust-version = "1.77"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/lamco-admin/lamco-rdp"
+homepage = "https://lamco.ai"
+authors = ["Lamco <contact@lamco.ai>"]
+description = "IronRDP clipboard integration - CliprdrBackend implementation for RDP clipboard sync"
+documentation = "https://docs.rs/lamco-rdp-clipboard"
+keywords = ["rdp", "clipboard", "ironrdp", "cliprdr"]
+categories = ["network-programming", "encoding"]
+readme = "README.md"
+
+[package.metadata.docs.rs]
+all-features = true
+targets = ["x86_64-unknown-linux-gnu"]
+rustdoc-args = ["--cfg", "docsrs"]
+
+[badges]
+maintenance = { status = "actively-developed" }
+
+[features]
+default = []
+
+[dependencies]
+lamco-clipboard-core = { path = "../lamco-clipboard-core" }
+ironrdp-cliprdr = { git = "https://github.com/lamco-admin/IronRDP", branch = "master" }
+ironrdp-core = { git = "https://github.com/lamco-admin/IronRDP", branch = "master" }
+thiserror = "2"
+tracing = "0.1"

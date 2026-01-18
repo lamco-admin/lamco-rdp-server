@@ -33,7 +33,7 @@ impl AsyncSecretServiceClient {
             .await
             .context("Failed to connect to Secret Service")?;
 
-        debug!("Connected to Secret Service successfully");
+        info!("Connected to Secret Service successfully");
 
         Ok(Self {})
     }
@@ -198,7 +198,7 @@ impl AsyncSecretServiceClient {
     ///
     /// Ok(()) if secret was deleted or didn't exist
     pub async fn delete_secret(&self, key: String) -> Result<()> {
-        debug!("Deleting secret from Secret Service: {}", key);
+        info!("Deleting secret from Secret Service: {}", key);
 
         // Connect to service
         let service = SecretService::connect(EncryptionType::Dh)

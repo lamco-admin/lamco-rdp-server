@@ -58,7 +58,7 @@ pub use capabilities::{
     BufferType, CaptureBackend, CompositorCapabilities, CompositorType, WaylandGlobal,
 };
 pub use portal_caps::{CursorMode, PortalCapabilities, SourceType};
-pub use probing::{identify_compositor, probe_capabilities};
+pub use probing::{detect_os_release, identify_compositor, probe_capabilities, OsRelease};
 pub use profiles::{CompositorProfile, Quirk};
 
 /// Check if we're running in a Wayland session

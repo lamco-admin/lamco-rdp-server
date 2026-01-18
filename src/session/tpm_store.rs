@@ -4,9 +4,9 @@
 //! Credentials are bound to the TPM and cannot be extracted or used on other machines.
 
 use anyhow::{anyhow, Context, Result};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 /// TPM 2.0 credential store using systemd-creds
 pub struct TpmCredentialStore {
@@ -81,7 +81,7 @@ impl TpmCredentialStore {
             ));
         }
 
-        debug!("Credential stored in TPM-bound storage: {:?}", output_file);
+        info!("Credential stored in TPM-bound storage: {:?}", output_file);
 
         Ok(())
     }
@@ -147,7 +147,7 @@ impl TpmCredentialStore {
     ///
     /// Ok(()) if credential was deleted or didn't exist
     pub fn delete(&self, name: &str) -> Result<()> {
-        debug!("Deleting TPM credential: {}", name);
+        info!("Deleting TPM credential: {}", name);
 
         let cred_file = self.storage_path.join(format!("{}.cred", name));
 
@@ -206,7 +206,7 @@ pub struct AsyncTpmCredentialStore {
 impl AsyncTpmCredentialStore {
     /// Create new TPM store (async)
     pub async fn new() -> Result<Self> {
-        let inner = tokio::task::spawn_blocking(TpmCredentialStore::new)
+        let inner = tokio::task::spawn_blocking(|| TpmCredentialStore::new())
             .await
             .context("Failed to spawn blocking task")?
             .context("Failed to create TPM store")?;

@@ -1,6 +1,6 @@
 //! Server Implementation Module
 //!
-//! This module provides the main WRD-Server implementation, orchestrating all subsystems
+//! This module provides the main server implementation, orchestrating all subsystems
 //! to provide complete RDP server functionality for Wayland desktops.
 //!
 //! # Architecture
@@ -61,40 +61,38 @@
 
 mod display_handler;
 mod egfx_sender;
-#[allow(dead_code)] // WIP: Priority-based event multiplexer for QoS
 mod event_multiplexer;
 mod gfx_factory;
 mod graphics_drain;
 mod input_handler;
-#[allow(dead_code)] // WIP: Multiplexer drain loop integration
 mod multiplexer_loop;
 
-pub use display_handler::WrdDisplayHandler;
+pub use display_handler::LamcoDisplayHandler;
 pub use egfx_sender::{EgfxFrameSender, SendError};
-pub use gfx_factory::{HandlerState, SharedHandlerState, WrdGfxFactory};
-pub use input_handler::WrdInputHandler;
+pub use gfx_factory::{HandlerState, LamcoGfxFactory, SharedHandlerState};
+pub use input_handler::LamcoInputHandler;
 
 use anyhow::{Context, Result};
 use ironrdp_pdu::rdp::capability_sets::server_codecs_capabilities;
 use ironrdp_server::{Credentials, RdpServer};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, error, info, warn};
 
-use crate::clipboard::{ClipboardConfig, ClipboardManager, WrdCliprdrFactory};
+use crate::clipboard::{ClipboardConfig, ClipboardManager, LamcoCliprdrFactory};
 use crate::config::Config;
 use crate::input::MonitorInfo as InputMonitorInfo;
 use crate::portal::PortalManager;
 use crate::security::TlsConfig;
-use crate::services::{ServiceId, ServiceRegistry};
+use crate::services::{ServiceId, ServiceLevel, ServiceRegistry};
 use crate::session::{PipeWireAccess, SessionStrategySelector, SessionType};
 
 /// WRD Server
 ///
 /// Main server struct that orchestrates all subsystems and integrates
 /// with IronRDP for RDP protocol handling.
-pub struct WrdServer {
+pub struct LamcoRdpServer {
     /// Configuration (kept for future dynamic reconfiguration)
     #[allow(dead_code)]
     config: Arc<Config>,
@@ -108,11 +106,11 @@ pub struct WrdServer {
 
     /// Display handler (kept for lifecycle management)
     #[allow(dead_code)]
-    display_handler: Arc<WrdDisplayHandler>,
+    display_handler: Arc<LamcoDisplayHandler>,
 }
 
-impl WrdServer {
-    /// Create a new WRD server instance
+impl LamcoRdpServer {
+    /// Create a new server instance
     ///
     /// # Arguments
     ///
@@ -122,12 +120,12 @@ impl WrdServer {
     ///
     /// A new `WrdServer` instance ready to run
     pub async fn new(config: Config) -> Result<Self> {
-        debug!("Initializing server");
+        info!("Initializing server");
         let config = Arc::new(config);
 
         // === CAPABILITY PROBING ===
         // Detect compositor and adapt configuration automatically
-        debug!("Probing compositor capabilities...");
+        info!("Probing compositor capabilities...");
         let capabilities = crate::compositor::probe_capabilities()
             .await
             .context("Failed to probe compositor capabilities")?;
@@ -141,20 +139,26 @@ impl WrdServer {
                     }
                 }
                 crate::compositor::Quirk::SlowPortalPermissions => {
-                    debug!(" Increasing portal timeout for slow permissions");
+                    info!("📋 Increasing portal timeout for slow permissions");
                     // Note: Portal timeout is handled via capabilities.profile.portal_timeout_ms
                 }
                 crate::compositor::Quirk::PoorDmaBufSupport => {
-                    debug!(" DMA-BUF support may be limited, using MemFd fallback");
+                    info!("📋 DMA-BUF support may be limited, using MemFd fallback");
                 }
                 crate::compositor::Quirk::NeedsExplicitCursorComposite => {
-                    debug!(" Cursor compositing may be needed (no metadata cursor)");
+                    info!("📋 Cursor compositing may be needed (no metadata cursor)");
                 }
                 crate::compositor::Quirk::RestartCaptureOnResize => {
-                    debug!(" Capture will restart on resolution changes");
+                    info!("📋 Capture will restart on resolution changes");
                 }
                 crate::compositor::Quirk::MultiMonitorPositionQuirk => {
-                    debug!(" Multi-monitor positions may need adjustment");
+                    info!("📋 Multi-monitor positions may need adjustment");
+                }
+                crate::compositor::Quirk::Avc444Unreliable => {
+                    info!("📋 AVC444 disabled due to platform quirk (forcing AVC420 only)");
+                }
+                crate::compositor::Quirk::ClipboardUnavailable => {
+                    info!("📋 Clipboard sync unavailable (Portal v1 limitation)");
                 }
                 _ => {
                     debug!("Applying quirk: {:?}", quirk);
@@ -162,8 +166,8 @@ impl WrdServer {
             }
         }
 
-        debug!(
-            "Compositor: {} ({:?} capture, {:?} buffers)",
+        info!(
+            "✅ Compositor detection complete: {} (profile: {:?} capture, {:?} buffers)",
             capabilities.compositor,
             capabilities.profile.recommended_capture,
             capabilities.profile.recommended_buffer_type
@@ -171,15 +175,15 @@ impl WrdServer {
 
         // === SESSION PERSISTENCE SETUP ===
         // Detect deployment context and credential storage
-        debug!("Detecting deployment context and credential storage...");
+        info!("Detecting deployment context and credential storage...");
 
         let deployment = crate::session::detect_deployment_context();
-        debug!(" Deployment: {}", deployment);
+        info!("📦 Deployment: {}", deployment);
 
         let (storage_method, encryption, accessible) =
             crate::session::detect_credential_storage(&deployment).await;
-        debug!(
-            "Credential storage: {} (encryption: {}, accessible: {})",
+        info!(
+            "🔐 Credential Storage: {} (encryption: {}, accessible: {})",
             storage_method, encryption, accessible
         );
 
@@ -195,12 +199,11 @@ impl WrdServer {
             .context("Failed to load restore token")?;
 
         if let Some(ref token) = restore_token {
-            debug!(
-                "Loaded restore token ({} chars) - will attempt session restore",
-                token.len()
-            );
+            info!("🎫 Loaded existing restore token ({} chars)", token.len());
+            info!("   Will attempt to restore session without permission dialog");
         } else {
-            debug!("No restore token - permission dialog will appear");
+            info!("🎫 No existing restore token found");
+            info!("   Permission dialog will appear (one-time grant)");
         }
 
         // === SERVICE ADVERTISEMENT ===
@@ -213,14 +216,40 @@ impl WrdServer {
         let cursor_level = service_registry.service_level(ServiceId::MetadataCursor);
         let dmabuf_level = service_registry.service_level(ServiceId::DmaBufZeroCopy);
 
-        debug!(
-            "Services: damage={}, cursor={}, dmabuf={}",
-            damage_level, cursor_level, dmabuf_level
-        );
+        info!("🎛️ Service-based feature configuration:");
+        if damage_level >= ServiceLevel::BestEffort {
+            info!(
+                "   ✅ Damage tracking: {} - enabling adaptive FPS",
+                damage_level
+            );
+        } else {
+            info!(
+                "   ⚠️ Damage tracking: {} - using frame diff fallback",
+                damage_level
+            );
+        }
+
+        if cursor_level >= ServiceLevel::BestEffort {
+            info!(
+                "   ✅ Metadata cursor: {} - client-side rendering",
+                cursor_level
+            );
+        } else {
+            info!(
+                "   ⚠️ Metadata cursor: {} - painted cursor mode",
+                cursor_level
+            );
+        }
+
+        if dmabuf_level >= ServiceLevel::Guaranteed {
+            info!("   ✅ DMA-BUF zero-copy: {} - optimal path", dmabuf_level);
+        } else {
+            info!("   ⚠️ DMA-BUF: {} - using memory copy path", dmabuf_level);
+        }
 
         // === SESSION STRATEGY SELECTION ===
         // Select best strategy based on detected capabilities
-        debug!("Selecting session strategy...");
+        info!("Selecting session strategy based on detected capabilities");
 
         let strategy_selector =
             SessionStrategySelector::new(service_registry.clone(), Arc::new(token_manager));
@@ -230,22 +259,22 @@ impl WrdServer {
             .await
             .context("Failed to select session strategy")?;
 
-        debug!(" Selected strategy: {}", strategy.name());
+        info!("🎯 Selected strategy: {}", strategy.name());
 
         // Create session via selected strategy
-        debug!("Creating session via selected strategy");
+        info!("Creating session via selected strategy");
         let session_handle = strategy
             .create_session()
             .await
             .context("Failed to create session via strategy")?;
 
-        debug!(" Session created successfully via {}", strategy.name());
+        info!("✅ Session created successfully via {}", strategy.name());
 
         // Extract session details and handle different PipeWire access methods
         let (pipewire_fd, stream_info) = match session_handle.pipewire_access() {
             PipeWireAccess::FileDescriptor(fd) => {
                 // Portal path: FD directly provided
-                debug!("Using Portal-provided PipeWire file descriptor: {}", fd);
+                info!("Using Portal-provided PipeWire file descriptor: {}", fd);
 
                 // Convert strategy StreamInfo to portal StreamInfo format
                 let strategy_streams = session_handle.streams();
@@ -263,12 +292,12 @@ impl WrdServer {
             }
             PipeWireAccess::NodeId(node_id) => {
                 // Mutter path: Node ID provided, need to connect to PipeWire daemon
-                debug!("Using Mutter-provided PipeWire node ID: {}", node_id);
+                info!("Using Mutter-provided PipeWire node ID: {}", node_id);
 
                 let fd = crate::mutter::get_pipewire_fd_for_mutter()
                     .context("Failed to connect to PipeWire daemon for Mutter")?;
 
-                debug!("Connected to PipeWire daemon, FD: {}", fd);
+                info!("Connected to PipeWire daemon, FD: {}", fd);
 
                 // Convert strategy StreamInfo to portal StreamInfo format
                 let strategy_streams = session_handle.streams();
@@ -302,7 +331,7 @@ impl WrdServer {
         let (portal_clipboard_manager, portal_clipboard_session, portal_input_handle) =
             if session_handle.session_type() == SessionType::Portal {
                 // Portal strategy: use session_handle directly (no duplicate sessions)
-                debug!("Portal strategy: using session_handle directly");
+                info!("Portal strategy: using session_handle directly");
 
                 // Portal strategy always provides ClipboardComponents
                 // manager may be None on Portal v1, but session is always present
@@ -317,8 +346,8 @@ impl WrdServer {
             } else {
                 // Mutter strategy: Need separate Portal session for input AND clipboard (one dialog)
                 // HYBRID: Mutter provides video (zero dialogs), Portal provides input+clipboard (one dialog)
-                debug!("Strategy doesn't provide clipboard, creating separate Portal session for input+clipboard");
-                debug!("HYBRID MODE: Mutter for video (zero dialogs), Portal for input+clipboard (one dialog)");
+                info!("Strategy doesn't provide clipboard, creating separate Portal session for input+clipboard");
+                info!("HYBRID MODE: Mutter for video (zero dialogs), Portal for input+clipboard (one dialog)");
 
                 let session_id = format!("lamco-rdp-input-clipboard-{}", uuid::Uuid::new_v4());
                 let (portal_handle, _) = portal_manager
@@ -341,9 +370,9 @@ impl WrdServer {
                     None
                 };
 
-                debug!("Separate Portal session created for input+clipboard (non-persistent)");
+                info!("Separate Portal session created for input+clipboard (non-persistent)");
 
-                let session = Arc::new(Mutex::new(portal_handle.session));
+                let session = Arc::new(RwLock::new(portal_handle.session));
 
                 // Create PortalSessionHandleImpl for input
                 // If no clipboard (Portal v1), just use Mutter session_handle for input instead
@@ -384,23 +413,37 @@ impl WrdServer {
         let (_control_tx, control_rx) = tokio::sync::mpsc::channel(16); // Priority 2: Control
         let (_clipboard_tx, clipboard_rx) = tokio::sync::mpsc::channel(8); // Priority 3: Clipboard
         let (graphics_tx, graphics_rx) = tokio::sync::mpsc::channel(64); // Priority 4: Graphics - increased for frame coalescing
-        debug!("Full multiplexer queues created:");
-        debug!("   Input queue: 32 (Priority 1 - never starve)");
-        debug!("   Control queue: 16 (Priority 2 - session critical)");
-        debug!("   Clipboard queue: 8 (Priority 3 - user operations)");
-        debug!("   Graphics queue: 64 (Priority 4 - damage region coalescing)");
+        info!("📊 Full multiplexer queues created:");
+        info!("   Input queue: 32 (Priority 1 - never starve)");
+        info!("   Control queue: 16 (Priority 2 - session critical)");
+        info!("   Clipboard queue: 8 (Priority 3 - user operations)");
+        info!("   Graphics queue: 64 (Priority 4 - damage region coalescing)");
 
         // Create EGFX/H.264 factory for video streaming BEFORE display handler
         // This enables hardware-accelerated H.264 encoding when client supports it
-        let gfx_factory = WrdGfxFactory::new(initial_size.0, initial_size.1);
+        //
+        // Check for platform quirks that affect codec selection:
+        // - Avc444Unreliable: Force AVC420 only (e.g., RHEL 9 blur issue)
+        let force_avc420_only = capabilities
+            .profile
+            .has_quirk(&crate::compositor::Quirk::Avc444Unreliable);
+        let gfx_factory = LamcoGfxFactory::with_quirks(
+            initial_size.0 as u16,
+            initial_size.1 as u16,
+            force_avc420_only,
+        );
         // Get shared references BEFORE passing factory to builder
         let gfx_handler_state = gfx_factory.handler_state();
         let gfx_server_handle = gfx_factory.server_handle();
-        debug!("EGFX factory created for H.264/AVC420 streaming");
+        if force_avc420_only {
+            info!("EGFX factory created for H.264/AVC420 streaming (AVC444 disabled by platform quirk)");
+        } else {
+            info!("EGFX factory created for H.264/AVC420+AVC444 streaming");
+        }
 
         // Create display handler with PipeWire FD, stream info, graphics queue, and EGFX references
         let display_handler = Arc::new(
-            WrdDisplayHandler::new(
+            LamcoDisplayHandler::new(
                 initial_size.0,
                 initial_size.1,
                 pipewire_fd,
@@ -419,13 +462,13 @@ impl WrdServer {
         let update_sender = display_handler.get_update_sender();
         let _graphics_drain_handle =
             graphics_drain::start_graphics_drain_task(graphics_rx, update_sender);
-        debug!("Graphics drain task started");
+        info!("Graphics drain task started");
 
         // Start the display pipeline
         Arc::clone(&display_handler).start_pipeline();
 
         // Create input handler for mouse and keyboard injection
-        debug!("Creating input handler for mouse/keyboard control");
+        info!("Creating input handler for mouse/keyboard control");
 
         // Convert stream info to monitor info for coordinate transformation
         let monitors: Vec<InputMonitorInfo> = stream_info
@@ -434,16 +477,16 @@ impl WrdServer {
             .map(|(idx, stream)| InputMonitorInfo {
                 id: idx as u32,
                 name: format!("Monitor {}", idx),
-                x: stream.position.0,
-                y: stream.position.1,
-                width: stream.size.0,
-                height: stream.size.1,
+                x: stream.position.0 as i32,
+                y: stream.position.1 as i32,
+                width: stream.size.0 as u32,
+                height: stream.size.1 as u32,
                 dpi: 96.0,         // Default DPI
                 scale_factor: 1.0, // Default scale, Portal doesn't provide this
                 stream_x: stream.position.0 as u32,
                 stream_y: stream.position.1 as u32,
-                stream_width: stream.size.0,
-                stream_height: stream.size.1,
+                stream_width: stream.size.0 as u32,
+                stream_height: stream.size.1 as u32,
                 is_primary: idx == 0, // First monitor is primary
             })
             .collect();
@@ -458,7 +501,7 @@ impl WrdServer {
 
         // Create input handler using Portal session handle (works correctly)
         // HYBRID: For Mutter strategy, uses Portal for input while Mutter handles video
-        let input_handler = WrdInputHandler::new(
+        let input_handler = LamcoInputHandler::new(
             portal_input_handle, // Use Portal session for input (works on all DEs)
             monitors.clone(),
             primary_stream_id,
@@ -467,7 +510,7 @@ impl WrdServer {
         )
         .context("Failed to create input handler")?;
 
-        debug!("Input handler created successfully - mouse/keyboard enabled via Portal");
+        info!("Input handler created successfully - mouse/keyboard enabled via Portal");
 
         // Start full multiplexer drain loop
         // Note: Input queue is handled by input_handler's batching task
@@ -489,10 +532,10 @@ impl WrdServer {
             session_for_mux,
             primary_stream_id,
         ));
-        debug!(" Full multiplexer drain loop started (control + clipboard priorities)");
+        info!("🚀 Full multiplexer drain loop started (control + clipboard priorities)");
 
         // Create TLS acceptor from security config
-        debug!("Setting up TLS");
+        info!("Setting up TLS");
         let tls_config =
             TlsConfig::from_files(&config.security.cert_path, &config.security.key_path)
                 .context("Failed to load TLS certificates")?;
@@ -506,7 +549,7 @@ impl WrdServer {
             .map_err(|e| anyhow::anyhow!("Failed to create codec capabilities: {}", e))?;
 
         // Create clipboard manager
-        debug!("Initializing clipboard manager");
+        info!("Initializing clipboard manager");
         let clipboard_config = ClipboardConfig::default();
         let mut clipboard_mgr = ClipboardManager::new(clipboard_config)
             .await
@@ -519,20 +562,27 @@ impl WrdServer {
                 .await;
             // Note: Success message logged inside set_portal_clipboard
         } else {
-            debug!("Clipboard disabled - no Portal clipboard manager available");
+            info!("Clipboard disabled - no Portal clipboard manager available");
+        }
+
+        // Mount FUSE filesystem for clipboard file transfer
+        // This enables on-demand file streaming for Windows → Linux file copy
+        if let Err(e) = clipboard_mgr.mount_fuse().await {
+            warn!("Failed to mount FUSE clipboard filesystem: {:?}", e);
+            warn!("File clipboard will use staging fallback (download files upfront)");
         }
 
         let clipboard_manager = Arc::new(Mutex::new(clipboard_mgr));
 
         // Create clipboard factory for IronRDP
         // Factory automatically starts event bridge task internally
-        let clipboard_factory = WrdCliprdrFactory::new(Arc::clone(&clipboard_manager));
+        let clipboard_factory = LamcoCliprdrFactory::new(Arc::clone(&clipboard_manager));
 
         // Note: gfx_factory was created earlier (before display handler)
         // to share references with display handler
 
         // Build IronRDP server using builder pattern
-        debug!("Building IronRDP server");
+        info!("Building IronRDP server");
         let listen_addr: SocketAddr = config
             .server
             .listen_addr
@@ -554,9 +604,9 @@ impl WrdServer {
         display_handler
             .set_server_event_sender(rdp_server.event_sender().clone())
             .await;
-        debug!("Server event sender configured in display handler");
+        info!("Server event sender configured in display handler");
 
-        debug!("Server initialized successfully");
+        info!("Server initialized successfully");
 
         Ok(Self {
             config,
@@ -571,10 +621,17 @@ impl WrdServer {
     /// This starts the RDP server and handles incoming connections.
     /// Blocks until the server is shut down.
     pub async fn run(mut self) -> Result<()> {
-        info!(
-            "Listening on {} (TLS enabled, max {} connections)",
-            self.config.server.listen_addr, self.config.server.max_connections
-        );
+        info!("╔════════════════════════════════════════════════════════════╗");
+        info!("║          Server Starting                                   ║");
+        info!("╚════════════════════════════════════════════════════════════╝");
+        info!("  Listen Address: {}", self.config.server.listen_addr);
+        info!("  TLS: Enabled (rustls 0.23)");
+        info!("  Codec: RemoteFX");
+        info!("  Max Connections: {}", self.config.server.max_connections);
+        info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+
+        info!("Server is ready and listening for RDP connections");
+        info!("Waiting for clients to connect...");
 
         // Set credentials for RDP authentication
         // Even with auth_method="none", we need to set empty/test credentials
@@ -591,17 +648,21 @@ impl WrdServer {
         };
 
         self.rdp_server.set_credentials(credentials);
-        debug!("Authentication: {}", self.config.security.auth_method);
+        info!(
+            "Authentication configured: {}",
+            self.config.security.auth_method
+        );
 
         // Run the IronRDP server
         let result = self.rdp_server.run().await.context("RDP server error");
 
         if let Err(ref e) = result {
-            error!("Server error: {:#}", e);
+            error!("Server stopped with error: {:#}", e);
         } else {
-            info!("Server stopped");
+            info!("Server stopped gracefully");
         }
 
+        info!("Server shutdown complete");
         result
     }
 
@@ -609,7 +670,7 @@ impl WrdServer {
     ///
     /// Sends a quit event to stop the server gracefully.
     pub fn shutdown(&self) {
-        info!("Shutting down");
+        info!("Initiating graceful shutdown");
         let _ = self
             .rdp_server
             .event_sender()
@@ -619,9 +680,9 @@ impl WrdServer {
     }
 }
 
-impl Drop for WrdServer {
+impl Drop for LamcoRdpServer {
     fn drop(&mut self) {
-        debug!("WrdServer dropped - cleaning up resources");
+        debug!("LamcoRdpServer dropped - cleaning up resources");
         // Resources are automatically cleaned up through Arc<Mutex<>> drops
         // and tokio task cancellation
     }

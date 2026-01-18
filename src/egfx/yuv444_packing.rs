@@ -205,9 +205,15 @@ impl Yuv420Frame {
     }
 }
 
-/// Create main YUV420 view - "Stream 1" in AVC444 terminology
+/// Create main YUV420 view (full luma + subsampled chroma)
 ///
-/// Full luma + 2×2 box filter subsampled chroma.
+/// This is the "luma view" or "Stream 1" in AVC444 terminology.
+///
+/// # Algorithm
+///
+/// - **Y plane**: Direct copy from YUV444 Y (no modification)
+/// - **U plane**: 2×2 box filter subsample from YUV444 U
+/// - **V plane**: 2×2 box filter subsample from YUV444 V
 ///
 /// # Arguments
 ///
@@ -224,7 +230,7 @@ pub fn pack_main_view(yuv444: &Yuv444Frame) -> Yuv420Frame {
     let y = yuv444.y.clone();
 
     // U plane: 2×2 box filter subsample
-    let u = subsample_chroma_420(&yuv444.u, width, height);
+    let mut u = subsample_chroma_420(&yuv444.u, width, height);
 
     // V plane: 2×2 box filter subsample
     let v = subsample_chroma_420(&yuv444.v, width, height);
@@ -233,7 +239,7 @@ pub fn pack_main_view(yuv444: &Yuv444Frame) -> Yuv420Frame {
     // macroblock alignment internally. Padding breaks openh264-rs buffer validation.
 
     // DEEP DIAGNOSTIC: Sample multiple screen positions to capture colorful areas
-    use tracing::debug;
+    use tracing::{debug, trace};
     if width == 1280 && height == 800 {
         debug!("═══ MAIN VIEW MULTI-POSITION ANALYSIS ═══");
 
@@ -295,9 +301,14 @@ pub fn pack_main_view(yuv444: &Yuv444Frame) -> Yuv420Frame {
     }
 }
 
-/// Create auxiliary YUV420 view - "Stream 2" in AVC444 terminology
+/// Create auxiliary YUV420 view (residual chroma data)
 ///
-/// Encodes residual 75% of chroma samples (odd positions) as "fake luma".
+/// This is the "chroma view" or "Stream 2" in AVC444 terminology.
+///
+/// # The Core Trick
+///
+/// Standard 4:2:0 subsampling keeps only 25% of chroma samples (one per 2×2 block).
+/// The auxiliary view captures the other 75% by encoding chroma as "fake luma".
 ///
 /// # Spec-Compliant Packing (MS-RDPEGFX Section 3.3.8.3.2)
 ///
@@ -334,7 +345,6 @@ pub fn pack_auxiliary_view(yuv444: &Yuv444Frame) -> Yuv420Frame {
 /// AVC444 behave like AVC420 (reduced color quality but should be corruption-free).
 ///
 /// **Purpose**: Isolate whether corruption is caused by auxiliary view packing.
-#[allow(dead_code)] // Diagnostic function for AVC444 debugging
 fn pack_auxiliary_view_minimal(yuv444: &Yuv444Frame) -> Yuv420Frame {
     let width = yuv444.width;
     let height = yuv444.height;
@@ -388,7 +398,7 @@ fn pack_auxiliary_view_spec_compliant(yuv444: &Yuv444Frame) -> Yuv420Frame {
 
     // Pad to 16-row macroblock boundary (required by spec)
     // MS-RDPEGFX: "The auxiliary frame is aligned to multiples of 16×16"
-    let padded_height = height.div_ceil(16) * 16;
+    let padded_height = ((height + 15) / 16) * 16;
     // Use explicit allocation + fill to ensure deterministic memory state
     let mut aux_y = vec![0u8; padded_height * width];
     aux_y.fill(128);
@@ -499,7 +509,7 @@ fn pack_auxiliary_view_spec_compliant(yuv444: &Yuv444Frame) -> Yuv420Frame {
     }
 
     // DIAGNOSTIC: Multi-position auxiliary view analysis
-    use tracing::debug;
+    use tracing::{debug, trace};
     if width == 1280 && height == 800 {
         debug!("═══ AUXILIARY VIEW MULTI-POSITION ANALYSIS ═══");
 
@@ -734,7 +744,7 @@ fn pack_auxiliary_view_spec_compliant(yuv444: &Yuv444Frame) -> Yuv420Frame {
 /// Uses a simpler pixel extraction pattern that may not match the spec
 /// exactly but is easier to debug.
 #[allow(dead_code)]
-pub(super) fn pack_auxiliary_view_simplified(yuv444: &Yuv444Frame) -> Yuv420Frame {
+pub fn pack_auxiliary_view_simplified(yuv444: &Yuv444Frame) -> Yuv420Frame {
     let width = yuv444.width;
     let height = yuv444.height;
 
@@ -807,8 +817,7 @@ pub fn validate_dimensions(width: usize, height: usize) -> bool {
 /// H.264 encoding works with 16×16 macroblocks, so dimensions should
 /// be aligned for optimal encoding.
 #[inline]
-#[allow(dead_code)] // Utility for macroblock alignment
-pub(super) fn align_to_16(dim: usize) -> usize {
+pub fn align_to_16(dim: usize) -> usize {
     (dim + 15) & !15
 }
 

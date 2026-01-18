@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
 use zeroize::Zeroizing;
 
-use super::credentials::{detect_deployment_context, CredentialStorageMethod};
+use super::credentials::{detect_deployment_context, CredentialStorageMethod, EncryptionType};
 use super::flatpak_secret::FlatpakSecretManager;
 use super::secret_service::AsyncSecretServiceClient;
 use super::tpm_store::AsyncTpmCredentialStore;
@@ -359,7 +359,7 @@ impl TokenManager {
     ///
     /// Ok(()) if token was deleted or didn't exist
     pub async fn delete_token(&self, session_id: &str) -> Result<()> {
-        debug!("Deleting restore token for session: {}", session_id);
+        info!("Deleting restore token for session: {}", session_id);
 
         let key = format!("lamco-rdp-session-{}", session_id);
 

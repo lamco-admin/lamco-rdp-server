@@ -64,7 +64,7 @@ pub(super) fn start_graphics_drain_task(
     update_sender: mpsc::Sender<DisplayUpdate>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        debug!(" Graphics drain task started (Phase 1 multiplexer)");
+        info!("🎬 Graphics drain task started (Phase 1 multiplexer)");
         let mut stats = GraphicsDrainStats::default();
 
         loop {

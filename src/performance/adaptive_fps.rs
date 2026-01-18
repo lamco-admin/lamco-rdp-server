@@ -199,10 +199,11 @@ pub struct AdaptiveFpsStats {
 impl AdaptiveFpsController {
     /// Create a new adaptive FPS controller
     pub fn new(config: AdaptiveFpsConfig) -> Self {
-        // Start at max_fps regardless of enabled state
-        // When enabled, adaptive logic will scale down based on activity
-        // When disabled, max_fps is used consistently
-        let current_fps = config.max_fps;
+        let current_fps = if config.enabled {
+            config.max_fps
+        } else {
+            config.max_fps
+        };
 
         Self {
             current_fps,
@@ -369,16 +370,16 @@ impl AdaptiveFpsController {
         }
 
         // Slow ramp-down (don't drop FPS too quickly)
-        if target_level < self.activity_level
-            && self.frames_at_level >= self.config.ramp_down_frames
-        {
-            // Decrease one level at a time
-            return match self.activity_level {
-                ActivityLevel::High => ActivityLevel::Medium,
-                ActivityLevel::Medium => ActivityLevel::Low,
-                ActivityLevel::Low => ActivityLevel::Static,
-                ActivityLevel::Static => ActivityLevel::Static,
-            };
+        if target_level < self.activity_level {
+            if self.frames_at_level >= self.config.ramp_down_frames {
+                // Decrease one level at a time
+                return match self.activity_level {
+                    ActivityLevel::High => ActivityLevel::Medium,
+                    ActivityLevel::Medium => ActivityLevel::Low,
+                    ActivityLevel::Low => ActivityLevel::Static,
+                    ActivityLevel::Static => ActivityLevel::Static,
+                };
+            }
         }
 
         // Stay at current level

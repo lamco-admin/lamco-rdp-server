@@ -1,0 +1,44 @@
+Source: lamco-rdp-server
+Section: net
+Priority: optional
+Maintainer: Lamco <contact@lamco.ai>
+Build-Depends: debhelper-compat (= 13),
+               rustc (>= 1.77),
+               cargo (>= 1.77),
+               pkg-config,
+               nasm,
+               clang,
+               libclang-dev,
+               libpipewire-0.3-dev,
+               libspa-0.2-dev,
+               libwayland-dev,
+               libxkbcommon-dev,
+               libdbus-1-dev,
+               libva-dev (>= 2.20),
+               libpam0g-dev,
+               libssl-dev
+Standards-Version: 4.6.2
+Homepage: https://lamco.ai
+Rules-Requires-Root: no
+
+Package: lamco-rdp-server
+Architecture: amd64
+Depends: ${shlibs:Depends},
+         ${misc:Depends},
+         pipewire,
+         xdg-desktop-portal
+Recommends: xdg-desktop-portal-gnome | xdg-desktop-portal-kde | xdg-desktop-portal-wlr,
+            libva2,
+            intel-media-va-driver | mesa-va-drivers
+Description: Wayland RDP server for Linux desktop sharing
+ lamco-rdp-server is a high-performance RDP server for Wayland-based Linux
+ desktops. It uses XDG Desktop Portals for secure screen capture and input
+ injection, enabling remote desktop access without requiring root privileges.
+ .
+ Features:
+  - H.264 video encoding via EGFX channel (AVC420/AVC444)
+  - Hardware-accelerated encoding (VA-API, NVENC)
+  - Multi-monitor support
+  - Clipboard synchronization
+  - Keyboard and mouse input
+  - Platform quirk detection (RHEL 9, etc.)

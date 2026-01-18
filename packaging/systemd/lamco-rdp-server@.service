@@ -1,0 +1,25 @@
+[Unit]
+Description=Lamco RDP Server (User: %i)
+Documentation=https://lamco.ai/docs/lamco-rdp-server
+After=graphical-session.target
+Wants=xdg-desktop-portal.service pipewire.service
+
+[Service]
+Type=simple
+User=%i
+ExecStart=/usr/bin/lamco-rdp-server -c /home/%i/.config/lamco-rdp-server/config.toml
+Restart=on-failure
+RestartSec=5
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+ReadWritePaths=/var/log/wrd-server /run/user/%U/wrd-clipboard-fuse
+
+# Environment
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%U/bus
+
+[Install]
+WantedBy=graphical-session.target

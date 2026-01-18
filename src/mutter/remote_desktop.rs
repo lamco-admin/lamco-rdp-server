@@ -4,7 +4,8 @@
 //! Used for input injection (keyboard, mouse) without portal permissions.
 
 use anyhow::{Context, Result};
-use zbus::zvariant::{ObjectPath, OwnedObjectPath};
+use std::collections::HashMap;
+use zbus::zvariant::{ObjectPath, OwnedObjectPath, Value};
 use zbus::Connection;
 
 /// Main RemoteDesktop interface proxy
@@ -13,7 +14,6 @@ use zbus::Connection;
 /// Path: /org/gnome/Mutter/RemoteDesktop
 #[derive(Debug)]
 pub struct MutterRemoteDesktop<'a> {
-    #[allow(dead_code)] // Retained for future session management
     connection: Connection,
     proxy: zbus::Proxy<'a>,
 }
@@ -86,12 +86,12 @@ impl<'a> MutterRemoteDesktopSession<'a> {
         use std::collections::HashMap;
         use zbus::zvariant::Value;
 
-        let options: HashMap<String, Value<'_>> = HashMap::new();
+        let options: HashMap<String, Value> = HashMap::new();
 
         // ConnectToEIS returns a file descriptor, but we don't need it for basic input
         match self.proxy.call_method("ConnectToEIS", &(options,)).await {
             Ok(_) => {
-                tracing::debug!("Connected to EIS (Emulated Input Service)");
+                tracing::info!("Connected to EIS (Emulated Input Service)");
                 Ok(())
             }
             Err(e) => {

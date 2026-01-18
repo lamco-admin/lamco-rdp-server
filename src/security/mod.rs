@@ -1,6 +1,109 @@
-//! Security module coordination
+//! Security and Authentication Module
 //!
-//! Coordinates TLS, certificate management, and authentication.
+//! Provides TLS encryption and user authentication for secure RDP connections.
+//!
+//! # TLS Configuration
+//!
+//! lamco-rdp-server **requires TLS 1.3** for all RDP connections by default.
+//! This ensures encrypted communication between client and server, protecting
+//! credentials and session data.
+//!
+//! ## Certificate Requirements
+//!
+//! The server needs a TLS certificate and private key in PEM format:
+//!
+//! **Quick Start (Development):**
+//! ```bash
+//! # Generate self-signed certificate (good for 1 year)
+//! ./scripts/generate-certs.sh /etc/lamco-rdp-server $(hostname)
+//! ```
+//!
+//! **Production (Let's Encrypt):**
+//! ```bash
+//! # Free, trusted certificate (auto-renews)
+//! sudo certbot certonly --standalone -d rdp.yourdomain.com
+//! # Then symlink or configure paths in config.toml
+//! ```
+//!
+//! **Enterprise (Internal CA):**
+//! ```bash
+//! # Request certificate from your organization's CA
+//! # Configure paths to your signed certificate and key
+//! ```
+//!
+//! Configuration in `config.toml`:
+//! ```toml
+//! [security]
+//! cert_path = "/etc/lamco-rdp-server/cert.pem"
+//! key_path = "/etc/lamco-rdp-server/key.pem"
+//! enable_nla = true           # Network Level Authentication (recommended)
+//! require_tls_13 = true       # Require TLS 1.3 or higher
+//! auth_method = "pam"         # Use Linux PAM for authentication
+//! ```
+//!
+//! ## TLS Security Model
+//!
+//! - **TLS 1.3 mandatory** - Uses modern ciphers (AES-GCM, ChaCha20-Poly1305)
+//! - **Perfect forward secrecy** - Ephemeral key exchange prevents decryption of past sessions
+//! - **Certificate validation** - Clients verify server identity (unless self-signed)
+//! - **NLA support** - Client authenticates before screen sharing begins (prevents unauthorized access)
+//!
+//! ## Authentication Methods
+//!
+//! **PAM Authentication** (default, requires `--features pam-auth`):
+//! - Uses Linux Pluggable Authentication Modules
+//! - Authenticates against system users
+//! - Respects PAM policies (password complexity, account locking, etc.)
+//! - Not available in Flatpak (sandbox limitation)
+//!
+//! **No Authentication** (`auth_method = "none"`):
+//! - Relies solely on network security (firewall, VPN)
+//! - Only recommended for isolated networks or Flatpak deployment
+//! - Portal permission dialog still required for screen sharing
+//!
+//! ## Certificate Auto-Generation
+//!
+//! The server can generate self-signed certificates programmatically:
+//!
+//! ```rust
+//! use lamco_rdp_server::security::CertificateGenerator;
+//! use std::path::Path;
+//!
+//! // Generate and save to files
+//! CertificateGenerator::generate_and_save(
+//!     "rdp-server.example.com",  // Common Name
+//!     365,                        // Valid for 1 year
+//!     Path::new("/etc/lamco-rdp-server/cert.pem"),
+//!     Path::new("/etc/lamco-rdp-server/key.pem"),
+//! )?;
+//! ```
+//!
+//! Generated certificates use:
+//! - ECDSA P-256 algorithm (modern, efficient)
+//! - Configurable validity period (default: 365 days)
+//! - Automatic permission setting (cert: 644, key: 600)
+//!
+//! ## Security Best Practices
+//!
+//! **For Production:**
+//! - ✅ Use Let's Encrypt or internal CA certificates (not self-signed)
+//! - ✅ Enable NLA (`enable_nla = true`)
+//! - ✅ Require TLS 1.3 (`require_tls_13 = true`)
+//! - ✅ Use PAM authentication
+//! - ✅ Firewall RDP port to trusted networks only
+//! - ✅ Rotate certificates annually
+//!
+//! **For Development:**
+//! - ✅ Self-signed certificates acceptable
+//! - ✅ Test with various certificate configurations
+//! - ⚠️ Consider `auth_method = "none"` for testing (disable for production)
+//!
+//! ## See Also
+//!
+//! - [`CertificateGenerator`] - Programmatic certificate generation
+//! - [`TlsConfig`] - TLS configuration and server setup
+//! - [`UserAuthenticator`] - PAM-based authentication
+//! - `scripts/generate-certs.sh` - Automated certificate generation script
 
 use anyhow::Result;
 use std::sync::Arc;
@@ -34,7 +137,6 @@ impl SecurityManager {
         // Verify TLS config
         tls_config.verify()?;
 
-        // Create authenticator
         let auth_method = AuthMethod::from_str(&config.security.auth_method);
         let authenticator = Arc::new(UserAuthenticator::new(auth_method, None));
 
@@ -59,7 +161,6 @@ impl SecurityManager {
 
     /// Authenticate user
     pub async fn authenticate(&self, username: &str, password: &str) -> Result<SessionToken> {
-        // Validate username format
         UserAuthenticator::validate_username(username)?;
 
         // Authenticate
@@ -69,7 +170,6 @@ impl SecurityManager {
             anyhow::bail!("Authentication failed");
         }
 
-        // Create session token
         Ok(SessionToken::new(username.to_string()))
     }
 }

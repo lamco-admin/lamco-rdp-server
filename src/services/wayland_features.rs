@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Method used for damage tracking
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DamageMethod {
     /// Portal provides damage hints
     Portal,
@@ -15,11 +15,16 @@ pub enum DamageMethod {
     NativeScreencopy,
 
     /// Frame differencing in software
-    #[default]
     FrameDiff,
 
     /// Hybrid: use damage hints when available, fall back to diff
     Hybrid,
+}
+
+impl Default for DamageMethod {
+    fn default() -> Self {
+        Self::FrameDiff
+    }
 }
 
 /// DRM format for DMA-BUF
@@ -54,10 +59,9 @@ impl DrmFormat {
 }
 
 /// HDR transfer function
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum HdrTransfer {
     /// Standard dynamic range (sRGB)
-    #[default]
     Sdr,
 
     /// Perceptual Quantizer (HDR10)
@@ -68,6 +72,12 @@ pub enum HdrTransfer {
 
     /// Extended sRGB (scRGB)
     ScRgb,
+}
+
+impl Default for HdrTransfer {
+    fn default() -> Self {
+        Self::Sdr
+    }
 }
 
 /// Detectable Wayland feature with associated metadata
@@ -208,6 +218,32 @@ pub enum WaylandFeature {
         /// Supports damage tracking
         damage_supported: bool,
     },
+
+    /// wlr-direct input protocols (virtual keyboard/pointer)
+    WlrDirectInput {
+        /// Virtual keyboard protocol version
+        keyboard_version: u32,
+        /// Virtual pointer protocol version
+        pointer_version: u32,
+        /// Supports modifier state
+        supports_modifiers: bool,
+        /// Touch input supported
+        supports_touch: bool,
+    },
+
+    /// libei/EIS input via Portal RemoteDesktop
+    LibeiInput {
+        /// Portal version
+        portal_version: u32,
+        /// Has ConnectToEIS method
+        has_connect_to_eis: bool,
+        /// Keyboard support
+        keyboard: bool,
+        /// Pointer support
+        pointer: bool,
+        /// Touch support
+        touch: bool,
+    },
 }
 
 /// Token storage method for session persistence
@@ -246,6 +282,8 @@ impl WaylandFeature {
             Self::CredentialStorage { .. } => "cred-storage",
             Self::UnattendedAccess { .. } => "unattended",
             Self::WlrScreencopy { .. } => "wlr-screencopy",
+            Self::WlrDirectInput { .. } => "wlr-direct-input",
+            Self::LibeiInput { .. } => "libei-input",
         }
     }
 }
@@ -354,6 +392,31 @@ impl std::fmt::Display for WaylandFeature {
                     f,
                     "wlr-screencopy(v{}, dmabuf={}, damage={})",
                     version, dmabuf_supported, damage_supported
+                )
+            }
+            Self::WlrDirectInput {
+                keyboard_version,
+                pointer_version,
+                supports_modifiers,
+                supports_touch,
+            } => {
+                write!(
+                    f,
+                    "wlr-direct(kbd=v{}, ptr=v{}, mods={}, touch={})",
+                    keyboard_version, pointer_version, supports_modifiers, supports_touch
+                )
+            }
+            Self::LibeiInput {
+                portal_version,
+                has_connect_to_eis,
+                keyboard,
+                pointer,
+                touch,
+            } => {
+                write!(
+                    f,
+                    "libei(portal=v{}, eis={}, kbd={}, ptr={}, touch={})",
+                    portal_version, has_connect_to_eis, keyboard, pointer, touch
                 )
             }
         }

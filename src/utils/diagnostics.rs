@@ -5,7 +5,7 @@
 
 use std::time::{Duration, Instant};
 use sysinfo::System;
-use tracing::{debug, info};
+use tracing::info;
 
 /// System information for diagnostics
 #[derive(Debug, Clone)]
@@ -46,14 +46,12 @@ impl SystemInfo {
 
     /// Log system information
     pub fn log(&self) {
-        debug!(
-            "System: {} {} (kernel {}), {} CPUs, {} MB RAM",
-            self.os_name,
-            self.os_version,
-            self.kernel_version,
-            self.cpu_count,
-            self.total_memory_mb
-        );
+        info!("=== System Information ===");
+        info!("  OS: {} {}", self.os_name, self.os_version);
+        info!("  Kernel: {}", self.kernel_version);
+        info!("  Hostname: {}", self.hostname);
+        info!("  CPUs: {}", self.cpu_count);
+        info!("  Memory: {} MB", self.total_memory_mb);
     }
 }
 
@@ -180,21 +178,42 @@ pub fn get_pipewire_version() -> Option<String> {
 
 /// Log complete diagnostics on startup
 pub fn log_startup_diagnostics() {
+    info!("╔════════════════════════════════════════════════════════════╗");
+    info!("║          Startup Diagnostics                              ║");
+    info!("╚════════════════════════════════════════════════════════════╝");
+
     // System info
     let sys_info = SystemInfo::gather();
     sys_info.log();
 
     // Environment
-    debug!("Environment:");
+    info!("=== Environment ===");
     if let Some(compositor) = detect_compositor() {
-        debug!("  Compositor: {}", compositor);
+        info!("  Compositor: {}", compositor);
+    } else {
+        info!("  Compositor: Unknown (not in Wayland session?)");
     }
+
     if let Some(portal) = detect_portal_backend() {
-        debug!("  Portal: {}", portal);
+        info!("  Portal Backend: {}", portal);
+    } else {
+        info!("  Portal Backend: Not detected");
     }
+
     if let Some(pw_version) = get_pipewire_version() {
-        debug!("  PipeWire: {}", pw_version);
+        info!("  PipeWire: {}", pw_version);
+    } else {
+        info!("  PipeWire: Not found in PATH");
     }
+
+    info!("=== Server Configuration ===");
+    info!("  Version: {}", env!("CARGO_PKG_VERSION"));
+    #[cfg(debug_assertions)]
+    info!("  Build: debug");
+    #[cfg(not(debug_assertions))]
+    info!("  Build: release");
+
+    info!("╚════════════════════════════════════════════════════════════╝");
 }
 
 #[cfg(test)]

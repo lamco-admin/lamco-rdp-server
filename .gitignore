@@ -1,29 +1,61 @@
-# Build artifacts
-/target/
-**/*.rs.bk
+# Rust build artifacts
+/target
+Cargo.lock
 
-# Cargo lock for library (keep for binary)
-# Cargo.lock
+# Flatpak build artifacts
+.flatpak-builder/
+*.flatpak
 
-# IDE
-.idea/
+# Vendored dependencies (regenerated from Cargo.lock)
+/vendor/
+
+# Cargo config for vendored builds (breaks normal builds)
+/.cargo/
+
+# Packaging build artifacts (keep config files, exclude outputs)
+packaging/build-dir/
+packaging/.flatpak-builder/
+packaging/.claude/
+packaging/*.tar.xz
+packaging/*.tar.gz
+
+# IDE and editor files
 .vscode/
+.idea/
 *.swp
 *.swo
 *~
-
-# OS
 .DS_Store
-Thumbs.db
 
-# Environment
-.env
-.env.local
-
-# Logs
+# Test and temporary files
 *.log
 logs/
+archive/logs-*/
+*.tmp
 
-# Test artifacts
+# Build outputs
+*.o
+*.so
+*.a
+*.exe
+
+# Documentation
+target/doc/
+
+# Benchmark results
+target/criterion/
+
+# Coverage reports
 *.profraw
-coverage/
+*.profdata
+
+# Environment files
+.env
+.env.local
+.claude/
+
+# Flatpak build artifacts
+packaging/repo/
+packaging/vendor/
+repo/
+.flatpak-builder/

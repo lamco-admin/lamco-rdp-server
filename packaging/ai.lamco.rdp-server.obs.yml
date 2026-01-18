@@ -1,0 +1,49 @@
+#!BuildVersion: 0.1.0
+---
+app-id: ai.lamco.rdp-server
+runtime: org.freedesktop.Platform
+runtime-version: '24.08'
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+
+command: lamco-rdp-server
+
+finish-args:
+  # Wayland/X11 access
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --share=ipc
+
+  # Network access for RDP
+  - --share=network
+
+  # PipeWire access for screen capture
+  - --socket=pulseaudio
+  - --filesystem=xdg-run/pipewire-0
+
+  # Portal access
+  - --talk-name=org.freedesktop.portal.Desktop
+  - --talk-name=org.freedesktop.portal.ScreenCast
+  - --talk-name=org.freedesktop.portal.RemoteDesktop
+
+  # D-Bus access
+  - --socket=session-bus
+
+  # Config directory
+  - --filesystem=~/.config/lamco-rdp-server:create
+
+modules:
+  - name: lamco-rdp-server
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/rust-stable/bin
+      env:
+        CARGO_HOME: /run/build/lamco-rdp-server/cargo
+        RUST_BACKTRACE: '1'
+    build-commands:
+      - cargo --offline build --release --features "default,vaapi"
+      - install -Dm755 target/release/lamco-rdp-server /app/bin/lamco-rdp-server
+    sources:
+      - type: archive
+        path: lamco-rdp-server-0.1.0.tar.xz

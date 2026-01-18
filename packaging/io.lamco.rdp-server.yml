@@ -1,0 +1,76 @@
+app-id: io.lamco.rdp-server
+runtime: org.freedesktop.Platform
+runtime-version: '24.08'
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+  - org.freedesktop.Sdk.Extension.llvm18
+
+command: lamco-rdp-server
+
+finish-args:
+  # Wayland/X11 access
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --share=ipc
+
+  # Network access for RDP
+  - --share=network
+
+  # PipeWire access for screen capture
+  - --socket=pulseaudio
+  - --filesystem=xdg-run/pipewire-0
+
+  # Portal access
+  - --talk-name=org.freedesktop.portal.Desktop
+  - --talk-name=org.freedesktop.portal.ScreenCast
+  - --talk-name=org.freedesktop.portal.RemoteDesktop
+
+  # D-Bus access
+  - --socket=session-bus
+
+  # Config directory
+  - --filesystem=~/.config/lamco-rdp-server:create
+
+  # File clipboard: read access to home directory for file transfer
+  - --filesystem=home:ro
+  # Downloads directory: write access for saving pasted files from clipboard
+  - --filesystem=xdg-download:rw
+
+  # FUSE support for clipboard virtual filesystem
+  # Note: FUSE mounts are limited in Flatpak sandbox; falls back to staging mode
+  - --filesystem=xdg-run/wrd-clipboard-fuse:create
+  - --filesystem=/tmp:rw
+
+modules:
+  # FUSE3 library for clipboard file transfer (drive redirection)
+  - name: libfuse3
+    buildsystem: meson
+    config-opts:
+      - -Dexamples=false
+      - -Duseroot=false
+      - -Dtests=false
+      - -Dudevrulesdir=/app/lib/udev/rules.d
+    sources:
+      - type: archive
+        url: https://github.com/libfuse/libfuse/releases/download/fuse-3.16.2/fuse-3.16.2.tar.gz
+        sha256: f797055d9296b275e981f5f62d4e32e089614fc253d1ef2985851025b8a0ce87
+
+  - name: lamco-rdp-server
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/llvm18/bin
+      env:
+        CARGO_HOME: /run/build/lamco-rdp-server/cargo
+        RUST_BACKTRACE: '1'
+        LIBCLANG_PATH: /usr/lib/sdk/llvm18/lib
+    build-commands:
+      # Note: vaapi disabled (incomplete color space API), pam-auth disabled (not sandboxable)
+      # Features: h264 (video encoding), libei (Flatpak-compatible wlroots input via Portal+EIS)
+      # wayland feature excluded (wlr-direct requires direct Wayland socket, blocked by Flatpak sandbox)
+      - cargo --offline build --release --no-default-features --features "h264,libei"
+      - install -Dm755 target/release/lamco-rdp-server /app/bin/lamco-rdp-server
+    sources:
+      - type: archive
+        path: lamco-rdp-server-0.1.0.tar.xz
+        sha256: 7ce44cc31ae8ff9542618c0b065aed222d13c51351de420ccd2fbb12d6ae01ee

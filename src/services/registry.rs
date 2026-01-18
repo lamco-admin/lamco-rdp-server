@@ -5,7 +5,7 @@
 
 use crate::compositor::CompositorCapabilities;
 use std::collections::HashMap;
-use tracing::debug;
+use tracing::info;
 
 use super::{
     service::{AdvertisedService, ServiceId, ServiceLevel},
@@ -33,6 +33,9 @@ pub struct ServiceRegistry {
 
 impl ServiceRegistry {
     /// Create a service registry from compositor capabilities
+    ///
+    /// This is the main entry point - it translates compositor
+    /// capabilities into advertised services.
     pub fn from_compositor(caps: CompositorCapabilities) -> Self {
         let compositor_name = caps.compositor.to_string();
         let services_list = translate_capabilities(&caps);
@@ -122,34 +125,39 @@ impl ServiceRegistry {
 
     /// Log a summary of the service registry
     pub fn log_summary(&self) {
+        info!("╔════════════════════════════════════════════════════════════╗");
+        info!("║              Service Advertisement Registry                ║");
+        info!("╚════════════════════════════════════════════════════════════╝");
+        info!("  Compositor: {}", self.compositor_name);
+
         let counts = self.service_counts();
-        debug!(
-            "Services for {}: {} guaranteed, {} best-effort, {} degraded, {} unavailable",
-            self.compositor_name,
-            counts.guaranteed,
-            counts.best_effort,
-            counts.degraded,
-            counts.unavailable
+        info!(
+            "  Services: {} guaranteed, {} best-effort, {} degraded, {} unavailable",
+            counts.guaranteed, counts.best_effort, counts.degraded, counts.unavailable
         );
 
+        info!("  ─────────────────────────────────────────────────────────");
         for service in &self.services_list {
+            let emoji = service.level.emoji();
             let rdp_info = service
                 .rdp_capability
                 .as_ref()
-                .map(|c| format!(" -> {}", c))
+                .map(|c| format!(" → {}", c))
                 .unwrap_or_default();
 
-            debug!(
-                "  {:20} {:12}{}",
+            info!(
+                "  {} {:20} {:12}{}",
+                emoji,
                 service.name,
                 format!("[{}]", service.level),
                 rdp_info
             );
 
             if let Some(note) = &service.notes {
-                debug!("    note: {}", note);
+                info!("      ↳ {}", note);
             }
         }
+        info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     }
 
     /// Generate a concise status line for logging

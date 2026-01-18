@@ -106,7 +106,6 @@ impl Default for MultiMonitorConfig {
 /// Monitor manager coordinates multi-monitor setup
 pub struct MonitorManager {
     /// Configuration
-    #[allow(dead_code)] // WIP: Dynamic monitor policy
     config: MultiMonitorConfig,
 
     /// Current monitors

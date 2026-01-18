@@ -80,7 +80,7 @@ use ironrdp_server::{
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::{mpsc, Mutex};
-use tracing::{debug, error, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::input::{
     CoordinateTransformer, InputError, KeyboardHandler, MonitorInfo, MouseButton, MouseHandler,
@@ -107,7 +107,7 @@ pub enum InputEvent {
 ///
 /// Receives keyboard and mouse events from RDP clients and injects them
 /// into the Wayland compositor via the Portal RemoteDesktop API.
-pub struct WrdInputHandler {
+pub struct LamcoInputHandler {
     /// Session handle for input injection (abstraction over Portal/Mutter)
     session_handle: Arc<dyn crate::session::SessionHandle>,
 
@@ -127,7 +127,7 @@ pub struct WrdInputHandler {
     input_tx: mpsc::Sender<InputEvent>,
 }
 
-impl WrdInputHandler {
+impl LamcoInputHandler {
     /// Create a new input handler
     ///
     /// # Arguments
@@ -226,7 +226,7 @@ impl WrdInputHandler {
             }
         });
 
-        debug!("Input batching task started (10ms flush interval)");
+        info!("Input batching task started (REAL task, 10ms flush interval)");
 
         Ok(Self {
             session_handle,
@@ -262,10 +262,9 @@ impl WrdInputHandler {
                 // Log V key specifically to trace Ctrl+V paste operations
                 if code == 0x2F {
                     // V key scancode
-                    trace!(
-                        "V key pressed (scancode=0x{:02X}, extended={})",
-                        code,
-                        extended
+                    info!(
+                        "⌨️ V key pressed (scancode=0x{:02X}, extended={})",
+                        code, extended
                     );
                 }
                 debug!("Keyboard pressed: code={}, extended={}", code, extended);
@@ -274,7 +273,6 @@ impl WrdInputHandler {
                 let kbd_event = keyboard.handle_key_down(code as u16, extended, false)?;
 
                 // Extract keycode from our event
-                #[allow(unreachable_patterns)] // Defensive for future enum variants
                 let keycode = match kbd_event {
                     crate::input::KeyboardEvent::KeyDown { keycode, .. }
                     | crate::input::KeyboardEvent::KeyRepeat { keycode, .. } => keycode,
@@ -298,8 +296,8 @@ impl WrdInputHandler {
                 // Log V key injection to Portal
                 if keycode == 47 {
                     // evdev KEY_V
-                    trace!(
-                        "Injecting V key press to Portal (evdev keycode={})",
+                    info!(
+                        "⌨️ Injecting V key press to Portal (evdev keycode={})",
                         keycode
                     );
                 }
@@ -317,10 +315,9 @@ impl WrdInputHandler {
                 // Log V key releases
                 if code == 0x2F {
                     // V key scancode
-                    trace!(
-                        "V key released (scancode=0x{:02X}, extended={})",
-                        code,
-                        extended
+                    info!(
+                        "⌨️ V key released (scancode=0x{:02X}, extended={})",
+                        code, extended
                     );
                 }
                 debug!("Keyboard released: code={}, extended={}", code, extended);
@@ -341,8 +338,8 @@ impl WrdInputHandler {
                 // Log V key injection release to Portal
                 if keycode == 47 {
                     // evdev KEY_V
-                    trace!(
-                        "Injecting V key release to Portal (evdev keycode={})",
+                    info!(
+                        "⌨️ Injecting V key release to Portal (evdev keycode={})",
                         keycode
                     );
                 }
@@ -601,7 +598,7 @@ impl WrdInputHandler {
 /// This is a synchronous trait, so we spawn async tasks for each event.
 /// The portal API requires async operations, so we bridge the synchronous
 /// trait to async execution.
-impl RdpServerInputHandler for WrdInputHandler {
+impl RdpServerInputHandler for LamcoInputHandler {
     fn keyboard(&mut self, event: IronKeyboardEvent) {
         // Send to batching queue (processed every 10ms)
         // Use try_send (non-blocking, bounded queue)
@@ -623,7 +620,7 @@ impl RdpServerInputHandler for WrdInputHandler {
 
 /// Custom Clone implementation to allow handler to be cloned
 /// This is necessary because RdpServer needs ownership but we want to share state
-impl Clone for WrdInputHandler {
+impl Clone for LamcoInputHandler {
     fn clone(&self) -> Self {
         Self {
             session_handle: Arc::clone(&self.session_handle),

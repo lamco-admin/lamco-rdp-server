@@ -3,12 +3,13 @@
 //! Defines the common interface for different session creation strategies:
 //! - Portal + Token Strategy (universal)
 //! - Mutter Direct API (GNOME only)
-//! - wlr-screencopy (wlroots only, future)
+//! - libei/EIS (wlroots via Portal, Flatpak-compatible)
+//! - wlr-direct (wlroots native protocols, no Flatpak)
 
 use anyhow::Result;
 use async_trait::async_trait;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 
 /// Portal clipboard components
 ///
@@ -17,12 +18,20 @@ use tokio::sync::Mutex;
 ///
 /// Note: On Portal v1 (e.g., RHEL 9 GNOME 40), clipboard is not supported,
 /// so `manager` will be `None`. The session is always available.
+///
+/// # Session Lock Design (RwLock)
+///
+/// We use RwLock instead of Mutex to allow concurrent operations.
+/// Both input injection and clipboard operations use `.read().await` since they
+/// don't modify the session - they just pass the session handle to D-Bus calls.
+/// This prevents clipboard operations from blocking input injection.
 pub struct ClipboardComponents {
     /// Portal clipboard manager - None on Portal v1 (no clipboard support)
     pub manager: Option<Arc<lamco_portal::ClipboardManager>>,
     /// Portal session for clipboard operations (always available)
+    /// Uses RwLock to allow concurrent access from input and clipboard operations
     pub session: Arc<
-        Mutex<
+        RwLock<
             ashpd::desktop::Session<
                 'static,
                 ashpd::desktop::remote_desktop::RemoteDesktop<'static>,
@@ -115,8 +124,10 @@ pub enum SessionType {
     Portal,
     /// Mutter direct D-Bus API
     MutterDirect,
-    /// wlr-screencopy protocol (future)
-    WlrScreencopy,
+    /// wlroots direct protocols (virtual keyboard/pointer)
+    WlrDirect,
+    /// libei/EIS protocol via Portal RemoteDesktop
+    Libei,
 }
 
 impl std::fmt::Display for SessionType {
@@ -124,7 +135,8 @@ impl std::fmt::Display for SessionType {
         match self {
             SessionType::Portal => write!(f, "Portal"),
             SessionType::MutterDirect => write!(f, "Mutter Direct API"),
-            SessionType::WlrScreencopy => write!(f, "wlr-screencopy"),
+            SessionType::WlrDirect => write!(f, "wlr-direct"),
+            SessionType::Libei => write!(f, "libei/EIS"),
         }
     }
 }

@@ -2,8 +2,13 @@
 //!
 //! This module defines known compositor behaviors and recommended
 //! configurations for optimal operation with each desktop environment.
+//!
+//! Profiles are generated based on both compositor detection and OS/platform
+//! detection. This allows us to handle platform-specific quirks like the
+//! AVC444 blur issue on RHEL 9.
 
 use super::capabilities::{BufferType, CaptureBackend, CompositorType};
+use super::probing::{detect_os_release, OsRelease};
 
 /// Known compositor quirks that require workarounds
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,6 +48,30 @@ pub enum Quirk {
 
     /// Color space may not be correctly reported
     ColorSpaceQuirk,
+
+    /// AVC444 codec produces blurry/corrupted output on this platform
+    ///
+    /// This quirk is set for platforms where AVC444 (H.264 YUV444) encoding
+    /// is known to produce visual artifacts. When this quirk is present,
+    /// the EGFX handler will force AVC420 even if the client supports AVC444.
+    ///
+    /// Known affected platforms:
+    /// - RHEL 9.x (GNOME 40 + Mesa 22.x + older driver stack)
+    ///
+    /// See: docs/support-matrix.md for full platform compatibility details.
+    Avc444Unreliable,
+
+    /// Clipboard synchronization is not available
+    ///
+    /// This quirk is set when the XDG Desktop Portal does not support
+    /// clipboard access (Portal version < 2). When this quirk is present,
+    /// clipboard features are disabled at startup rather than failing
+    /// at runtime.
+    ///
+    /// Known affected platforms:
+    /// - RHEL 9.x (Portal v1, GNOME 40)
+    /// - Any system with Portal < version 2
+    ClipboardUnavailable,
 }
 
 impl Quirk {
@@ -61,6 +90,8 @@ impl Quirk {
             Self::LimitedBufferFormats => "Limited GPU buffer format support",
             Self::SessionTimeoutOnIdle => "Portal session may timeout when idle",
             Self::ColorSpaceQuirk => "Color space may be incorrect",
+            Self::Avc444Unreliable => "AVC444 codec produces artifacts (use AVC420)",
+            Self::ClipboardUnavailable => "Clipboard sync not available (Portal v1)",
         }
     }
 }
@@ -134,12 +165,38 @@ impl CompositorProfile {
     }
 
     /// GNOME Shell / Mutter profile
+    ///
+    /// This profile handles GNOME-specific quirks including platform-specific
+    /// issues like the AVC444 blur on RHEL 9.
     fn gnome_profile(version: Option<&str>) -> Self {
         let is_modern = version
             .and_then(|v| v.split('.').next())
             .and_then(|major| major.parse::<u32>().ok())
             .map(|major| major >= 45)
             .unwrap_or(false);
+
+        // Detect OS for platform-specific quirks
+        let os_release = detect_os_release();
+
+        // Build quirk list based on compositor and platform
+        let mut quirks = vec![Quirk::RequiresWaylandSession, Quirk::RestartCaptureOnResize];
+
+        // RHEL 9 specific quirks
+        if let Some(ref os) = os_release {
+            if os.is_rhel9() {
+                // AVC444 produces blurry output on RHEL 9 due to the combination
+                // of GNOME 40 + Mesa 22.x + older driver stack. Force AVC420.
+                quirks.push(Quirk::Avc444Unreliable);
+
+                // Portal v1 on RHEL 9/GNOME 40 doesn't support clipboard
+                quirks.push(Quirk::ClipboardUnavailable);
+
+                tracing::info!(
+                    "RHEL 9 detected ({}) - applying platform quirks: AVC444 disabled, clipboard unavailable",
+                    os.version_id
+                );
+            }
+        }
 
         Self {
             compositor: CompositorType::Gnome {
@@ -156,7 +213,7 @@ impl CompositorProfile {
             recommended_buffer_type: BufferType::MemFd,
             supports_damage_hints: is_modern, // GNOME 45+ has better damage tracking
             supports_explicit_sync: false,    // Not yet in GNOME
-            quirks: vec![Quirk::RequiresWaylandSession, Quirk::RestartCaptureOnResize],
+            quirks,
             recommended_fps_cap: 30,
             portal_timeout_ms: 30000,
         }

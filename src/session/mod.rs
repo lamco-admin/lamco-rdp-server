@@ -15,7 +15,8 @@
 //! SessionStrategySelector
 //!   ├─> Portal + Token Strategy (universal, portal v4+)
 //!   ├─> Mutter Direct API (GNOME only, no dialog)
-//!   └─> wlr-screencopy (wlroots only, no dialog)
+//!   ├─> libei/EIS (wlroots via Portal, Flatpak-compatible)
+//!   └─> wlr-direct (wlroots native, no Flatpak)
 //!
 //! TokenManager
 //!   ├─> Flatpak Secret Portal (Flatpak deployment)
@@ -70,15 +71,27 @@ pub mod strategy;
 pub mod token_manager;
 pub mod tpm_store;
 
-// Strategy implementations (Phase 3)
+// Strategy implementations
 pub mod strategies {
     pub mod mutter_direct;
     pub mod portal_token;
     pub mod selector;
 
+    #[cfg(feature = "wayland")]
+    pub mod wlr_direct;
+
+    #[cfg(feature = "libei")]
+    pub mod libei;
+
     pub use mutter_direct::MutterDirectStrategy;
     pub use portal_token::{PortalSessionHandleImpl, PortalTokenStrategy};
     pub use selector::SessionStrategySelector;
+
+    #[cfg(feature = "wayland")]
+    pub use wlr_direct::{WlrDirectStrategy, WlrSessionHandleImpl};
+
+    #[cfg(feature = "libei")]
+    pub use libei::{LibeiSessionHandleImpl, LibeiStrategy};
 }
 
 // Re-exports for convenience

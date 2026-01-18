@@ -16,12 +16,12 @@
 //!
 //! - [`SyncManager`] - State machine orchestration (server-specific policy)
 //! - [`ClipboardManager`] - Event routing between Portal and RDP
-//! - [`WrdCliprdrFactory`] - Server-specific backend factory wrapper
+//! - [`LamcoCliprdrFactory`] - Server-specific backend factory wrapper
 //!
 //! # Data Flow
 //!
 //! ```text
-//! RDP Client                IronRDP               WRD                Portal            Wayland
+//! RDP Client                IronRDP               Server             Portal            Wayland
 //! ━━━━━━━━━━                ━━━━━━━               ━━━               ━━━━━━            ━━━━━━━
 //!
 //! Copy (Ctrl+C)
@@ -46,6 +46,7 @@
 
 // Server-specific modules (policy and orchestration)
 pub mod error;
+pub mod fuse;
 pub mod ironrdp_backend;
 pub mod manager;
 pub mod sync;
@@ -92,13 +93,19 @@ pub use lamco_rdp_clipboard::{
 pub use error::{ClipboardError, ErrorContext, ErrorType, RecoveryAction, Result, RetryConfig};
 
 // Server IronRDP factory (wraps library factory)
-pub use ironrdp_backend::WrdCliprdrFactory;
+pub use ironrdp_backend::LamcoCliprdrFactory;
 
 // Server clipboard manager
 pub use manager::{ClipboardConfig, ClipboardEvent, ClipboardManager};
 
 // Server sync manager (state machine + echo protection)
 pub use sync::{ClipboardState, SyncDirection, SyncManager};
+
+// FUSE-based clipboard file transfer
+pub use fuse::{
+    generate_gnome_copied_files_content, generate_uri_list_content, get_mount_point,
+    FileContentsRequest, FileContentsResponse, FileDescriptor, FuseManager,
+};
 
 // =============================================================================
 // Extension trait for FormatConverter (server-specific convenience methods)

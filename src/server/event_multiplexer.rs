@@ -193,7 +193,13 @@ impl EventMultiplexer {
         }
     }
 
-    /// Drain events in priority order: input (all) → control (1) → clipboard (1) → graphics (1)
+    /// Drain events to wire in priority order
+    ///
+    /// This is the core QoS implementation:
+    /// 1. Drain ALL input events (never starve)
+    /// 2. Process 1 control event (session management)
+    /// 3. Process 1 clipboard event (user operations)
+    /// 4. Coalesce graphics to 1 latest frame
     pub(super) async fn drain_cycle(&mut self) -> DrainResult {
         let mut result = DrainResult::default();
 

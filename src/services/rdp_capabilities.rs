@@ -161,7 +161,7 @@ impl RdpCapability {
             Self::InputCapability { .. } => "input",
             Self::SurfaceManagement { .. } => "surface",
             Self::FrameAcknowledge { .. } => "frame-ack",
-            Self::Custom { name: _, .. } => {
+            Self::Custom { name, .. } => {
                 // Return a static str, we can't return the name directly
                 // This is a limitation, but custom caps are rare
                 "custom"

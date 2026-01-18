@@ -6,7 +6,7 @@
 use ironrdp_cliprdr::backend::ClipboardMessage;
 use ironrdp_server::{KeyboardEvent as IronKeyboardEvent, MouseEvent as IronMouseEvent};
 use std::sync::Arc;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{mpsc, Mutex, RwLock};
 use tracing::{debug, info};
 
 use crate::input::{CoordinateTransformer, KeyboardHandler, MouseHandler};
@@ -38,7 +38,7 @@ pub(super) async fn run_multiplexer_drain_loop(
     _mouse_handler: Arc<Mutex<MouseHandler>>,
     _coord_transformer: Arc<Mutex<CoordinateTransformer>>,
     _session: Arc<
-        Mutex<
+        RwLock<
             ashpd::desktop::Session<
                 'static,
                 ashpd::desktop::remote_desktop::RemoteDesktop<'static>,
@@ -47,7 +47,7 @@ pub(super) async fn run_multiplexer_drain_loop(
     >,
     _primary_stream_id: u32,
 ) {
-    debug!(" Multiplexer drain loop started - control + clipboard priority handling");
+    info!("🚀 Multiplexer drain loop started - control + clipboard priority handling");
 
     let mut stats_control = 0u64;
     let mut stats_clipboard = 0u64;
@@ -92,7 +92,7 @@ async fn process_keyboard_event(
     portal: &RemoteDesktopManager,
     keyboard_handler: &Arc<Mutex<KeyboardHandler>>,
     session: &Arc<
-        Mutex<
+        RwLock<
             ashpd::desktop::Session<
                 'static,
                 ashpd::desktop::remote_desktop::RemoteDesktop<'static>,
@@ -105,7 +105,7 @@ async fn process_keyboard_event(
     use crate::input::KeyboardEvent;
 
     let mut keyboard = keyboard_handler.lock().await;
-    let session_guard = session.lock().await;
+    let session_guard = session.read().await;
 
     match event {
         IronKeyboardEvent::Pressed { code, extended } => {
@@ -151,7 +151,7 @@ async fn process_mouse_event(
     mouse_handler: &Arc<Mutex<MouseHandler>>,
     coord_transformer: &Arc<Mutex<CoordinateTransformer>>,
     session: &Arc<
-        Mutex<
+        RwLock<
             ashpd::desktop::Session<
                 'static,
                 ashpd::desktop::remote_desktop::RemoteDesktop<'static>,
@@ -165,7 +165,7 @@ async fn process_mouse_event(
 
     let mut mouse = mouse_handler.lock().await;
     let mut transformer = coord_transformer.lock().await;
-    let session_guard = session.lock().await;
+    let session_guard = session.read().await;
 
     match event {
         IronMouseEvent::Move { x, y } => {

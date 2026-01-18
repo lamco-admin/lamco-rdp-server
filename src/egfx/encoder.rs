@@ -156,7 +156,10 @@ impl EncoderConfig {
         }
     }
 
-    /// Set color space configuration (enables VUI signaling for decoder color interpretation)
+    /// Set color space configuration
+    ///
+    /// This enables VUI signaling in the H.264 stream, ensuring
+    /// decoders correctly interpret the color space.
     pub fn with_color_space(mut self, config: ColorSpaceConfig) -> Self {
         self.color_space = Some(config);
         self
@@ -185,7 +188,6 @@ impl EncoderConfig {
 ///
 /// H.264 bitstream in AVC length-prefixed format
 #[deprecated(note = "MS-RDPEGFX requires Annex B, not AVC. Use Annex B format directly.")]
-#[allow(dead_code)]
 pub fn annex_b_to_avc(annex_b_data: &[u8]) -> Vec<u8> {
     let mut output = Vec::with_capacity(annex_b_data.len());
     let mut i = 0;
@@ -272,7 +274,6 @@ pub struct H264Frame {
 /// MS-RDPEGFX requires bitmap dimensions to be aligned to 16-pixel boundaries.
 /// The encoded area is then cropped to the actual target region.
 #[inline]
-#[allow(dead_code)] // Utility for callers requiring 16-pixel alignment
 pub fn align_to_16(dimension: u32) -> u32 {
     (dimension + 15) & !15
 }
@@ -290,7 +291,6 @@ pub struct Avc420Encoder {
     /// Cached SPS/PPS from last IDR frame (for prepending to P-slices)
     cached_sps_pps: Option<Vec<u8>>,
     /// Current H.264 level (determined from resolution)
-    #[allow(dead_code)] // WIP: Level-based encoding decisions
     current_level: Option<super::h264_level::H264Level>,
 }
 
@@ -377,7 +377,7 @@ impl Avc420Encoder {
 
             let nal_header = data[nal_start];
             let nal_type = nal_header & 0x1F;
-            let _nal_ref_idc = (nal_header >> 5) & 0x03;
+            let nal_ref_idc = (nal_header >> 5) & 0x03;
 
             // Find next start code
             let mut nal_end = data.len();
@@ -637,7 +637,6 @@ impl Avc420Encoder {
 }
 
 #[cfg(test)]
-#[allow(deprecated)]
 mod tests {
     use super::*;
 

@@ -63,6 +63,14 @@ pub enum ServiceId {
     /// wlr-screencopy protocol availability (wlroots bypass)
     /// Enables portal-free capture on Sway, Hyprland, Labwc
     WlrScreencopy,
+
+    /// wlr-direct input protocols (virtual keyboard/pointer)
+    /// Enables portal-free input injection on wlroots compositors
+    WlrDirectInput,
+
+    /// libei/EIS input via Portal RemoteDesktop
+    /// Flatpak-compatible wlroots input injection
+    LibeiInput,
 }
 
 impl ServiceId {
@@ -86,6 +94,8 @@ impl ServiceId {
             Self::CredentialStorage => "Credential Storage",
             Self::UnattendedAccess => "Unattended Access",
             Self::WlrScreencopy => "wlr-screencopy",
+            Self::WlrDirectInput => "wlr-direct Input",
+            Self::LibeiInput => "libei/EIS Input",
         }
     }
 
@@ -111,6 +121,8 @@ impl ServiceId {
             Self::CredentialStorage,
             Self::UnattendedAccess,
             Self::WlrScreencopy,
+            Self::WlrDirectInput,
+            Self::LibeiInput,
         ]
     }
 }

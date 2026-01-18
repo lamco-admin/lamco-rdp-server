@@ -118,7 +118,6 @@ pub struct EncodingStats {
 /// Receives video frames and produces H.264 encoded data for EGFX transmission.
 pub struct EgfxVideoHandler {
     /// Encoder configuration
-    #[allow(dead_code)] // WIP: Dynamic quality adjustment
     config: EgfxVideoConfig,
 
     /// H.264 encoder instance (behind feature flag)
@@ -341,8 +340,7 @@ impl EgfxVideoHandler {
 ///
 /// This trait mirrors the pattern used by IronRDP's `CliprdrServerFactory`
 /// and will be used when integrating EGFX into the server builder.
-#[allow(dead_code)] // WIP: Factory pattern for EGFX integration
-pub(super) trait EgfxVideoHandlerFactory: Send + Sync {
+pub trait EgfxVideoHandlerFactory: Send + Sync {
     /// Build a new EGFX video handler for a connection
     ///
     /// # Arguments
@@ -360,14 +358,12 @@ pub(super) trait EgfxVideoHandlerFactory: Send + Sync {
 }
 
 /// Default factory implementation
-#[allow(dead_code)] // WIP: Factory pattern for EGFX integration
-pub(super) struct DefaultEgfxVideoHandlerFactory {
+pub struct DefaultEgfxVideoHandlerFactory {
     config: EgfxVideoConfig,
 }
 
-#[allow(dead_code)]
 impl DefaultEgfxVideoHandlerFactory {
-    pub(super) fn new(config: EgfxVideoConfig) -> Self {
+    pub fn new(config: EgfxVideoConfig) -> Self {
         Self { config }
     }
 }
@@ -383,7 +379,7 @@ impl EgfxVideoHandlerFactory for DefaultEgfxVideoHandlerFactory {
             let (tx, rx) = mpsc::channel(16);
 
             match EgfxVideoHandler::new(self.config.clone(), width, height, tx) {
-                Ok(_handler) => {
+                Ok(handler) => {
                     // Handler would be stored and driven by frame source
                     // For now, just return the receiver
                     info!(

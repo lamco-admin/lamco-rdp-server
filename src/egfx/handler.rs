@@ -1,4 +1,4 @@
-//! WrdGraphicsHandler - GraphicsPipelineHandler implementation
+//! LamcoGraphicsHandler - GraphicsPipelineHandler implementation
 //!
 //! This module provides the handler that bridges our OpenH264 encoder
 //! with ironrdp-egfx's GraphicsPipelineServer.
@@ -37,7 +37,13 @@ use crate::server::{HandlerState, SharedHandlerState};
 /// - **AVC444**: H.264 with 4:4:4 chroma via dual-stream encoding, supported in V10+
 ///   when AVC420_ENABLED is set (MS-RDPEGFX Section 2.2.3.10: V10 with AVC420_ENABLED
 ///   implies AVC444v2 support)
-pub struct WrdGraphicsHandler {
+///
+/// # Platform Quirks
+///
+/// Some platforms have known issues with AVC444. When `force_avc420_only` is set,
+/// the handler will disable AVC444 regardless of client capability. This is used
+/// for platforms like RHEL 9 where AVC444 produces visual artifacts.
+pub struct LamcoGraphicsHandler {
     /// Surface dimensions
     width: u16,
     height: u16,
@@ -66,9 +72,15 @@ pub struct WrdGraphicsHandler {
     /// When set, callbacks update this state so the display handler can
     /// check EGFX readiness without locking the GraphicsPipelineServer.
     shared_state: Option<SharedHandlerState>,
+
+    /// Force AVC420-only mode due to platform quirks
+    ///
+    /// When true, AVC444 will be disabled even if the client supports it.
+    /// This is set based on platform detection (e.g., RHEL 9 has AVC444 blur issues).
+    force_avc420_only: bool,
 }
 
-impl WrdGraphicsHandler {
+impl LamcoGraphicsHandler {
     /// Create a new graphics handler
     pub fn new(width: u16, height: u16) -> Self {
         Self {
@@ -81,6 +93,32 @@ impl WrdGraphicsHandler {
             primary_surface_id: AtomicU16::new(0),
             negotiated_caps: std::sync::RwLock::new(None),
             shared_state: None,
+            force_avc420_only: false,
+        }
+    }
+
+    /// Create a new graphics handler with platform quirk awareness
+    ///
+    /// # Arguments
+    ///
+    /// * `width` - Initial surface width
+    /// * `height` - Initial surface height
+    /// * `force_avc420_only` - If true, disable AVC444 even if client supports it
+    ///
+    /// This constructor is used when platform detection has identified that
+    /// AVC444 produces visual artifacts (e.g., RHEL 9).
+    pub fn with_quirks(width: u16, height: u16, force_avc420_only: bool) -> Self {
+        Self {
+            width,
+            height,
+            avc420_enabled: AtomicBool::new(false),
+            avc444_enabled: AtomicBool::new(false),
+            ready: AtomicBool::new(false),
+            has_surface: AtomicBool::new(false),
+            primary_surface_id: AtomicU16::new(0),
+            negotiated_caps: std::sync::RwLock::new(None),
+            shared_state: None,
+            force_avc420_only,
         }
     }
 
@@ -98,6 +136,42 @@ impl WrdGraphicsHandler {
             ready: AtomicBool::new(false),
             has_surface: AtomicBool::new(false),
             primary_surface_id: AtomicU16::new(0),
+            force_avc420_only: false,
+            negotiated_caps: std::sync::RwLock::new(None),
+            shared_state: Some(shared_state),
+        }
+    }
+
+    /// Create a new graphics handler with shared state and platform quirk awareness
+    ///
+    /// This is the primary constructor for production use. It combines:
+    /// - Shared state synchronization for cross-task visibility
+    /// - Platform quirk awareness (e.g., force AVC420 on RHEL 9)
+    ///
+    /// # Arguments
+    ///
+    /// * `width` - Initial surface width
+    /// * `height` - Initial surface height
+    /// * `shared_state` - Shared state for EgfxFrameSender synchronization
+    /// * `force_avc420_only` - If true, disable AVC444 even if client supports it
+    pub fn with_shared_state_and_quirks(
+        width: u16,
+        height: u16,
+        shared_state: SharedHandlerState,
+        force_avc420_only: bool,
+    ) -> Self {
+        if force_avc420_only {
+            info!("EGFX handler: AVC444 disabled due to platform quirks (force_avc420_only)");
+        }
+        Self {
+            width,
+            height,
+            avc420_enabled: AtomicBool::new(false),
+            avc444_enabled: AtomicBool::new(false),
+            ready: AtomicBool::new(false),
+            has_surface: AtomicBool::new(false),
+            primary_surface_id: AtomicU16::new(0),
+            force_avc420_only,
             negotiated_caps: std::sync::RwLock::new(None),
             shared_state: Some(shared_state),
         }
@@ -169,7 +243,7 @@ impl WrdGraphicsHandler {
     }
 }
 
-impl GraphicsPipelineHandler for WrdGraphicsHandler {
+impl GraphicsPipelineHandler for LamcoGraphicsHandler {
     fn capabilities_advertise(&mut self, pdu: &CapabilitiesAdvertisePdu) {
         info!("EGFX: Client advertised {} capability sets", pdu.0.len());
         for cap in &pdu.0 {
@@ -192,7 +266,7 @@ impl GraphicsPipelineHandler for WrdGraphicsHandler {
         // - V10+ with AVC420_ENABLED → AVC420 AND AVC444v2 (4:4:4 chroma via dual-stream)
         //
         // AVC444v2 provides superior text/UI rendering through full chroma resolution.
-        let (avc420, avc444) = match negotiated {
+        let (avc420, mut avc444) = match negotiated {
             CapabilitySet::V8_1 { flags, .. } => {
                 // V8.1: AVC420 only, no AVC444 support
                 let has_avc420 = flags.contains(CapabilitiesV81Flags::AVC420_ENABLED);
@@ -200,20 +274,28 @@ impl GraphicsPipelineHandler for WrdGraphicsHandler {
             }
             // V10+ with AVC420 implies AVC444v2 support
             CapabilitySet::V10 { .. }
-            | CapabilitySet::V10_1
+            | CapabilitySet::V10_1 { .. }
             | CapabilitySet::V10_2 { .. }
             | CapabilitySet::V10_3 { .. }
             | CapabilitySet::V10_4 { .. }
             | CapabilitySet::V10_5 { .. }
             | CapabilitySet::V10_6 { .. }
             | CapabilitySet::V10_7 { .. } => {
-                // V10+: Both AVC420 and AVC444v2 are implied
-                // DIAGNOSTIC BUILD: Extensive logging added to packing functions
-                (true, true) // Re-enabled AVC444 with diagnostic logging
+                // V10+: Both AVC420 and AVC444v2 are implied by client capability
+                (true, true)
             }
             // V8 and earlier don't support AVC
             _ => (false, false),
         };
+
+        // Apply platform quirk: force AVC420-only if the platform has known AVC444 issues
+        // This is set during handler construction based on OS detection (e.g., RHEL 9)
+        if self.force_avc420_only && avc444 {
+            warn!(
+                "EGFX: Client supports AVC444 but platform has Avc444Unreliable quirk - forcing AVC420 only"
+            );
+            avc444 = false;
+        }
 
         self.avc420_enabled.store(avc420, Ordering::Release);
         self.avc444_enabled.store(avc444, Ordering::Release);
@@ -226,6 +308,9 @@ impl GraphicsPipelineHandler for WrdGraphicsHandler {
         match (avc420, avc444) {
             (true, true) => {
                 info!("EGFX: AVC420 + AVC444v2 encoding enabled (V10+ capabilities)");
+            }
+            (true, false) if self.force_avc420_only => {
+                info!("EGFX: AVC420 encoding enabled (AVC444 disabled due to platform quirk)");
             }
             (true, false) => {
                 info!("EGFX: AVC420 (H.264 4:2:0) encoding enabled");
@@ -333,26 +418,26 @@ impl GraphicsPipelineHandler for WrdGraphicsHandler {
     }
 }
 
-/// Thread-safe wrapper for WrdGraphicsHandler
+/// Thread-safe wrapper for LamcoGraphicsHandler
 ///
 /// Since GraphicsPipelineHandler requires `Send`, but we also need
 /// to query state from other tasks, this wrapper provides Arc-based sharing.
 pub struct SharedGraphicsHandler {
-    inner: Arc<std::sync::RwLock<WrdGraphicsHandler>>,
+    inner: Arc<std::sync::RwLock<LamcoGraphicsHandler>>,
 }
 
 impl SharedGraphicsHandler {
     /// Create a new shared handler
     pub fn new(width: u16, height: u16) -> Self {
         Self {
-            inner: Arc::new(std::sync::RwLock::new(WrdGraphicsHandler::new(
+            inner: Arc::new(std::sync::RwLock::new(LamcoGraphicsHandler::new(
                 width, height,
             ))),
         }
     }
 
     /// Get a clone of the inner Arc for querying state
-    pub fn clone_inner(&self) -> Arc<std::sync::RwLock<WrdGraphicsHandler>> {
+    pub fn clone_inner(&self) -> Arc<std::sync::RwLock<LamcoGraphicsHandler>> {
         Arc::clone(&self.inner)
     }
 

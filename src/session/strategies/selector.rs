@@ -5,10 +5,12 @@
 //!
 //! Priority:
 //! 1. Mutter Direct API (GNOME, zero dialogs)
-//! 2. Portal + Token (universal, one-time dialog)
-//! 3. Basic Portal (fallback, dialog each time)
+//! 2. wlr-direct (wlroots native, zero dialogs)
+//! 3. libei/EIS (wlroots via Portal, Flatpak-compatible)
+//! 4. Portal + Token (universal, one-time dialog)
+//! 5. Basic Portal (fallback, dialog each time)
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
@@ -115,7 +117,7 @@ impl SessionStrategySelector {
         {
             // Verify Mutter API is actually accessible
             if MutterDirectStrategy::is_available().await {
-                debug!(" Selected: Mutter Direct API strategy");
+                info!("✅ Selected: Mutter Direct API strategy");
                 info!("   Zero permission dialogs (not even first time)");
 
                 // Check if we should use physical monitor or virtual
@@ -124,13 +126,57 @@ impl SessionStrategySelector {
                 return Ok(Box::new(MutterDirectStrategy::new(monitor_connector)));
             } else {
                 warn!("Service Registry reports Mutter API available, but connection failed");
-                warn!("Falling back to Portal + Token strategy");
+                warn!("Falling back to next available strategy");
             }
         }
 
-        // PRIORITY 2: Portal + Token (works on all DEs with portal v4+)
+        // PRIORITY 2: wlr-direct (wlroots compositors, native protocols)
+        #[cfg(feature = "wayland")]
+        if self
+            .service_registry
+            .service_level(ServiceId::WlrDirectInput)
+            >= ServiceLevel::BestEffort
+        {
+            use super::wlr_direct::WlrDirectStrategy;
+
+            // Verify protocols are actually accessible
+            if WlrDirectStrategy::is_available().await {
+                info!("✅ Selected: wlr-direct strategy");
+                info!("   Native Wayland protocols for wlroots compositors");
+                info!("   Compositor: {}", caps.compositor);
+                info!("   Note: Input only (video via Portal ScreenCast)");
+
+                return Ok(Box::new(WlrDirectStrategy::new()));
+            } else {
+                warn!("Service Registry reports wlr-direct available, but protocol binding failed");
+                warn!("Falling back to next available strategy");
+            }
+        }
+
+        // PRIORITY 3: libei/EIS (wlroots via Portal RemoteDesktop, Flatpak-compatible)
+        #[cfg(feature = "libei")]
+        if self.service_registry.service_level(ServiceId::LibeiInput) >= ServiceLevel::BestEffort {
+            use super::libei::LibeiStrategy;
+
+            // Verify Portal RemoteDesktop with ConnectToEIS is accessible
+            if LibeiStrategy::is_available().await {
+                info!("✅ Selected: libei strategy");
+                info!("   Portal RemoteDesktop + EIS protocol for wlroots");
+                info!("   Compositor: {}", caps.compositor);
+                info!("   Flatpak-compatible: Yes");
+                info!("   Note: Input only (video via Portal ScreenCast)");
+
+                return Ok(Box::new(LibeiStrategy::new(None)));
+            } else {
+                warn!("Service Registry reports libei available, but Portal ConnectToEIS failed");
+                warn!("Portal backend may not support ConnectToEIS method");
+                warn!("Falling back to Portal strategy");
+            }
+        }
+
+        // PRIORITY 4: Portal + Token (works on all DEs with portal v4+)
         if self.service_registry.supports_session_persistence() {
-            debug!(" Selected: Portal + Token strategy");
+            info!("✅ Selected: Portal + Token strategy");
             info!("   One-time permission dialog, then unattended operation");
 
             return Ok(Box::new(PortalTokenStrategy::new(

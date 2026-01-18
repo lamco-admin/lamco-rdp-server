@@ -1,0 +1,23 @@
+#!/usr/bin/make -f
+
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+export CARGO_HOME = $(CURDIR)/.cargo
+export CARGO_TARGET_DIR = $(CURDIR)/target
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	cargo build --release --offline --features "default,vaapi"
+
+override_dh_auto_install:
+	install -Dm755 target/release/lamco-rdp-server debian/lamco-rdp-server/usr/bin/lamco-rdp-server
+	install -Dm644 config.toml debian/lamco-rdp-server/etc/lamco-rdp-server/config.toml || true
+
+override_dh_auto_test:
+	# Skip tests during package build
+	true
+
+override_dh_auto_clean:
+	cargo clean || true
+	rm -rf .cargo target

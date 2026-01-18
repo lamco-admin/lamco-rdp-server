@@ -16,11 +16,7 @@ use std::path::PathBuf;
 pub mod types;
 
 // Use types from types.rs
-use types::{
-    AdaptiveFpsConfig, AdvancedVideoConfig, ClipboardConfig, DamageTrackingConfig, DisplayConfig,
-    EgfxConfig, InputConfig, LatencyConfig, LoggingConfig, MultiMonitorConfig, PerformanceConfig,
-    SecurityConfig, ServerConfig, VideoConfig, VideoPipelineConfig,
-};
+use types::*;
 
 // Re-export types needed by other modules
 pub use types::HardwareEncodingConfig;
@@ -89,8 +85,8 @@ impl Config {
                 use_portals: true,
             },
             security: SecurityConfig {
-                cert_path: PathBuf::from("/etc/wrd-server/cert.pem"),
-                key_path: PathBuf::from("/etc/wrd-server/key.pem"),
+                cert_path: PathBuf::from("/etc/lamco-rdp-server/cert.pem"),
+                key_path: PathBuf::from("/etc/lamco-rdp-server/key.pem"),
                 enable_nla: true,
                 auth_method: "pam".to_string(),
                 require_tls_13: true,
@@ -185,7 +181,7 @@ impl Config {
         }
 
         match self.egfx.codec.as_str() {
-            "avc420" | "avc444" => {}
+            "avc420" | "avc444" | "auto" => {}
             _ => anyhow::bail!("Invalid EGFX codec: {}", self.egfx.codec),
         }
 

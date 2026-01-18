@@ -8,7 +8,7 @@
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use std::sync::Arc;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::mutter::{MutterSessionHandle, MutterSessionManager};
 use crate::session::strategy::{
@@ -61,7 +61,7 @@ impl SessionHandle for MutterSessionHandleImpl {
             .context("Failed to inject keyboard keycode via Mutter")
     }
 
-    async fn notify_pointer_motion_absolute(&self, _stream_id: u32, x: f64, y: f64) -> Result<()> {
+    async fn notify_pointer_motion_absolute(&self, stream_id: u32, x: f64, y: f64) -> Result<()> {
         // Create RemoteDesktop session proxy
         let rd_session = crate::mutter::MutterRemoteDesktopSession::new(
             &self.mutter_handle.connection,
@@ -136,7 +136,7 @@ impl MutterDirectStrategy {
     /// # Arguments
     ///
     /// * `monitor_connector` - Optional monitor connector name for physical monitor,
-    ///   or None to use virtual monitor (headless)
+    ///                         or None to use virtual monitor (headless)
     pub fn new(monitor_connector: Option<String>) -> Self {
         Self { monitor_connector }
     }
@@ -190,7 +190,7 @@ impl SessionStrategy for MutterDirectStrategy {
             .await
             .context("Failed to create Mutter session")?;
 
-        debug!(" Mutter session created successfully (ZERO DIALOGS)");
+        info!("✅ Mutter session created successfully (ZERO DIALOGS)");
 
         // Log what we got
         for (idx, stream) in mutter_handle.streams().iter().enumerate() {
@@ -211,7 +211,7 @@ impl SessionStrategy for MutterDirectStrategy {
         Ok(Arc::new(handle))
     }
 
-    async fn cleanup(&self, _session: &dyn SessionHandle) -> Result<()> {
+    async fn cleanup(&self, session: &dyn SessionHandle) -> Result<()> {
         info!("Cleaning up Mutter session");
 
         // Mutter sessions clean up automatically when D-Bus objects are dropped

@@ -8,9 +8,9 @@
 //! both FD-based (portal) and socket-based (direct) connections. This helper
 //! allows us to use Mutter without modifying lamco-pipewire's architecture.
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use std::os::fd::{AsRawFd, RawFd};
-use tracing::debug;
+use tracing::{debug, info, warn};
 
 /// Connect to PipeWire's default socket and return an FD
 ///
@@ -28,7 +28,7 @@ use tracing::debug;
 /// - Connection fails
 /// - Socket permissions incorrect
 pub fn connect_to_pipewire_daemon() -> Result<RawFd> {
-    debug!("Connecting to PipeWire default socket");
+    info!("Connecting to PipeWire default socket");
 
     // PipeWire socket is typically at $XDG_RUNTIME_DIR/pipewire-0
     let runtime_dir = std::env::var("XDG_RUNTIME_DIR").context("XDG_RUNTIME_DIR not set")?;
@@ -50,7 +50,7 @@ pub fn connect_to_pipewire_daemon() -> Result<RawFd> {
     // Don't close the stream - we need the FD to stay open
     std::mem::forget(stream);
 
-    debug!("Connected to PipeWire daemon successfully, FD: {}", fd);
+    info!("Connected to PipeWire daemon successfully, FD: {}", fd);
 
     Ok(fd)
 }

@@ -25,16 +25,16 @@ use crate::clipboard::manager::ClipboardManager;
 /// # Example
 ///
 /// ```ignore
-/// use lamco_rdp_server::clipboard::{ClipboardManager, WrdCliprdrFactory};
+/// use lamco_rdp_server::clipboard::{ClipboardManager, LamcoCliprdrFactory};
 /// use std::sync::Arc;
 /// use tokio::sync::Mutex;
 ///
 /// let manager = Arc::new(Mutex::new(ClipboardManager::new(config).await?));
-/// let factory = WrdCliprdrFactory::new(manager);
+/// let factory = LamcoCliprdrFactory::new(manager);
 ///
 /// // Pass factory to IronRDP server builder
 /// ```
-pub struct WrdCliprdrFactory {
+pub struct LamcoCliprdrFactory {
     /// Clipboard manager shared across connections
     clipboard_manager: Arc<Mutex<ClipboardManager>>,
 
@@ -45,7 +45,7 @@ pub struct WrdCliprdrFactory {
     server_event_sender: Option<mpsc::UnboundedSender<ironrdp_server::ServerEvent>>,
 }
 
-impl WrdCliprdrFactory {
+impl LamcoCliprdrFactory {
     /// Create a new clipboard factory
     ///
     /// # Arguments
@@ -55,7 +55,7 @@ impl WrdCliprdrFactory {
         let event_sender = ClipboardEventSender::new();
         let event_receiver = event_sender.subscribe();
 
-        debug!("Created WrdCliprdrFactory with event channel");
+        info!("Created LamcoCliprdrFactory with event channel");
 
         // Start event bridge task to forward RDP backend events to ClipboardManager
         // This is critical - without it, RDP clipboard events (FormatList, DataRequest, etc.)
@@ -81,7 +81,7 @@ impl WrdCliprdrFactory {
         use lamco_clipboard_core::ClipboardFormat;
 
         tokio::spawn(async move {
-            debug!(" RDP clipboard event bridge task started");
+            info!("🔗 RDP clipboard event bridge task started");
 
             loop {
                 // Poll for events (ClipboardEventReceiver uses try_recv, not async recv)
@@ -135,15 +135,13 @@ impl WrdCliprdrFactory {
 
                         ClipboardEvent::FormatDataResponse { data, is_error } => {
                             if is_error {
-                                debug!(" Bridge: RDP FormatDataResponse ERROR → ClipboardManager");
+                                // Error response is expected when client doesn't have the format
+                                debug!("🔗 Bridge: RDP FormatDataResponse (format unavailable) → ClipboardManager");
                                 let _ = manager_tx
                                     .send(crate::clipboard::ClipboardEvent::RdpDataError)
                                     .await;
                             } else {
-                                debug!(
-                                    " Bridge: RDP FormatDataResponse ({} bytes) → ClipboardManager",
-                                    data.len()
-                                );
+                                info!("🔗 Bridge: RDP FormatDataResponse ({} bytes) → ClipboardManager", data.len());
                                 let _ = manager_tx
                                     .send(crate::clipboard::ClipboardEvent::RdpDataResponse(data))
                                     .await;
@@ -157,7 +155,7 @@ impl WrdCliprdrFactory {
                             size,
                             is_size_request,
                         } => {
-                            debug!(" Bridge: RDP FileContentsRequest (stream={}, index={}, pos={}, size={}, size_req={}) → ClipboardManager",
+                            info!("🔗 Bridge: RDP FileContentsRequest (stream={}, index={}, pos={}, size={}, size_req={}) → ClipboardManager",
                                 stream_id, index, position, size, is_size_request);
                             let _ = manager_tx
                                 .send(crate::clipboard::ClipboardEvent::RdpFileContentsRequest {
@@ -176,9 +174,9 @@ impl WrdCliprdrFactory {
                             is_error,
                         } => {
                             if is_error {
-                                debug!(" Bridge: RDP FileContentsResponse ERROR (stream={}) → ClipboardManager", stream_id);
+                                info!("🔗 Bridge: RDP FileContentsResponse ERROR (stream={}) → ClipboardManager", stream_id);
                             } else {
-                                debug!(" Bridge: RDP FileContentsResponse (stream={}, {} bytes) → ClipboardManager", stream_id, data.len());
+                                info!("🔗 Bridge: RDP FileContentsResponse (stream={}, {} bytes) → ClipboardManager", stream_id, data.len());
                             }
                             let _ = manager_tx
                                 .send(crate::clipboard::ClipboardEvent::RdpFileContentsResponse {
@@ -190,7 +188,7 @@ impl WrdCliprdrFactory {
                         }
 
                         ClipboardEvent::Ready => {
-                            debug!(" Bridge: RDP clipboard Ready → ClipboardManager");
+                            info!("🔗 Bridge: RDP clipboard Ready → ClipboardManager");
                             let _ = manager_tx
                                 .send(crate::clipboard::ClipboardEvent::RdpReady)
                                 .await;
@@ -198,7 +196,7 @@ impl WrdCliprdrFactory {
 
                         ClipboardEvent::RequestFormatList => {
                             // This is essentially the same as Ready - re-announce Linux clipboard
-                            debug!(" Bridge: RDP RequestFormatList → ClipboardManager (treating as Ready)");
+                            info!("🔗 Bridge: RDP RequestFormatList → ClipboardManager (treating as Ready)");
                             let _ = manager_tx
                                 .send(crate::clipboard::ClipboardEvent::RdpReady)
                                 .await;
@@ -215,7 +213,7 @@ impl WrdCliprdrFactory {
             }
         });
 
-        debug!(" RDP clipboard event bridge started - backend events will reach manager");
+        info!("✅ RDP clipboard event bridge started - backend events will reach manager");
     }
 
     /// Get a clone of the event sender
@@ -226,7 +224,7 @@ impl WrdCliprdrFactory {
     }
 }
 
-impl CliprdrBackendFactory for WrdCliprdrFactory {
+impl CliprdrBackendFactory for LamcoCliprdrFactory {
     fn build_cliprdr_backend(&self) -> Box<dyn ironrdp_cliprdr::backend::CliprdrBackend> {
         debug!("Building clipboard backend for new connection");
 
@@ -241,9 +239,9 @@ impl CliprdrBackendFactory for WrdCliprdrFactory {
     }
 }
 
-impl ServerEventSender for WrdCliprdrFactory {
+impl ServerEventSender for LamcoCliprdrFactory {
     fn set_sender(&mut self, sender: mpsc::UnboundedSender<ironrdp_server::ServerEvent>) {
-        debug!("Clipboard factory received server event sender");
+        info!("Clipboard factory received server event sender");
         self.server_event_sender = Some(sender.clone());
 
         // Register sender with ClipboardManager for delayed rendering requests
@@ -257,11 +255,11 @@ impl ServerEventSender for WrdCliprdrFactory {
     }
 }
 
-impl ironrdp_server::CliprdrServerFactory for WrdCliprdrFactory {}
+impl ironrdp_server::CliprdrServerFactory for LamcoCliprdrFactory {}
 
-impl std::fmt::Debug for WrdCliprdrFactory {
+impl std::fmt::Debug for LamcoCliprdrFactory {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("WrdCliprdrFactory")
+        f.debug_struct("LamcoCliprdrFactory")
             .field("has_server_sender", &self.server_event_sender.is_some())
             .finish()
     }
@@ -277,7 +275,7 @@ mod tests {
         let config = ClipboardConfig::default();
         let manager = Arc::new(Mutex::new(ClipboardManager::new(config).await.unwrap()));
 
-        let factory = WrdCliprdrFactory::new(manager);
+        let factory = LamcoCliprdrFactory::new(manager);
         let _backend = factory.build_cliprdr_backend();
         // Backend created successfully
     }
@@ -287,7 +285,7 @@ mod tests {
         let config = ClipboardConfig::default();
         let manager = Arc::new(Mutex::new(ClipboardManager::new(config).await.unwrap()));
 
-        let factory = WrdCliprdrFactory::new(manager);
+        let factory = LamcoCliprdrFactory::new(manager);
 
         // Factory should be created successfully
         // Event bridge starts automatically in new()

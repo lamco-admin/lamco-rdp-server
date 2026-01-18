@@ -1,9 +1,9 @@
 [package]
 name = "lamco-rdp-server"
-version = "0.1.0"
+version = "0.9.0"
 edition = "2021"
 rust-version = "1.77"
-authors = ["Greg Lamberson <greg@lamco.io>"]
+authors = ["Lamco <contact@lamco.ai>"]
 description = "Wayland RDP server - Portal mode for Linux desktop sharing"
 license = "BUSL-1.1"
 repository = "https://github.com/lamco-admin/lamco-rdp-server"
@@ -29,18 +29,21 @@ path = "src/lib.rs"
 # -----------------------------------------------------------------------------
 # Updated 2026-01-07: Using latest published versions
 #
-# Lamco platform crates (from crates.io)
+# NOTE: Clipboard crates MUST remain local path dependencies because they
+# implement CliprdrBackend trait from ironrdp-cliprdr. Since we patch
+# ironrdp-cliprdr to our fork (for file transfer methods), clipboard crates
+# must compile against the same patched version to avoid trait conflicts.
 lamco-wayland = "0.2.3"
 lamco-rdp = "0.5.0"
 lamco-portal = { version = "0.3.0", features = ["dbus-clipboard"] }
-lamco-pipewire = "0.1.3"
+lamco-pipewire = "0.1.4"
 lamco-video = "0.1.2"
 lamco-rdp-input = "0.1.1"
-# Clipboard crates from git (must compile against patched ironrdp-cliprdr)
-# The crates.io versions are compiled against upstream ironrdp-cliprdr and
-# have trait conflicts with our fork. Using git ensures source compilation.
-lamco-clipboard-core = { git = "https://github.com/lamco-admin/lamco-rdp", features = ["image"] }
-lamco-rdp-clipboard = { git = "https://github.com/lamco-admin/lamco-rdp" }
+# Clipboard crates - bundled (tightly coupled to patched ironrdp-cliprdr)
+# For local dev: use ../lamco-rdp-workspace/crates/...
+# For packaging: bundled-crates/... is included in tarball
+lamco-clipboard-core = { path = "bundled-crates/lamco-clipboard-core", features = ["image"] }
+lamco-rdp-clipboard = { path = "bundled-crates/lamco-rdp-clipboard" }
 
 # -----------------------------------------------------------------------------
 # Async runtime
@@ -99,9 +102,15 @@ ironrdp-egfx = { git = "https://github.com/lamco-admin/IronRDP", branch = "maste
 # -----------------------------------------------------------------------------
 wayland-client = { version = "0.31", optional = true }
 wayland-protocols = { version = "0.31", features = ["client"], optional = true }
+wayland-protocols-misc = { version = "0.2", features = ["client"], optional = true }
+wayland-protocols-wlr = { version = "0.3", features = ["client"], optional = true }
 ashpd = { version = "0.12.0", features = ["tokio"] }
 zbus = "4.0.1"
 enumflags2 = "0.7"
+
+# libei/EIS protocol for Flatpak-compatible wlroots input
+# Pure Rust implementation used by Smithay/COSMIC
+reis = { version = "0.5", features = ["tokio"], optional = true }
 
 # -----------------------------------------------------------------------------
 # PipeWire integration
@@ -145,8 +154,9 @@ cudarc = { version = "0.16", optional = true, default-features = false, features
 # -----------------------------------------------------------------------------
 # System and utilities
 # -----------------------------------------------------------------------------
-nix = { version = "0.27", features = ["signal", "process", "mman"] }
+nix = { version = "0.29", features = ["signal", "process", "mman"] }
 libc = "0.2"
+fuser = "0.15"  # FUSE filesystem for clipboard file transfer
 chrono = "0.4"
 uuid = { version = "1.6", features = ["v4", "serde"] }
 sysinfo = "0.30"
@@ -201,7 +211,8 @@ proptest = "1.4"
 
 [features]
 default = ["pam-auth", "h264"]
-wayland = ["wayland-client", "wayland-protocols"]
+wayland = ["wayland-client", "wayland-protocols", "wayland-protocols-misc", "wayland-protocols-wlr"]
+libei = ["reis"]
 pam-auth = ["pam"]
 
 # H.264 video encoding via EGFX channel
@@ -281,18 +292,29 @@ cast_possible_truncation = "allow"
 cast_possible_wrap = "allow"
 
 # =============================================================================
-# Patches - IronRDP Fork
+# Patches - Override transitive dependencies
 # =============================================================================
 #
-# Using lamco-admin fork of IronRDP with features pending upstream merge:
-# - MS-RDPEGFX Graphics Pipeline Extension
-# - Clipboard file transfer APIs
+# IronRDP from lamco-admin public fork with features not yet in upstream:
+# - PR #1057: MS-RDPEGFX Graphics Pipeline Extension
+# - PR #1063: reqwest feature fix
+# - PR #1064: lock_clipboard() / unlock_clipboard()
+# - PR #1065: request_file_contents()
+# - PR #1066: SendFileContentsResponse
 #
 # Fork: https://github.com/lamco-admin/IronRDP
+# Local: ~/IronRDP-public
+# Tracking: ~/lamco-admin/upstream/ironrdp/PUBLIC-FORK-STATUS.md
+#
+# When Devolutions merges all PRs and publishes new version:
+# 1. Remove this [patch] section
+# 2. Update ironrdp-* direct dependencies to use crates.io versions
 # =============================================================================
 
 [patch.crates-io]
-# IronRDP from lamco-admin fork - all crates patched for trait compatibility
+# IronRDP from lamco-admin fork - EGFX + clipboard file transfer
+# PRs pending upstream: #1057 (EGFX), #1063-1066 (clipboard)
+# All crates patched to same source to avoid trait conflicts
 ironrdp = { git = "https://github.com/lamco-admin/IronRDP", branch = "master" }
 ironrdp-pdu = { git = "https://github.com/lamco-admin/IronRDP", branch = "master" }
 ironrdp-server = { git = "https://github.com/lamco-admin/IronRDP", branch = "master" }
@@ -305,6 +327,7 @@ ironrdp-tokio = { git = "https://github.com/lamco-admin/IronRDP", branch = "mast
 ironrdp-displaycontrol = { git = "https://github.com/lamco-admin/IronRDP", branch = "master" }
 ironrdp-egfx = { git = "https://github.com/lamco-admin/IronRDP", branch = "master" }
 
+# Patch git dependencies from lamco-rdp-workspace (lamco-rdp-clipboard uses git fork)
 # Redirect glamberson fork references to lamco-admin fork
 [patch."https://github.com/glamberson/IronRDP"]
 ironrdp-cliprdr = { git = "https://github.com/lamco-admin/IronRDP", branch = "master" }

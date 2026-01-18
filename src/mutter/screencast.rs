@@ -6,7 +6,7 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
+use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value};
 use zbus::Connection;
 
 /// Main ScreenCast interface proxy
@@ -15,7 +15,6 @@ use zbus::Connection;
 /// Path: /org/gnome/Mutter/ScreenCast
 #[derive(Debug)]
 pub struct MutterScreenCast<'a> {
-    #[allow(dead_code)] // Retained for future session management
     connection: Connection,
     proxy: zbus::Proxy<'a>,
 }
@@ -71,7 +70,6 @@ impl<'a> MutterScreenCast<'a> {
 /// Path: /org/gnome/Mutter/ScreenCast/Session/*
 #[derive(Debug)]
 pub struct MutterScreenCastSession<'a> {
-    #[allow(dead_code)] // Retained for future session management
     connection: Connection,
     proxy: zbus::Proxy<'a>,
 }
@@ -258,11 +256,11 @@ impl StreamParameters {
         key: &str,
         index: usize,
     ) -> Option<i32> {
-        use zbus::zvariant::Structure;
+        use zbus::zvariant::{Str, Structure};
 
         dict.get(key).and_then(|value| {
             // Attempt to downcast to Structure
-            match value.downcast_ref::<Structure<'_>>() {
+            match value.downcast_ref::<Structure>() {
                 Ok(structure) => {
                     // Get fields from structure
                     let fields = structure.fields();

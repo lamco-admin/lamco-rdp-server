@@ -135,15 +135,19 @@ impl DamageRegion {
         // Calculate horizontal gap (0 if overlapping)
         let gap_x = if other.x >= self_right {
             other.x - self_right
+        } else if self.x >= other_right {
+            self.x - other_right
         } else {
-            self.x.saturating_sub(other_right)
+            0 // Overlapping in x dimension
         };
 
         // Calculate vertical gap (0 if overlapping)
         let gap_y = if other.y >= self_bottom {
             other.y - self_bottom
+        } else if self.y >= other_bottom {
+            self.y - other_bottom
         } else {
-            self.y.saturating_sub(other_bottom)
+            0 // Overlapping in y dimension
         };
 
         // Adjacent if both gaps are within merge_distance
@@ -665,8 +669,8 @@ impl DamageDetector {
     // -------------------------------------------------------------------------
 
     fn update_tile_grid(&mut self, width: u32, height: u32) {
-        self.tiles_x = (width as usize).div_ceil(self.config.tile_size);
-        self.tiles_y = (height as usize).div_ceil(self.config.tile_size);
+        self.tiles_x = ((width as usize) + self.config.tile_size - 1) / self.config.tile_size;
+        self.tiles_y = ((height as usize) + self.config.tile_size - 1) / self.config.tile_size;
         let total_tiles = self.tiles_x * self.tiles_y;
 
         if self.tile_dirty.len() != total_tiles {

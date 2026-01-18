@@ -6,7 +6,7 @@
 use anyhow::{anyhow, Context, Result};
 use std::path::Path;
 use std::process::Command;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 /// Deployment context affecting available strategies
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -346,7 +346,7 @@ async fn check_secret_service_unlocked() -> bool {
     use super::secret_service::AsyncSecretServiceClient;
 
     match AsyncSecretServiceClient::connect().await {
-        Ok(_client) => {
+        Ok(client) => {
             // Try a simple operation to verify it's unlocked
             // If locked, this will fail
             tokio::task::spawn_blocking(move || {

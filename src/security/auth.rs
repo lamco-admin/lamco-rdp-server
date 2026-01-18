@@ -8,7 +8,7 @@ use anyhow::Context;
 use anyhow::Result;
 #[cfg(feature = "pam-auth")]
 use pam::Authenticator;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 /// Authentication method
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,7 +44,7 @@ pub struct UserAuthenticator {
 impl UserAuthenticator {
     /// Create new authenticator
     pub fn new(method: AuthMethod, service_name: Option<String>) -> Self {
-        let service_name = service_name.unwrap_or_else(|| "wrd-server".to_string());
+        let service_name = service_name.unwrap_or_else(|| "lamco-rdp-server".to_string());
 
         info!(
             "Initializing authenticator: {:?}, service: {}",
@@ -76,7 +76,6 @@ impl UserAuthenticator {
         let mut auth = Authenticator::with_password(&self.service_name)
             .context("Failed to create PAM authenticator")?;
 
-        // Set credentials
         auth.get_handler().set_credentials(username, password);
 
         // Authenticate
@@ -119,7 +118,6 @@ impl UserAuthenticator {
             anyhow::bail!("Username too long (max 32 characters)");
         }
 
-        // Check for valid characters (alphanumeric, underscore, dash)
         if !username
             .chars()
             .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
@@ -147,7 +145,7 @@ impl SessionToken {
         let token = Uuid::new_v4().to_string();
         let created_at = std::time::SystemTime::now();
 
-        debug!("Created session token for user '{}'", username);
+        info!("Created session token for user '{}'", username);
 
         Self {
             token,

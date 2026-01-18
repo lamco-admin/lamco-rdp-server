@@ -110,7 +110,7 @@ pub struct WaylandGlobal {
 }
 
 /// Preferred buffer type for screen capture
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BufferType {
     /// Memory file descriptor (shm)
     MemFd,
@@ -119,15 +119,19 @@ pub enum BufferType {
     DmaBuf,
 
     /// Either type (compositor chooses)
-    #[default]
     Any,
 }
 
+impl Default for BufferType {
+    fn default() -> Self {
+        Self::Any
+    }
+}
+
 /// Capture backend preference
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CaptureBackend {
     /// XDG Desktop Portal (most compatible)
-    #[default]
     Portal,
 
     /// wlroots screencopy protocol (direct, low-latency)
@@ -135,6 +139,12 @@ pub enum CaptureBackend {
 
     /// ext-image-copy-capture (modern standard)
     ExtImageCopyCapture,
+}
+
+impl Default for CaptureBackend {
+    fn default() -> Self {
+        Self::Portal
+    }
 }
 
 /// Complete compositor capabilities
@@ -251,34 +261,44 @@ impl CompositorCapabilities {
 
     /// Log a summary of detected capabilities
     pub fn log_summary(&self) {
-        use tracing::debug;
+        use tracing::info;
 
-        debug!("Compositor capabilities detected:");
-        debug!(
-            "  Compositor: {} ({})",
-            self.compositor,
+        info!("╔════════════════════════════════════════════════════════════╗");
+        info!("║          Compositor Capabilities Detected                  ║");
+        info!("╚════════════════════════════════════════════════════════════╝");
+        info!("  Compositor: {}", self.compositor);
+        info!(
+            "  Type: {}",
             if self.compositor.is_wlroots_based() {
                 "wlroots-based"
             } else {
                 "native"
             }
         );
-        debug!("  Portal version: {}", self.portal.version);
-        debug!(
+        info!("  Portal version: {}", self.portal.version);
+        info!(
             "  Portal features: ScreenCast={}, RemoteDesktop={}, Clipboard={}",
             self.portal.supports_screencast,
             self.portal.supports_remote_desktop,
             self.portal.supports_clipboard
         );
-        debug!("  Cursor modes: {:?}", self.portal.available_cursor_modes);
-        debug!(
-            "  Recommended: capture={:?}, buffer={:?}",
-            self.profile.recommended_capture, self.profile.recommended_buffer_type
+        info!("  Cursor modes: {:?}", self.portal.available_cursor_modes);
+        info!(
+            "  Recommended capture: {:?}",
+            self.profile.recommended_capture
+        );
+        info!(
+            "  Recommended buffer: {:?}",
+            self.profile.recommended_buffer_type
         );
 
         if !self.profile.quirks.is_empty() {
-            debug!("  Quirks: {:?}", self.profile.quirks);
+            info!("  Quirks to apply:");
+            for quirk in &self.profile.quirks {
+                info!("    - {:?}", quirk);
+            }
         }
+        info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     }
 }
 

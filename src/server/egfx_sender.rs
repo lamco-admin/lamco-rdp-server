@@ -40,7 +40,7 @@ use crate::damage::DamageRegion;
 use crate::server::gfx_factory::HandlerState;
 
 /// Result type for frame sending operations
-pub(super) type SendResult<T> = Result<T, SendError>;
+pub type SendResult<T> = Result<T, SendError>;
 
 /// Errors that can occur when sending frames
 #[derive(Debug)]
@@ -448,8 +448,8 @@ impl EgfxFrameSender {
         &self,
         stream1_data: &[u8],
         stream2_data: &[u8],
-        _encoded_width: u16,
-        _encoded_height: u16,
+        encoded_width: u16,
+        encoded_height: u16,
         display_width: u16,
         display_height: u16,
         timestamp_ms: u32,
@@ -593,8 +593,8 @@ impl EgfxFrameSender {
     pub async fn send_frame_with_regions(
         &self,
         h264_data: &[u8],
-        _encoded_width: u16,
-        _encoded_height: u16,
+        encoded_width: u16,
+        encoded_height: u16,
         display_width: u16,
         display_height: u16,
         damage_regions: &[DamageRegion],
@@ -690,8 +690,8 @@ impl EgfxFrameSender {
         &self,
         stream1_data: &[u8],
         stream2_data: Option<&[u8]>, // Now optional!
-        _encoded_width: u16,
-        _encoded_height: u16,
+        encoded_width: u16,
+        encoded_height: u16,
         display_width: u16,
         display_height: u16,
         damage_regions: &[DamageRegion],

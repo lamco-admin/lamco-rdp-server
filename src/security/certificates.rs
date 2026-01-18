@@ -17,15 +17,12 @@ impl CertificateGenerator {
     pub fn generate_self_signed(common_name: &str, validity_days: u32) -> Result<(String, String)> {
         info!("Generating self-signed certificate for '{}'", common_name);
 
-        // Create certificate parameters
         let mut params = CertificateParams::default();
 
-        // Set subject
         let mut distinguished_name = DistinguishedName::new();
         distinguished_name.push(DnType::CommonName, common_name);
         params.distinguished_name = distinguished_name;
 
-        // Set validity period
         params.not_before = time::OffsetDateTime::now_utc();
         params.not_after =
             time::OffsetDateTime::now_utc() + time::Duration::days(validity_days as i64);
@@ -58,7 +55,6 @@ impl CertificateGenerator {
     ) -> Result<()> {
         info!("Generating and saving certificate to {:?}", cert_path);
 
-        // Check if files already exist
         if cert_path.exists() || key_path.exists() {
             warn!("Certificate or key file already exists, will overwrite");
         }
@@ -66,7 +62,6 @@ impl CertificateGenerator {
         // Generate certificate
         let (cert_pem, key_pem) = Self::generate_self_signed(common_name, validity_days)?;
 
-        // Create parent directories if needed
         if let Some(parent) = cert_path.parent() {
             fs::create_dir_all(parent).context("Failed to create certificate directory")?;
         }
@@ -80,7 +75,7 @@ impl CertificateGenerator {
         // Write private key (with restricted permissions)
         fs::write(key_path, key_pem.as_bytes()).context("Failed to write private key")?;
 
-        // Set permissions on private key (Unix only)
+        // Unix: Restrict key to owner-only (mode 600)
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;

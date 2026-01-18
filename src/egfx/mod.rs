@@ -13,7 +13,7 @@
 //!                              └───────────────────────────────────────┘
 //!                                              │
 //!                                              ▼
-//!                                    WrdGraphicsHandler
+//!                                    LamcoGraphicsHandler
 //!                                    (capability negotiation + callbacks)
 //!                                              │
 //!                                              │ send_avc420/444_frame()
@@ -58,7 +58,8 @@ mod video_handler;
 
 // Re-export our encoder types (clean API - no IronRDP types)
 pub use encoder::{
-    align_to_16, Avc420Encoder, EncoderConfig, EncoderError, EncoderResult, EncoderStats, H264Frame,
+    align_to_16, annex_b_to_avc, Avc420Encoder, EncoderConfig, EncoderError, EncoderResult,
+    EncoderStats, H264Frame,
 };
 
 // Re-export AVC444 encoder types
@@ -81,9 +82,9 @@ pub use yuv444_packing::{
 pub use h264_level::{ConstraintViolation, H264Level, LevelConstraints};
 
 // Re-export our handler implementation
-// Note: WrdGraphicsHandler implements ironrdp_egfx::GraphicsPipelineHandler internally
+// Note: LamcoGraphicsHandler implements ironrdp_egfx::GraphicsPipelineHandler internally
 // but that trait is not part of our public API
-pub use handler::{SharedGraphicsHandler, WrdGraphicsHandler};
+pub use handler::{LamcoGraphicsHandler, SharedGraphicsHandler};
 
 // Re-export video handler types (clean API - no IronRDP types)
 pub use video_handler::{EgfxVideoConfig, EgfxVideoHandler, EncodedFrame, EncodingStats};
