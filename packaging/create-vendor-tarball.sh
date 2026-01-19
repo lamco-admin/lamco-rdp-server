@@ -79,6 +79,16 @@ git = "https://github.com/glamberson/IronRDP"
 branch = "master"
 replace-with = "vendored-sources"
 
+[source."git+https://github.com/lamco-admin/openh264-rs?branch=lamco-lower-msrv"]
+git = "https://github.com/lamco-admin/openh264-rs"
+branch = "lamco-lower-msrv"
+replace-with = "vendored-sources"
+
+[source."git+https://github.com/etemesi254/zune-image?branch=main"]
+git = "https://github.com/etemesi254/zune-image"
+branch = "main"
+replace-with = "vendored-sources"
+
 [source.vendored-sources]
 directory = "vendor"
 EOF

@@ -1,18 +1,22 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<component type="console-application">
+<component type="desktop-application">
   <id>io.lamco.rdp-server</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>LicenseRef-proprietary=https://mariadb.com/bsl11/</project_license>
 
-  <name>lamco RDP Server</name>
-  <summary>Remote access to your Linux desktop via RDP</summary>
+  <name>Lamco RDP Server</name>
+  <summary>Remote desktop server with graphical configuration</summary>
 
   <description>
     <p>
-      lamco RDP Server provides remote access to your existing Linux desktop session
+      Lamco RDP Server provides remote access to your existing Linux desktop session
       via the industry-standard Remote Desktop Protocol (RDP). Built specifically for
       Wayland compositors, it delivers hardware-accelerated H.264 video encoding,
       full keyboard and mouse support, and clipboard synchronization.
+    </p>
+    <p>
+      Includes a full-featured graphical configuration interface for easy setup
+      and management of all server settings, TLS certificates, and live monitoring.
     </p>
     <p>
       Perfect for remote work, system administration, or accessing your Linux desktop
@@ -21,15 +25,27 @@
     </p>
     <p>
       <strong>Licensing:</strong> Free for personal use, non-profits, and small businesses
-      (≤3 employees OR &lt;$1M revenue). Commercial use requires license from office@lamco.io.
+      (3 or fewer employees OR less than $1M revenue). Commercial use requires license from office@lamco.io.
       Business Source License converts to Apache-2.0 on December 31, 2028.
-    </p>
-    <p>
-      Visit https://lamco.ai for licensing details and commercial options.
     </p>
   </description>
 
   <launchable type="desktop-id">io.lamco.rdp-server.desktop</launchable>
+
+  <screenshots>
+    <screenshot type="default">
+      <caption>Server configuration with dark theme</caption>
+      <image>https://lamco.ai/assets/screenshots/lamco-rdp-server-gui-server.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Security and TLS certificate settings</caption>
+      <image>https://lamco.ai/assets/screenshots/lamco-rdp-server-gui-security.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Video encoding and performance options</caption>
+      <image>https://lamco.ai/assets/screenshots/lamco-rdp-server-gui-video.png</image>
+    </screenshot>
+  </screenshots>
 
   <url type="homepage">https://lamco.ai/products/lamco-rdp-server/</url>
   <url type="bugtracker">https://github.com/lamco-admin/lamco-rdp-server/issues</url>
@@ -39,9 +55,26 @@
 
   <provides>
     <binary>lamco-rdp-server</binary>
+    <binary>lamco-rdp-server-gui</binary>
   </provides>
 
   <releases>
+    <release version="1.0.0" date="2026-01-19">
+      <description>
+        <p>Major release with full-featured configuration GUI.</p>
+        <ul>
+          <li>10-tab graphical interface for all configuration options</li>
+          <li>Professional dark theme with Lamco branding</li>
+          <li>Server process management (start/stop/restart)</li>
+          <li>TLS certificate generation wizard</li>
+          <li>Live log viewer with filtering</li>
+          <li>Real-time configuration validation</li>
+          <li>Import/Export configuration files</li>
+          <li>Hardware detection and capability display</li>
+        </ul>
+      </description>
+      <url>https://github.com/lamco-admin/lamco-rdp-server/releases/tag/v1.0.0</url>
+    </release>
     <release version="0.9.0" date="2026-01-18">
       <description>
         <p>Initial public release with core remote desktop functionality.</p>
@@ -75,6 +108,7 @@
   <categories>
     <category>Network</category>
     <category>RemoteAccess</category>
+    <category>Settings</category>
   </categories>
 
   <keywords>
@@ -83,5 +117,6 @@
     <keyword>wayland</keyword>
     <keyword>screen sharing</keyword>
     <keyword>server</keyword>
+    <keyword>configuration</keyword>
   </keywords>
 </component>
