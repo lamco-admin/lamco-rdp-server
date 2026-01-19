@@ -1,6 +1,6 @@
 [package]
 name = "lamco-rdp-server"
-version = "0.9.0"
+version = "1.0.0"
 edition = "2021"
 rust-version = "1.77"
 authors = ["Lamco <contact@lamco.ai>"]
@@ -14,6 +14,11 @@ categories = ["network-programming", "multimedia"]
 [[bin]]
 name = "lamco-rdp-server"
 path = "src/main.rs"
+
+[[bin]]
+name = "lamco-rdp-server-gui"
+path = "src/gui/main.rs"
+required-features = ["gui"]
 
 [lib]
 name = "lamco_rdp_server"
@@ -195,6 +200,12 @@ time = { version = "0.3", features = ["formatting", "macros"] }
 # -----------------------------------------------------------------------------
 pam = { version = "0.7", optional = true }
 
+# -----------------------------------------------------------------------------
+# GUI (optional)
+# -----------------------------------------------------------------------------
+iced = { version = "0.14", optional = true, features = ["tokio", "advanced", "lazy"] }
+rfd = { version = "0.15", optional = true, default-features = false, features = ["xdg-portal", "tokio"] }
+
 # =============================================================================
 # Dev Dependencies
 # =============================================================================
@@ -211,6 +222,10 @@ proptest = "1.4"
 
 [features]
 default = ["pam-auth", "h264"]
+
+# GUI for configuration (optional, adds ~40MB to binary)
+gui = ["iced", "rfd"]
+
 wayland = ["wayland-client", "wayland-protocols", "wayland-protocols-misc", "wayland-protocols-wlr"]
 libei = ["reis"]
 pam-auth = ["pam"]
@@ -312,6 +327,15 @@ cast_possible_wrap = "allow"
 # =============================================================================
 
 [patch.crates-io]
+# openh264-rs from lamco-admin fork - MSRV lowered from 1.88 to 1.77 for OBS compatibility
+# Upstream uses edition 2024 (requires Rust 1.88), we use edition 2021
+openh264 = { git = "https://github.com/lamco-admin/openh264-rs", branch = "lamco-lower-msrv" }
+openh264-sys2 = { git = "https://github.com/lamco-admin/openh264-rs", branch = "lamco-lower-msrv" }
+
+# zune-jpeg from GitHub main - MSRV fix merged but not released to crates.io yet
+# Crates.io 0.5.8 requires Rust 1.87, GitHub main has MSRV 1.75 (commit 2841ef7)
+zune-jpeg = { git = "https://github.com/etemesi254/zune-image", branch = "main" }
+
 # IronRDP from lamco-admin fork - EGFX + clipboard file transfer
 # PRs pending upstream: #1057 (EGFX), #1063-1066 (clipboard)
 # All crates patched to same source to avoid trait conflicts

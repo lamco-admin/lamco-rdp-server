@@ -5,6 +5,58 @@ All notable changes to lamco-rdp-server will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0] - 2026-01-19
+
+### Added
+
+**Full-Featured Configuration GUI**
+- Professional dark theme with Lamco branding
+- 10-tab interface covering all 85+ configuration parameters:
+  - Server: Listen address, connections, timeouts, XDG portals
+  - Security: TLS certificates, authentication, NLA
+  - Video: Codec selection, FPS, quality, latency modes
+  - Input: Keyboard layout, mouse behavior, touch support
+  - Clipboard: Synchronization, rate limiting, MIME filtering
+  - Logging: Log levels, output destinations, rotation
+  - Performance: Buffer sizes, threading, damage detection
+  - EGFX: H.264 encoding, IDR keyframes, chroma subsampling
+  - Advanced: Service registry, experimental features
+  - Status: Server control, live logs, system info
+- TLS certificate generation wizard
+- Server process management (start/stop/restart from GUI)
+- Live log viewer with filtering
+- Real-time configuration validation
+- Import/Export configuration files
+- Hardware detection and capability display
+
+**GUI Framework**
+- Built with iced 0.14 (pure Rust, cross-platform)
+- Optional feature (`--features gui`) - server works without GUI
+- Separate binary: `lamco-rdp-server-gui`
+- Professional enterprise aesthetic (dark theme like Grafana/DataDog)
+
+### Changed
+
+- Version bump to 1.0.0 (stable release)
+
+### Upgrade Notes
+
+To run the GUI:
+```bash
+# Build with GUI feature
+cargo build --release --features gui
+
+# Run GUI
+./target/release/lamco-rdp-server-gui
+```
+
+Or via Flatpak (when available):
+```bash
+flatpak run io.lamco.rdp-server-gui
+```
+
+---
+
 ## [0.9.0] - 2026-01-18
 
 ### Added
@@ -138,6 +190,5 @@ lamco-rdp-server follows Semantic Versioning (semver):
 - MINOR version for backwards-compatible functionality additions
 - PATCH version for backwards-compatible bug fixes
 
-**Current:** v0.9.0 (pre-release, production-ready)
-**Next:** v1.0.0 (stable release after field validation)
-**Future:** v1.1.0+ (planned feature additions)
+**Current:** v1.0.0 (stable release with GUI)
+**Next:** v1.1.0+ (planned feature additions)

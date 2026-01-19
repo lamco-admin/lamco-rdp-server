@@ -190,6 +190,13 @@ pub mod session;
 /// See: docs/architecture/SESSION-PERSISTENCE-ARCHITECTURE.md (Phase 3)
 pub mod mutter;
 
+/// GUI configuration application (optional)
+///
+/// Provides a graphical interface for configuring the RDP server.
+/// Requires the `gui` feature to be enabled.
+#[cfg(feature = "gui")]
+pub mod gui;
+
 // =============================================================================
 // Re-exports from published lamco crates (for convenience)
 // =============================================================================
