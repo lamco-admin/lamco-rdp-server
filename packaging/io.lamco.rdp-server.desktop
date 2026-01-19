@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=lamco RDP Server
+GenericName=Remote Desktop Server
+Comment=Remote access to your Linux desktop via RDP
+Icon=io.lamco.rdp-server
+Exec=lamco-rdp-server --help
+Terminal=true
+Categories=Network;RemoteAccess;System;
+Keywords=rdp;remote;desktop;server;wayland;screenshare;
+StartupNotify=false

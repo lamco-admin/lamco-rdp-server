@@ -70,6 +70,20 @@ modules:
       # wayland feature excluded (wlr-direct requires direct Wayland socket, blocked by Flatpak sandbox)
       - cargo --offline build --release --no-default-features --features "h264,libei"
       - install -Dm755 target/release/lamco-rdp-server /app/bin/lamco-rdp-server
+
+      # Install MetaInfo
+      - install -Dm644 packaging/io.lamco.rdp-server.metainfo.xml /app/share/metainfo/io.lamco.rdp-server.metainfo.xml
+
+      # Install desktop file
+      - install -Dm644 packaging/io.lamco.rdp-server.desktop /app/share/applications/io.lamco.rdp-server.desktop
+
+      # Install icons
+      - install -Dm644 packaging/icons/io.lamco.rdp-server.svg /app/share/icons/hicolor/scalable/apps/io.lamco.rdp-server.svg
+      - install -Dm644 packaging/icons/io.lamco.rdp-server-256.png /app/share/icons/hicolor/256x256/apps/io.lamco.rdp-server.png
+      - install -Dm644 packaging/icons/io.lamco.rdp-server-128.png /app/share/icons/hicolor/128x128/apps/io.lamco.rdp-server.png
+      - install -Dm644 packaging/icons/io.lamco.rdp-server-64.png /app/share/icons/hicolor/64x64/apps/io.lamco.rdp-server.png
+      - install -Dm644 packaging/icons/io.lamco.rdp-server-48.png /app/share/icons/hicolor/48x48/apps/io.lamco.rdp-server.png
+      - install -Dm644 packaging/icons/io.lamco.rdp-server-32.png /app/share/icons/hicolor/32x32/apps/io.lamco.rdp-server.png
     sources:
       - type: archive
         path: lamco-rdp-server-0.9.0.tar.xz
