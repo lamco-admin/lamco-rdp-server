@@ -469,6 +469,43 @@ impl ConfigGuiApp {
             }
 
             // =================================================================
+            // Audio Configuration
+            // =================================================================
+            Message::AudioEnabledToggled(val) => {
+                self.state.config.audio.enabled = val;
+                self.state.mark_dirty();
+                Task::none()
+            }
+            Message::AudioCodecChanged(codec) => {
+                self.state.config.audio.codec = codec;
+                self.state.mark_dirty();
+                Task::none()
+            }
+            Message::AudioSampleRateChanged(rate) => {
+                self.state.config.audio.sample_rate = rate;
+                self.state.mark_dirty();
+                Task::none()
+            }
+            Message::AudioChannelsChanged(channels) => {
+                self.state.config.audio.channels = channels;
+                self.state.mark_dirty();
+                Task::none()
+            }
+            Message::AudioFrameMsChanged(ms) => {
+                self.state.config.audio.frame_ms = ms;
+                self.state.mark_dirty();
+                Task::none()
+            }
+            Message::AudioOpusBitrateChanged(val) => {
+                self.state.edit_strings.audio_opus_bitrate = val.clone();
+                if let Ok(kbps) = val.parse::<u32>() {
+                    self.state.config.audio.opus_bitrate = kbps * 1000; // Convert kbps to bps
+                    self.state.mark_dirty();
+                }
+                Task::none()
+            }
+
+            // =================================================================
             // Multi-Monitor Configuration
             // =================================================================
             Message::MultimonEnabledToggled(val) => {
@@ -1597,6 +1634,7 @@ impl ConfigGuiApp {
             Tab::Server => tabs::view_server_tab(&self.state),
             Tab::Security => tabs::view_security_tab(&self.state),
             Tab::Video => tabs::view_video_tab(&self.state),
+            Tab::Audio => tabs::view_audio_tab(&self.state),
             Tab::Input => tabs::view_input_tab(&self.state),
             Tab::Clipboard => tabs::view_clipboard_tab(&self.state),
             Tab::Logging => tabs::view_logging_tab(&self.state),

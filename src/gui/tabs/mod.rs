@@ -4,6 +4,7 @@
 //! only the domain-specific arrangement of controls.
 
 mod advanced;
+mod audio;
 mod clipboard;
 mod egfx;
 mod input;
@@ -15,6 +16,7 @@ mod status;
 mod video;
 
 pub use advanced::*;
+pub use audio::*;
 pub use clipboard::*;
 pub use egfx::*;
 pub use input::*;
