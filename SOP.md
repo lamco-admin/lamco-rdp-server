@@ -128,6 +128,41 @@ git push origin main
 
 ---
 
+## ⚠️ CRITICAL: Approval Gates
+
+**NO WRITES TO PUBLIC REPOSITORIES WITHOUT EXPLICIT HUMAN APPROVAL**
+
+### Mandatory Gates
+
+| Gate | Script | What It Does |
+|------|--------|--------------|
+| GATE-PUB | `export-to-public.sh` | Push source to public repo |
+| GATE-REL | `github-release.sh` | Create GitHub release |
+| GATE-OBS | `trigger-obs.sh` | Submit to OBS |
+| GATE-HUB | Manual only | Flathub PR |
+
+### Enforcement
+
+All publish scripts will:
+1. **Block** if no test results exist
+2. **Show** pre-publish checklist
+3. **Require** typing "yes" (not just Enter)
+4. **Log** approval to `staging/v{VERSION}/approval.log`
+
+### Pre-Publish Checklist
+
+```
+□ All tests passed (test-results/ reviewed)
+□ Test report manually reviewed by human
+□ Version number correct in Cargo.toml
+□ CHANGELOG updated with release notes
+□ No secrets/credentials in staged files
+□ SHA256 checksums generated and verified
+□ Human explicitly types "yes" to approve
+```
+
+---
+
 ## Release Process
 
 ### Quick Release
