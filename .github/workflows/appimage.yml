@@ -6,12 +6,12 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to build (e.g., 0.9.1)'
+        description: 'Version to build (e.g., 1.2.0)'
         required: false
 
 jobs:
   build-appimage:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout code
@@ -25,7 +25,7 @@ jobs:
           elif [ -n "${{ github.event.inputs.version }}" ]; then
             echo "VERSION=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
           else
-            echo "VERSION=$(grep '^version' Cargo.toml | head -1 | cut -d'"' -f2)" >> $GITHUB_OUTPUT
+            echo "VERSION=$(grep '^version' Cargo.toml | head -1 | cut -d'\"' -f2)" >> $GITHUB_OUTPUT
           fi
 
       - name: Install Rust
@@ -39,16 +39,20 @@ jobs:
           sudo apt-get install -y \
             libssl-dev \
             libpipewire-0.3-dev \
+            libspa-0.2-dev \
             libdbus-1-dev \
             libpam0g-dev \
             libfuse3-dev \
             libxkbcommon-dev \
+            libgtk-4-dev \
+            libadwaita-1-dev \
+            libclang-dev \
             pkg-config \
             nasm
 
       - name: Build binary
         run: |
-          cargo build --release --no-default-features --features "h264,libei"
+          cargo build --release --no-default-features --features "h264,libei,gui"
 
       - name: Prepare AppDir
         run: |
@@ -61,8 +65,9 @@ jobs:
           mkdir -p AppDir/usr/share/icons/hicolor/48x48/apps
           mkdir -p AppDir/usr/share/icons/hicolor/32x32/apps
 
-          # Copy binary
+          # Copy binaries
           cp target/release/lamco-rdp-server AppDir/usr/bin/
+          cp target/release/lamco-rdp-server-gui AppDir/usr/bin/ || true
 
           # Copy desktop file
           cp packaging/io.lamco.rdp-server.desktop AppDir/usr/share/applications/
