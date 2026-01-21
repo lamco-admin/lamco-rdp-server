@@ -65,6 +65,13 @@ pub struct Args {
     #[arg(long)]
     pub show_capabilities: bool,
 
+    /// Output format for --show-capabilities (text|json)
+    ///
+    /// Default is human-readable text. Use json for machine parsing,
+    /// especially for integration with the GUI.
+    #[arg(long, default_value = "text")]
+    pub format: String,
+
     /// Run diagnostics and exit
     ///
     /// Tests deployment detection, portal connection, credential storage,
@@ -102,7 +109,7 @@ async fn main() -> Result<()> {
     info!("════════════════════════════════════════════════════════");
 
     if args.show_capabilities {
-        return show_capabilities().await;
+        return show_capabilities(&args.format).await;
     }
 
     if args.persistence_status {
@@ -156,12 +163,7 @@ async fn main() -> Result<()> {
 }
 
 /// Show detected capabilities
-async fn show_capabilities() -> Result<()> {
-    println!("╔════════════════════════════════════════════════════════╗");
-    println!("║         Capability Detection Report                    ║");
-    println!("╚════════════════════════════════════════════════════════╝");
-    println!();
-
+async fn show_capabilities(format: &str) -> Result<()> {
     // Probe capabilities
     let caps = lamco_rdp_server::compositor::probe_capabilities()
         .await
@@ -169,6 +171,218 @@ async fn show_capabilities() -> Result<()> {
             eprintln!("Failed to probe capabilities: {}", e);
             std::process::exit(1);
         });
+
+    // Deployment and credential storage
+    let deployment = lamco_rdp_server::session::detect_deployment_context();
+    let (storage_method, encryption, accessible) =
+        lamco_rdp_server::session::detect_credential_storage(&deployment).await;
+
+    // OS release info
+    let os_release = lamco_rdp_server::compositor::detect_os_release();
+
+    // Kernel version
+    let kernel_version = std::fs::read_to_string("/proc/version")
+        .ok()
+        .and_then(|v| v.split_whitespace().nth(2).map(String::from))
+        .unwrap_or_else(|| "unknown".to_string());
+
+    if format == "json" {
+        output_capabilities_json(
+            &caps,
+            &deployment,
+            &storage_method,
+            &encryption,
+            accessible,
+            &os_release,
+            &kernel_version,
+        );
+    } else {
+        output_capabilities_text(&caps, &deployment, &storage_method, &encryption, accessible);
+    }
+
+    Ok(())
+}
+
+/// Output capabilities in JSON format for GUI integration
+fn output_capabilities_json(
+    caps: &lamco_rdp_server::compositor::CompositorCapabilities,
+    deployment: &lamco_rdp_server::session::DeploymentContext,
+    storage_method: &lamco_rdp_server::session::CredentialStorageMethod,
+    _encryption: &lamco_rdp_server::session::EncryptionType,
+    accessible: bool,
+    os_release: &Option<lamco_rdp_server::compositor::OsRelease>,
+    kernel_version: &str,
+) {
+    use serde_json::json;
+
+    // Distribution string
+    let distribution = os_release
+        .as_ref()
+        .map(|os| format!("{} {}", os.pretty_name, os.version_id))
+        .unwrap_or_else(|| "Unknown".to_string());
+
+    // Build services array based on capabilities
+    let mut services = Vec::new();
+
+    // Screen capture service
+    services.push(json!({
+        "id": "screen_capture",
+        "name": "Screen Capture",
+        "level": if caps.portal.supports_screencast { "guaranteed" } else { "unavailable" },
+        "wayland_source": format!("ScreenCast Portal v{}", caps.portal.version),
+        "rdp_capability": "MS-RDPEGFX",
+        "notes": []
+    }));
+
+    // Keyboard input
+    services.push(json!({
+        "id": "keyboard_input",
+        "name": "Keyboard Input",
+        "level": if caps.portal.supports_remote_desktop { "guaranteed" } else { "unavailable" },
+        "wayland_source": format!("RemoteDesktop Portal v{}", caps.portal.version),
+        "rdp_capability": "Input PDUs",
+        "notes": []
+    }));
+
+    // Pointer input
+    services.push(json!({
+        "id": "pointer_input",
+        "name": "Pointer Input",
+        "level": if caps.portal.supports_remote_desktop { "guaranteed" } else { "unavailable" },
+        "wayland_source": format!("RemoteDesktop Portal v{}", caps.portal.version),
+        "rdp_capability": "Input PDUs",
+        "notes": []
+    }));
+
+    // Clipboard
+    let clipboard_level = if caps.portal.supports_clipboard {
+        "best_effort"
+    } else {
+        "unavailable"
+    };
+    services.push(json!({
+        "id": "clipboard",
+        "name": "Clipboard Sync",
+        "level": clipboard_level,
+        "wayland_source": if caps.portal.supports_clipboard { Some("Portal Clipboard") } else { None::<&str> },
+        "rdp_capability": "CLIPRDR",
+        "notes": if caps.portal.version < 46 { vec!["File transfer requires Portal v46+"] } else { vec![] }
+    }));
+
+    // Audio (not yet implemented)
+    services.push(json!({
+        "id": "audio",
+        "name": "Audio Playback",
+        "level": "unavailable",
+        "wayland_source": null,
+        "rdp_capability": "RDPSND",
+        "notes": ["Not yet implemented"]
+    }));
+
+    // Count service levels
+    let guaranteed = services
+        .iter()
+        .filter(|s| s["level"] == "guaranteed")
+        .count();
+    let best_effort = services
+        .iter()
+        .filter(|s| s["level"] == "best_effort")
+        .count();
+    let degraded = services.iter().filter(|s| s["level"] == "degraded").count();
+    let unavailable = services
+        .iter()
+        .filter(|s| s["level"] == "unavailable")
+        .count();
+
+    // Build quirks array
+    let quirks: Vec<serde_json::Value> = caps
+        .profile
+        .quirks
+        .iter()
+        .map(|q| {
+            json!({
+                "id": format!("{:?}", q),
+                "description": q.description(),
+                "impact": "workaround"
+            })
+        })
+        .collect();
+
+    // Determine recommended codec based on capture method
+    // Portal capture with DmaBuf support indicates EGFX capability
+    let recommended_codec = if matches!(
+        caps.profile.recommended_buffer_type,
+        lamco_rdp_server::compositor::BufferType::DmaBuf
+    ) {
+        Some("avc420")
+    } else {
+        Some("bitmap")
+    };
+
+    // Deployment context string
+    let (deployment_str, linger) = match deployment {
+        lamco_rdp_server::session::DeploymentContext::Native => ("native", None),
+        lamco_rdp_server::session::DeploymentContext::Flatpak => ("flatpak", None),
+        lamco_rdp_server::session::DeploymentContext::SystemdUser { linger_enabled } => {
+            ("systemd-user", Some(*linger_enabled))
+        }
+        lamco_rdp_server::session::DeploymentContext::SystemdSystem => ("systemd-system", None),
+        lamco_rdp_server::session::DeploymentContext::InitD => ("initd", None),
+    };
+
+    let json = json!({
+        "system": {
+            "compositor": caps.compositor.to_string(),
+            "compositor_version": caps.compositor.version(),
+            "distribution": distribution,
+            "kernel": kernel_version
+        },
+        "portals": {
+            "version": caps.portal.version,
+            "backend": caps.portal.backend,
+            "screencast_version": caps.portal.version,
+            "remote_desktop_version": caps.portal.version,
+            "secret_version": if accessible { Some(1u32) } else { None::<u32> }
+        },
+        "deployment": {
+            "context": deployment_str,
+            "xdg_runtime_dir": std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/run/user/1000".to_string()),
+            "linger": linger
+        },
+        "persistence": {
+            "strategy": format!("{}", storage_method),
+            "notes": if accessible { vec!["Credential storage accessible"] } else { vec!["Credential storage locked or unavailable"] }
+        },
+        "quirks": quirks,
+        "services": services,
+        "summary": {
+            "guaranteed": guaranteed,
+            "best_effort": best_effort,
+            "degraded": degraded,
+            "unavailable": unavailable
+        },
+        "hints": {
+            "recommended_fps": 30,
+            "recommended_codec": recommended_codec,
+            "zero_copy": matches!(caps.profile.recommended_buffer_type, lamco_rdp_server::compositor::BufferType::DmaBuf)
+        }
+    });
+
+    println!("{}", serde_json::to_string_pretty(&json).unwrap());
+}
+
+/// Output capabilities in human-readable text format
+fn output_capabilities_text(
+    caps: &lamco_rdp_server::compositor::CompositorCapabilities,
+    deployment: &lamco_rdp_server::session::DeploymentContext,
+    storage_method: &lamco_rdp_server::session::CredentialStorageMethod,
+    encryption: &lamco_rdp_server::session::EncryptionType,
+    accessible: bool,
+) {
+    println!("╔════════════════════════════════════════════════════════╗");
+    println!("║         Capability Detection Report                    ║");
+    println!("╚════════════════════════════════════════════════════════╝");
+    println!();
 
     println!("Compositor: {}", caps.compositor);
     println!(
@@ -212,20 +426,13 @@ async fn show_capabilities() -> Result<()> {
     );
     println!();
 
-    // Deployment detection
-    let deployment = lamco_rdp_server::session::detect_deployment_context();
     println!("Deployment: {}", deployment);
     println!();
 
-    // Credential storage
-    let (storage_method, encryption, accessible) =
-        lamco_rdp_server::session::detect_credential_storage(&deployment).await;
     println!("Credential Storage: {}", storage_method);
     println!("  Encryption: {}", encryption);
     println!("  Accessible: {}", if accessible { "✅" } else { "❌" });
     println!();
-
-    Ok(())
 }
 
 /// Show session persistence status

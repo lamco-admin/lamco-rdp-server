@@ -1,0 +1,27 @@
+--- src/server/mod.rs
++++ src/server/mod.rs
+@@ -300,19 +300,10 @@
+             }
+         };
+ 
+-        // Create Portal manager for input+clipboard (needed for both strategies)
+-        let mut portal_config = config.to_portal_config();
+-        portal_config.persist_mode = ashpd::desktop::PersistMode::DoNot;  // Don't persist (causes errors)
+-        portal_config.restore_token = None;
+-
+-        let portal_manager = Arc::new(
+-            PortalManager::new(portal_config)
+-                .await
+-                .context("Failed to create Portal manager for input+clipboard")?,
+-        );
+-
+-        // Get clipboard components from session handle, or create fallback Portal session
+-        // HYBRID STRATEGY: For Mutter, we also use Portal session for input (Mutter input broken on GNOME 46)
+-        let (portal_clipboard_manager, portal_clipboard_session, portal_input_handle) = if let Some(clipboard) = session_handle.portal_clipboard() {
++        // Portal: use session directly. Mutter: create Portal for input
++        let (portal_clipboard_manager, portal_clipboard_session, portal_input_handle) =
++            if session_handle.session_type() == SessionType::Portal {
++            // Portal: use session_handle directly
+             // Portal strategy: Clipboard shares the same session (zero extra dialogs)
+             info!("Using Portal clipboard from strategy (shared session)");
++

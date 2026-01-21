@@ -4,8 +4,7 @@
 //! Used for input injection (keyboard, mouse) without portal permissions.
 
 use anyhow::{Context, Result};
-use std::collections::HashMap;
-use zbus::zvariant::{ObjectPath, OwnedObjectPath, Value};
+use zbus::zvariant::{ObjectPath, OwnedObjectPath};
 use zbus::Connection;
 
 /// Main RemoteDesktop interface proxy

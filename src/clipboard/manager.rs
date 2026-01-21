@@ -21,7 +21,7 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::{mpsc, Mutex, RwLock};
+use tokio::sync::{mpsc, RwLock};
 use tracing::{debug, error, info, trace, warn};
 
 // Import from lamco crates

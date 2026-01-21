@@ -79,6 +79,18 @@ impl ColorMatrix {
         matches!(self, Self::OpenH264)
     }
 
+    /// Get luma coefficients as floating point (Kr, Kg, Kb)
+    /// These are used for Y = Kr*R + Kg*G + Kb*B conversion
+    #[inline]
+    pub const fn luma_coefficients(&self) -> (f32, f32, f32) {
+        match self {
+            Self::BT601 => (0.299, 0.587, 0.114),
+            Self::BT709 => (0.2126, 0.7152, 0.0722),
+            // OpenH264 uses BT.601 coefficients but with limited range offset
+            Self::OpenH264 => (0.299, 0.587, 0.114),
+        }
+    }
+
     /// Get RGB to U (Cb) coefficients as fixed-point (16.16 format)
     /// Formula: U = -0.5*Kr/(1-Kb)*R - 0.5*Kg/(1-Kb)*G + 0.5*B + 128
     #[inline]

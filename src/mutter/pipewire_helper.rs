@@ -8,9 +8,9 @@
 //! both FD-based (portal) and socket-based (direct) connections. This helper
 //! allows us to use Mutter without modifying lamco-pipewire's architecture.
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use std::os::fd::{AsRawFd, RawFd};
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 /// Connect to PipeWire's default socket and return an FD
 ///

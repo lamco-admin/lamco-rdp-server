@@ -152,9 +152,9 @@ impl ServerProcess {
     pub fn is_running(&self) -> bool {
         // Try to get exit status without blocking
         match self.try_wait() {
-            Ok(None) => true,  // Still running
-            Ok(Some(_)) => false,  // Exited
-            Err(_) => false,  // Error checking = assume not running
+            Ok(None) => true,     // Still running
+            Ok(Some(_)) => false, // Exited
+            Err(_) => false,      // Error checking = assume not running
         }
     }
 
@@ -163,7 +163,11 @@ impl ServerProcess {
         // We need mutable access, but the child is owned by self
         // Use unsafe to work around this (the check is read-only)
         let child_ptr = &self.child as *const Child as *mut Child;
-        unsafe { (*child_ptr).try_wait().context("Failed to check process status") }
+        unsafe {
+            (*child_ptr)
+                .try_wait()
+                .context("Failed to check process status")
+        }
     }
 
     /// Stop the server gracefully
@@ -288,19 +292,15 @@ fn find_server_binary() -> Result<PathBuf> {
 
 /// Write configuration to a temporary file
 fn write_temp_config(config: &crate::config::Config) -> Result<PathBuf> {
-    let runtime_dir = std::env::var("XDG_RUNTIME_DIR")
-        .unwrap_or_else(|_| "/tmp".to_string());
+    let runtime_dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".to_string());
 
-    let config_path = PathBuf::from(runtime_dir).join(format!(
-        "lamco-rdp-server-gui-{}.toml",
-        std::process::id()
-    ));
+    let config_path = PathBuf::from(runtime_dir)
+        .join(format!("lamco-rdp-server-gui-{}.toml", std::process::id()));
 
-    let toml_string = toml::to_string_pretty(config)
-        .context("Failed to serialize config to TOML")?;
+    let toml_string =
+        toml::to_string_pretty(config).context("Failed to serialize config to TOML")?;
 
-    std::fs::write(&config_path, toml_string)
-        .context("Failed to write temp config file")?;
+    std::fs::write(&config_path, toml_string).context("Failed to write temp config file")?;
 
     Ok(config_path)
 }

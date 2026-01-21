@@ -4,9 +4,9 @@
 //! Credentials are bound to the TPM and cannot be extracted or used on other machines.
 
 use anyhow::{anyhow, Context, Result};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 /// TPM 2.0 credential store using systemd-creds
 pub struct TpmCredentialStore {

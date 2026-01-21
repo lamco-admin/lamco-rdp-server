@@ -140,6 +140,22 @@ pub enum Message {
     ClipboardPresetSelected(ClipboardPreset),
 
     // =========================================================================
+    // Audio Configuration (6 fields)
+    // =========================================================================
+    /// Audio enabled toggled
+    AudioEnabledToggled(bool),
+    /// Audio codec changed
+    AudioCodecChanged(String),
+    /// Audio sample rate changed
+    AudioSampleRateChanged(u32),
+    /// Audio channels changed
+    AudioChannelsChanged(u8),
+    /// Audio frame duration changed
+    AudioFrameMsChanged(u32),
+    /// OPUS bitrate changed (in kbps, stored as bps)
+    AudioOpusBitrateChanged(String),
+
+    // =========================================================================
     // Multi-Monitor Configuration (2 fields)
     // =========================================================================
     /// Multi-monitor enabled toggled

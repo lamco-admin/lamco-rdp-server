@@ -287,9 +287,8 @@ pub struct MetricsSnapshot {
     pub histograms: HashMap<String, HistogramStats>,
 }
 
-/// Pre-defined metric names for consistency across the codebase
 pub mod metric_names {
-    //! Standard metric name constants.
+    //! Pre-defined metric names for consistency across the codebase.
     //!
     //! Use these constants instead of string literals to ensure
     //! consistent metric naming across all components.

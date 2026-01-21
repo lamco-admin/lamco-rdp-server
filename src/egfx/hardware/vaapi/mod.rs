@@ -40,9 +40,7 @@ use cros_libva::{
 use tracing::{debug, info, trace, warn};
 
 use crate::config::HardwareEncodingConfig;
-use crate::egfx::color_space::{
-    ColorRange, ColorSpaceConfig, ColorSpacePreset, MatrixCoefficients,
-};
+use crate::egfx::color_space::{ColorRange, ColorSpaceConfig, MatrixCoefficients};
 
 use super::error::VaapiError;
 use super::{
@@ -263,12 +261,12 @@ impl VaapiEncoder {
             QualityPreset::Quality => 15,
         };
 
-        // Auto-select color space based on resolution
-        let color_space = ColorSpaceConfig::from_resolution(width, height);
+        // Auto-select color space based on resolution (OpenH264-compatible for consistency)
+        let color_space = ColorSpaceConfig::auto_select(width, height, true);
 
         info!(
             "✅ VA-API encoder initialized: {}x{}, {}kbps, IDR every {} frames, color_space={}",
-            width, height, bitrate_kbps, idr_interval, color_space.preset
+            width, height, bitrate_kbps, idr_interval, color_space.description()
         );
 
         Ok(Self {

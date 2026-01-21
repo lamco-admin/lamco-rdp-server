@@ -21,15 +21,15 @@ use std::ffi::OsStr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime};
 
 use fuser::{
     FileAttr, FileType, Filesystem, MountOption, ReplyAttr, ReplyData, ReplyDirectory, ReplyEntry,
-    ReplyOpen, Request, Session,
+    ReplyOpen, Request,
 };
 use parking_lot::RwLock;
 use tokio::sync::{mpsc, oneshot};
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, info, trace};
 
 use crate::clipboard::error::{ClipboardError, Result};
 

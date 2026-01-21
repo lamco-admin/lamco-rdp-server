@@ -7,9 +7,9 @@
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::os::fd::{AsRawFd, RawFd};
-use tracing::{debug, info, warn};
-use zbus::zvariant::{ObjectPath, OwnedObjectPath, Value};
+use std::os::fd::AsRawFd;
+use tracing::{debug, info};
+use zbus::zvariant::{OwnedObjectPath, Value};
 
 use super::remote_desktop::{MutterRemoteDesktop, MutterRemoteDesktopSession};
 use super::screencast::{MutterScreenCast, MutterScreenCastSession, MutterScreenCastStream};

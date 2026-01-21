@@ -80,6 +80,7 @@ use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, error, info, warn};
 
+use crate::audio::factory::create_sound_factory;
 use crate::clipboard::{ClipboardConfig, ClipboardManager, LamcoCliprdrFactory};
 use crate::config::Config;
 use crate::input::MonitorInfo as InputMonitorInfo;
@@ -581,6 +582,15 @@ impl LamcoRdpServer {
         // Note: gfx_factory was created earlier (before display handler)
         // to share references with display handler
 
+        // Create sound factory for RDPSND audio support
+        // TODO: Get audio node ID from portal session for targeted capture
+        let sound_factory = create_sound_factory(config.audio.enabled, None);
+        if config.audio.enabled {
+            info!("Audio support enabled (RDPSND)");
+        } else {
+            debug!("Audio support disabled by configuration");
+        }
+
         // Build IronRDP server using builder pattern
         info!("Building IronRDP server");
         let listen_addr: SocketAddr = config
@@ -598,6 +608,7 @@ impl LamcoRdpServer {
             .with_bitmap_codecs(codecs)
             .with_cliprdr_factory(Some(Box::new(clipboard_factory)))
             .with_gfx_factory(Some(Box::new(gfx_factory)))
+            .with_sound_factory(Some(Box::new(sound_factory)))
             .build();
 
         // Set server event sender in display handler for EGFX message routing

@@ -469,6 +469,43 @@ impl ConfigGuiApp {
             }
 
             // =================================================================
+            // Audio Configuration
+            // =================================================================
+            Message::AudioEnabledToggled(val) => {
+                self.state.config.audio.enabled = val;
+                self.state.mark_dirty();
+                Task::none()
+            }
+            Message::AudioCodecChanged(codec) => {
+                self.state.config.audio.codec = codec;
+                self.state.mark_dirty();
+                Task::none()
+            }
+            Message::AudioSampleRateChanged(rate) => {
+                self.state.config.audio.sample_rate = rate;
+                self.state.mark_dirty();
+                Task::none()
+            }
+            Message::AudioChannelsChanged(channels) => {
+                self.state.config.audio.channels = channels;
+                self.state.mark_dirty();
+                Task::none()
+            }
+            Message::AudioFrameMsChanged(ms) => {
+                self.state.config.audio.frame_ms = ms;
+                self.state.mark_dirty();
+                Task::none()
+            }
+            Message::AudioOpusBitrateChanged(val) => {
+                self.state.edit_strings.audio_opus_bitrate = val.clone();
+                if let Ok(kbps) = val.parse::<u32>() {
+                    self.state.config.audio.opus_bitrate = kbps * 1000; // Convert kbps to bps
+                    self.state.mark_dirty();
+                }
+                Task::none()
+            }
+
+            // =================================================================
             // Multi-Monitor Configuration
             // =================================================================
             Message::MultimonEnabledToggled(val) => {
@@ -1130,7 +1167,8 @@ impl ConfigGuiApp {
                 }
 
                 self.state.server_status = crate::gui::state::ServerStatus::Starting;
-                self.state.add_message(MessageLevel::Info, "Starting server...".to_string());
+                self.state
+                    .add_message(MessageLevel::Info, "Starting server...".to_string());
 
                 // Create log channel
                 let (tx, rx) = mpsc::unbounded_channel();
@@ -1156,7 +1194,8 @@ impl ConfigGuiApp {
                         );
                     }
                     Err(e) => {
-                        self.state.server_status = crate::gui::state::ServerStatus::Error(e.to_string());
+                        self.state.server_status =
+                            crate::gui::state::ServerStatus::Error(e.to_string());
                         self.state.add_message(
                             MessageLevel::Error,
                             format!("Failed to start server: {}", e),
@@ -1168,7 +1207,8 @@ impl ConfigGuiApp {
             }
             Message::StopServer => {
                 if let Some(mut process) = self.server_process.take() {
-                    self.state.add_message(MessageLevel::Info, "Stopping server...".to_string());
+                    self.state
+                        .add_message(MessageLevel::Info, "Stopping server...".to_string());
 
                     if let Err(e) = process.stop() {
                         self.state.add_message(
@@ -1176,27 +1216,24 @@ impl ConfigGuiApp {
                             format!("Error stopping server: {}", e),
                         );
                     } else {
-                        self.state.add_message(
-                            MessageLevel::Success,
-                            "Server stopped".to_string(),
-                        );
+                        self.state
+                            .add_message(MessageLevel::Success, "Server stopped".to_string());
                     }
 
                     self.server_process = None;
                     self.log_receiver = None;
                     self.state.server_status = crate::gui::state::ServerStatus::Stopped;
                 } else {
-                    self.state.add_message(
-                        MessageLevel::Warning,
-                        "Server is not running".to_string(),
-                    );
+                    self.state
+                        .add_message(MessageLevel::Warning, "Server is not running".to_string());
                 }
                 Task::none()
             }
             Message::RestartServer => {
                 // Stop then start
                 if self.server_process.is_some() {
-                    self.state.add_message(MessageLevel::Info, "Restarting server...".to_string());
+                    self.state
+                        .add_message(MessageLevel::Info, "Restarting server...".to_string());
 
                     // Stop first
                     if let Some(mut process) = self.server_process.take() {
@@ -1227,7 +1264,8 @@ impl ConfigGuiApp {
                             );
                         }
                         Err(e) => {
-                            self.state.server_status = crate::gui::state::ServerStatus::Error(e.to_string());
+                            self.state.server_status =
+                                crate::gui::state::ServerStatus::Error(e.to_string());
                             self.state.add_message(
                                 MessageLevel::Error,
                                 format!("Failed to restart server: {}", e),
@@ -1281,7 +1319,8 @@ impl ConfigGuiApp {
                 self.server_process = None;
                 self.log_receiver = None;
                 self.state.server_status = crate::gui::state::ServerStatus::Error(error.clone());
-                self.state.add_message(MessageLevel::Error, format!("Server failed: {}", error));
+                self.state
+                    .add_message(MessageLevel::Error, format!("Server failed: {}", error));
                 Task::none()
             }
 
@@ -1446,27 +1485,32 @@ impl ConfigGuiApp {
         let main_content = scrollable(content).height(Length::Fill);
 
         // Main layout with dark background
-        container(
-            column![header, tab_bar, main_content, footer,]
-                .spacing(0)
-        )
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .style(|_theme| container::Style {
-            background: Some(iced::Background::Color(app_theme::colors::BACKGROUND)),
-            ..Default::default()
-        })
-        .into()
+        container(column![header, tab_bar, main_content, footer,].spacing(0))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(|_theme| container::Style {
+                background: Some(iced::Background::Color(app_theme::colors::BACKGROUND)),
+                ..Default::default()
+            })
+            .into()
     }
 
     /// Render the header
     fn view_header(&self) -> Element<'_, Message> {
         // Server status indicator and controls
         let (status_text, status_color, is_running) = match &self.state.server_status {
-            crate::gui::state::ServerStatus::Unknown => ("Offline", app_theme::colors::TEXT_MUTED, false),
-            crate::gui::state::ServerStatus::Stopped => ("Stopped", app_theme::colors::ERROR, false),
-            crate::gui::state::ServerStatus::Starting => ("Starting...", app_theme::colors::WARNING, false),
-            crate::gui::state::ServerStatus::Running { .. } => ("Running", app_theme::colors::SUCCESS, true),
+            crate::gui::state::ServerStatus::Unknown => {
+                ("Offline", app_theme::colors::TEXT_MUTED, false)
+            }
+            crate::gui::state::ServerStatus::Stopped => {
+                ("Stopped", app_theme::colors::ERROR, false)
+            }
+            crate::gui::state::ServerStatus::Starting => {
+                ("Starting...", app_theme::colors::WARNING, false)
+            }
+            crate::gui::state::ServerStatus::Running { .. } => {
+                ("Running", app_theme::colors::SUCCESS, true)
+            }
             crate::gui::state::ServerStatus::Error(_) => ("Error", app_theme::colors::ERROR, false),
         };
 
@@ -1481,7 +1525,7 @@ impl ConfigGuiApp {
                 }),
             ]
             .spacing(6)
-            .align_y(Alignment::Center)
+            .align_y(Alignment::Center),
         )
         .padding([4, 12])
         .style(app_theme::status_badge_style(is_running));
@@ -1506,7 +1550,7 @@ impl ConfigGuiApp {
                     button(text("Restart").size(12))
                         .on_press(Message::RestartServer)
                         .padding([6, 12])
-                        .style(app_theme::secondary_button_style)
+                        .style(app_theme::secondary_button_style),
                 )
             } else {
                 Element::from(space().width(0.0))
@@ -1597,6 +1641,7 @@ impl ConfigGuiApp {
             Tab::Server => tabs::view_server_tab(&self.state),
             Tab::Security => tabs::view_security_tab(&self.state),
             Tab::Video => tabs::view_video_tab(&self.state),
+            Tab::Audio => tabs::view_audio_tab(&self.state),
             Tab::Input => tabs::view_input_tab(&self.state),
             Tab::Clipboard => tabs::view_clipboard_tab(&self.state),
             Tab::Logging => tabs::view_logging_tab(&self.state),
@@ -1691,7 +1736,7 @@ impl ConfigGuiApp {
         // If server is running, add a faster tick for log polling and uptime updates
         if self.server_process.is_some() {
             subscriptions.push(
-                iced::time::every(Duration::from_millis(100)).map(|_| Message::PollServerLogs)
+                iced::time::every(Duration::from_millis(100)).map(|_| Message::PollServerLogs),
             );
         }
 
