@@ -19,6 +19,7 @@ pub mod types;
 use types::*;
 
 // Re-export types needed by other modules
+pub use types::AudioConfig;
 pub use types::HardwareEncodingConfig;
 pub use types::{CursorConfig, CursorPredictorConfig};
 
@@ -61,6 +62,9 @@ pub struct Config {
     /// Cursor handling configuration (Premium)
     #[serde(default)]
     pub cursor: CursorConfig,
+    /// Audio configuration (RDPSND)
+    #[serde(default)]
+    pub audio: AudioConfig,
 }
 
 impl Config {
@@ -134,6 +138,7 @@ impl Config {
             display: DisplayConfig::default(),
             advanced_video: AdvancedVideoConfig::default(),
             cursor: CursorConfig::default(),
+            audio: AudioConfig::default(),
         })
     }
 
