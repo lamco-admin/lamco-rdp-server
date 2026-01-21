@@ -25,3 +25,4 @@ build-dir/
 
 # Vendor (created during build, not committed)
 vendor/
+.claude/
