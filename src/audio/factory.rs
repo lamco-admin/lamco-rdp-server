@@ -6,19 +6,38 @@
 //!
 //! The factory creates `PipeWireAudioHandler` instances for each
 //! RDP session that supports audio.
+//!
+//! # Event Flow
+//!
+//! ```text
+//! LamcoSoundFactory
+//!       │
+//!       ├── set_sender(ServerEvent channel) ← called by RdpServer
+//!       │
+//!       └── build_backend() → PipeWireAudioHandler
+//!                                    │
+//!                                    └── sends ServerEvent::Rdpsnd(Wave)
+//!                                              │
+//!                                              ▼
+//!                                    RdpServer event loop
+//!                                              │
+//!                                              └── rdpsnd.wave()
+//! ```
 
 use ironrdp_rdpsnd::server::RdpsndServerHandler;
 use ironrdp_server::{ServerEvent, ServerEventSender, SoundServerFactory};
 use tokio::sync::mpsc;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::audio::handler::PipeWireAudioHandler;
 
 /// Factory for creating RDPSND audio handlers
 ///
 /// Implements `SoundServerFactory` to integrate with IronRDP's `RdpServer`.
+/// The factory receives a server event channel via `set_sender()` and passes
+/// it to the audio handler so captured audio can be sent to RDP clients.
 pub struct LamcoSoundFactory {
-    /// Channel sender for server events
+    /// Channel sender for server events (received from RdpServer)
     event_sender: Option<mpsc::UnboundedSender<ServerEvent>>,
     /// PipeWire node ID for audio capture (optional)
     node_id: Option<u32>,
@@ -87,11 +106,19 @@ impl SoundServerFactory for LamcoSoundFactory {
             return Box::new(NoOpAudioHandler);
         }
 
-        // Create channel for audio messages
-        // This channel would connect to the audio pipeline in a full implementation
-        let (message_tx, _message_rx) = mpsc::channel(64);
+        // Clone the event sender for the handler
+        let event_sender = match &self.event_sender {
+            Some(sender) => sender.clone(),
+            None => {
+                warn!("No event sender available - audio events won't reach client");
+                // Create handler anyway, it just won't be able to send audio
+                // This allows format negotiation to complete
+                let handler = PipeWireAudioHandler::new(None, self.node_id);
+                return Box::new(handler);
+            }
+        };
 
-        let handler = PipeWireAudioHandler::new(message_tx, self.node_id);
+        let handler = PipeWireAudioHandler::new(Some(event_sender), self.node_id);
         info!("Created PipeWire audio handler for RDPSND");
 
         Box::new(handler)

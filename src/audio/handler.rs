@@ -8,12 +8,19 @@
 //! 1. `get_formats()` - Server advertises supported audio formats to client
 //! 2. Client responds with its supported formats
 //! 3. `start()` - Handler selects best matching format and starts capture
-//! 4. Audio frames sent via `RdpsndServer::wave()`
+//! 4. Audio frames sent via `ServerEvent::Rdpsnd(Wave)` → server calls `rdpsnd.wave()`
 //! 5. `stop()` - Handler stops capture on session end
+//!
+//! # Event Flow
+//!
+//! Audio data flows through the server event channel:
+//! ```text
+//! PipeWire capture → encode → ServerEvent::Rdpsnd(Wave) → RdpServer → client
+//! ```
 
 use ironrdp_rdpsnd::pdu::{AudioFormat, WaveFormat};
 use ironrdp_rdpsnd::server::{RdpsndServerHandler, RdpsndServerMessage};
-use std::sync::Arc;
+use ironrdp_server::ServerEvent;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
@@ -48,7 +55,8 @@ impl FormatSpec {
 /// PipeWire Audio Handler for RDPSND
 ///
 /// Implements `RdpsndServerHandler` to bridge PipeWire audio capture
-/// with RDP audio streaming.
+/// with RDP audio streaming. Audio data is sent through the server's
+/// event channel as `ServerEvent::Rdpsnd(RdpsndServerMessage::Wave)`.
 pub struct PipeWireAudioHandler {
     /// Supported audio formats (advertised to client)
     formats: Vec<AudioFormat>,
@@ -56,8 +64,8 @@ pub struct PipeWireAudioHandler {
     selected_format: Option<u16>,
     /// Audio encoder for selected format
     encoder: Option<AudioEncoder>,
-    /// Channel to send audio messages to pipeline
-    message_tx: mpsc::Sender<RdpsndServerMessage>,
+    /// Server event channel for sending audio to RDP clients
+    event_sender: Option<mpsc::UnboundedSender<ServerEvent>>,
     /// PipeWire node ID for audio capture (optional)
     node_id: Option<u32>,
     /// Whether capture is active
@@ -69,6 +77,7 @@ impl std::fmt::Debug for PipeWireAudioHandler {
         f.debug_struct("PipeWireAudioHandler")
             .field("formats", &self.formats.len())
             .field("selected_format", &self.selected_format)
+            .field("has_event_sender", &self.event_sender.is_some())
             .field("node_id", &self.node_id)
             .field("active", &self.active)
             .finish()
@@ -80,9 +89,12 @@ impl PipeWireAudioHandler {
     ///
     /// # Arguments
     ///
-    /// * `message_tx` - Channel to send audio messages to the pipeline
+    /// * `event_sender` - Server event channel for sending audio to RDP clients
     /// * `node_id` - Optional PipeWire node ID for audio capture
-    pub fn new(message_tx: mpsc::Sender<RdpsndServerMessage>, node_id: Option<u32>) -> Self {
+    pub fn new(
+        event_sender: Option<mpsc::UnboundedSender<ServerEvent>>,
+        node_id: Option<u32>,
+    ) -> Self {
         // Build list of supported formats in priority order
         let format_specs = vec![
             // OPUS - modern, efficient, best quality/bandwidth
@@ -140,24 +152,52 @@ impl PipeWireAudioHandler {
         let formats: Vec<AudioFormat> = format_specs.iter().map(|f| f.to_audio_format()).collect();
 
         info!(
-            "PipeWire audio handler created with {} formats, node_id={:?}",
+            "PipeWire audio handler created with {} formats, node_id={:?}, has_event_sender={}",
             formats.len(),
-            node_id
+            node_id,
+            event_sender.is_some()
         );
 
         Self {
             formats,
             selected_format: None,
             encoder: None,
-            message_tx,
+            event_sender,
             node_id,
             active: false,
         }
     }
 
-    /// Get the message sender for external audio pipeline
-    pub fn message_sender(&self) -> mpsc::Sender<RdpsndServerMessage> {
-        self.message_tx.clone()
+    /// Send encoded audio data to the RDP client
+    ///
+    /// This sends the audio through the server event channel as
+    /// `ServerEvent::Rdpsnd(RdpsndServerMessage::Wave)`.
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - Encoded audio data
+    /// * `timestamp` - Audio timestamp in milliseconds
+    ///
+    /// # Returns
+    ///
+    /// `true` if the audio was sent successfully, `false` if the channel is unavailable
+    pub fn send_audio(&self, data: Vec<u8>, timestamp: u32) -> bool {
+        if let Some(sender) = &self.event_sender {
+            let msg = ServerEvent::Rdpsnd(RdpsndServerMessage::Wave(data, timestamp));
+            if let Err(e) = sender.send(msg) {
+                error!("Failed to send audio event: {}", e);
+                return false;
+            }
+            true
+        } else {
+            warn!("No event sender available, audio not sent");
+            false
+        }
+    }
+
+    /// Check if the handler can send audio
+    pub fn can_send_audio(&self) -> bool {
+        self.event_sender.is_some() && self.active
     }
 
     /// Get the selected encoder (if any)
@@ -343,12 +383,24 @@ mod tests {
 
     #[test]
     fn test_handler_creation() {
-        let (tx, _rx) = mpsc::channel(32);
-        let handler = PipeWireAudioHandler::new(tx, None);
+        // Create handler without event sender (for unit testing)
+        let handler = PipeWireAudioHandler::new(None, None);
 
         assert!(!handler.formats.is_empty());
         assert!(!handler.is_active());
         assert!(handler.selected_format.is_none());
+        assert!(!handler.can_send_audio()); // No event sender
+    }
+
+    #[test]
+    fn test_handler_with_event_sender() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let handler = PipeWireAudioHandler::new(Some(tx), Some(42));
+
+        assert!(!handler.formats.is_empty());
+        assert!(!handler.is_active()); // Not active until start() called
+        assert!(!handler.can_send_audio()); // Active but not started
+        assert_eq!(handler.node_id(), Some(42));
     }
 
     #[test]
