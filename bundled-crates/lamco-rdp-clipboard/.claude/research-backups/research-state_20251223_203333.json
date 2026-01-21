@@ -1,0 +1,112 @@
+{
+  "session_id": "systematic-exploration-2025-12-07",
+  "focus": "LGI Gaussian Image Codec - Systematic Technique Exploration",
+  "started": "2025-12-07T15:00:00Z",
+  "updated": "2025-12-07T13:55:00Z",
+  "depth_mode": "parallel-testing",
+  "status": "active",
+
+  "project_locations": {
+    "main": "/home/greg/gaussian-image-projects/lgi-project",
+    "archive": "/home/greg/gaussian-image-projects/local-research",
+    "parent_docs": "/home/greg/gaussian-image-projects/*.md"
+  },
+
+  "session_history": {
+    "oct_2024": "8 sessions (Python→Rust, FFmpeg integration, regression hunt)",
+    "nov_2024": "Reorganization (116 files distilled, rock-solid foundation)",
+    "dec_5_2025": "Gradient normalization breakthrough (+1.17 dB)",
+    "dec_6_2025": "6 handover documents, bug fixes, hybrid pruning breakthrough",
+    "dec_7_2025": "GPU optimizer testing, L-M JtJ strategies, comprehensive comparison"
+  },
+
+  "breakthroughs": [
+    {
+      "title": "Hybrid Pruning: +0.69 dB with 27% fewer Gaussians",
+      "significance": "HIGH",
+      "detail": "kodim03: 22.30 dB with 187 Gaussians vs 21.61 dB with 256 Gaussians baseline",
+      "date": "2025-12-06",
+      "approach": "Start dense (256) → optimize (100 iter) → prune low-opacity → re-optimize (100 iter)"
+    },
+    {
+      "title": "Critical Bug Fix: Gradient Coordinate Space",
+      "significance": "HIGH",
+      "detail": "Gradients were computed in pixel space (0-768) instead of normalized (0-1), causing ~768x wrong magnitude",
+      "date": "2025-12-06"
+    },
+    {
+      "title": "Critical Bug Fix: Learning Rates 2-5x Too Low",
+      "significance": "MEDIUM",
+      "detail": "lr_color 0.01→0.02, lr_scale 0.001→0.005, lr_opacity 0.01→0.05",
+      "date": "2025-12-06"
+    },
+    {
+      "title": "Adam t=1 Bug Fixed",
+      "significance": "MEDIUM",
+      "detail": "Baseline used t=1 constant when per_gaussian_time=false. Fixed with global_t counter.",
+      "impact": "+0.25 dB improvement (22.54 → 22.79 dB on kodim03)",
+      "date": "2025-12-06"
+    }
+  ],
+
+  "test_results": {
+    "hybrid_pruning": {
+      "status": "completed",
+      "results": {
+        "kodim03": {"baseline": 21.61, "hybrid": 22.30, "delta": "+0.69", "gaussians": 187}
+      },
+      "insight": "Pruning from dense works; growing from sparse fails due to momentum mismatch"
+    },
+    "growing_densification": {
+      "status": "completed",
+      "results": {
+        "kodim03": {"baseline": 21.61, "densify": 19.60, "delta": "-2.01", "gaussians": 273},
+        "kodim05": {"baseline": 17.77, "densify": 17.96, "delta": "+0.19", "gaussians": 314}
+      },
+      "insight": "Growing fails on most images but shows slight benefit on kodim05"
+    }
+  },
+
+  "bugs_fixed": [
+    {
+      "file": "test_combined_densification.rs",
+      "issue": "Learning rates 2-5x too low",
+      "fix": "lr_color 0.01→0.02, lr_scale 0.001→0.005, lr_opacity 0.01→0.05"
+    },
+    {
+      "file": "test_combined_densification.rs",
+      "issue": "Gradient computation in pixel space instead of normalized",
+      "fix": "Use (px+0.5)/width, (py+0.5)/height for normalized coordinates",
+      "impact": "Prevented catastrophic optimization divergence"
+    },
+    {
+      "file": "test_adam_advanced.rs",
+      "issue": "Baseline used t=1 constant instead of tracking iterations",
+      "fix": "Added global_t field, increment in step(), use for bias correction",
+      "impact": "+0.25 dB"
+    }
+  ],
+
+  "conclusions": [
+    "1. Hybrid pruning is the new best approach (+0.69 dB, -27% Gaussians, -14% time)",
+    "2. Growing from sparse fails due to momentum mismatch in Adam",
+    "3. Coordinate space consistency is critical for gradient computation",
+    "4. Learning rate calibration (3DGS paper values) is essential",
+    "5. Advanced Adam features (per-Gaussian time, etc.) don't help without densification"
+  ],
+
+  "current_best": {
+    "approach": "Hybrid Pruning",
+    "psnr_kodim03": 22.30,
+    "gaussians": 187,
+    "time_seconds": 218
+  },
+
+  "next_steps": [
+    "Productionize hybrid pruning into a proper module",
+    "Test on full Kodak dataset (24 images)",
+    "Tune pruning threshold (0.05, 0.1, 0.15, 0.2)",
+    "Combine hybrid with state inheritance for difficult images",
+    "Investigate why kodim05 benefits from growing densification"
+  ]
+}

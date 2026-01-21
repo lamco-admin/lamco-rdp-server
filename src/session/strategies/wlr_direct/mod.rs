@@ -1,0 +1,568 @@
+//! wlr-direct Strategy: Native wlroots Protocol Support
+//!
+//! This module implements direct Wayland protocol support for wlroots-based compositors
+//! (Sway, Hyprland, River, labwc) using the virtual keyboard and pointer protocols.
+//!
+//! # Overview
+//!
+//! The wlr-direct strategy provides input injection without requiring the Portal RemoteDesktop
+//! API, which is not implemented by xdg-desktop-portal-wlr. It uses:
+//!
+//! - `zwp_virtual_keyboard_v1` (virtual-keyboard-unstable-v1) - Standard keyboard protocol
+//! - `zwlr_virtual_pointer_v1` (wlr-virtual-pointer-unstable-v1) - wlroots pointer protocol
+//!
+//! # Supported Compositors
+//!
+//! - Sway 1.7+
+//! - Hyprland
+//! - River
+//! - labwc
+//! - Any wlroots-based compositor with virtual keyboard/pointer support
+//!
+//! # Architecture
+//!
+//! ```text
+//! WlrDirectStrategy
+//!   ├─> Wayland Connection (WAYLAND_DISPLAY socket)
+//!   ├─> Protocol Binding (registry enumeration)
+//!   │   ├─> zwp_virtual_keyboard_manager_v1
+//!   │   ├─> zwlr_virtual_pointer_manager_v1
+//!   │   └─> wl_seat (default seat)
+//!   └─> WlrSessionHandleImpl
+//!       ├─> VirtualKeyboard (XKB keymap + key injection)
+//!       └─> VirtualPointer (motion + button + scroll injection)
+//! ```
+//!
+//! # Limitations (MVP)
+//!
+//! - **Input injection only** (no video capture)
+//! - **No clipboard support** (use FUSE approach or separate Portal session)
+//! - **Not Flatpak-compatible** (requires direct Wayland socket access)
+//! - For video, this strategy would need integration with wlr-screencopy or Portal
+
+mod keyboard;
+mod pointer;
+
+use anyhow::{anyhow, Context, Result};
+use async_trait::async_trait;
+use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
+use tracing::{debug, error, info, warn};
+use wayland_client::protocol::{wl_registry, wl_seat::WlSeat};
+use wayland_client::{globals::registry_queue_init, Connection, Dispatch, QueueHandle};
+use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1;
+use wayland_protocols_wlr::virtual_pointer::v1::client::zwlr_virtual_pointer_manager_v1::ZwlrVirtualPointerManagerV1;
+
+use crate::session::strategy::{
+    ClipboardComponents, PipeWireAccess, SessionHandle, SessionStrategy, SessionType, StreamInfo,
+};
+use keyboard::{KeyState, VirtualKeyboard};
+use pointer::{Axis, AxisSource, ButtonState, VirtualPointer};
+
+// Re-export for external use
+pub use keyboard::VirtualKeyboard as WlrVirtualKeyboard;
+pub use pointer::VirtualPointer as WlrVirtualPointer;
+
+/// State for Wayland protocol dispatch
+struct WlrState {
+    keyboard_manager: Option<ZwpVirtualKeyboardManagerV1>,
+    pointer_manager: Option<ZwlrVirtualPointerManagerV1>,
+    seat: Option<WlSeat>,
+}
+
+impl WlrState {
+    fn new() -> Self {
+        Self {
+            keyboard_manager: None,
+            pointer_manager: None,
+            seat: None,
+        }
+    }
+}
+
+/// wlr-direct strategy implementation
+///
+/// Provides input injection via native Wayland protocols for wlroots compositors.
+pub struct WlrDirectStrategy;
+
+impl WlrDirectStrategy {
+    /// Create a new wlr-direct strategy
+    pub fn new() -> Self {
+        Self
+    }
+
+    /// Check if wlr-direct protocols are available
+    ///
+    /// This checks:
+    /// 1. Wayland connection is possible (WAYLAND_DISPLAY set)
+    /// 2. Required protocols are advertised by the compositor
+    ///
+    /// # Returns
+    ///
+    /// `true` if wlr-direct can be used, `false` otherwise
+    pub async fn is_available() -> bool {
+        // Try to connect to Wayland
+        let conn = match Connection::connect_to_env() {
+            Ok(conn) => conn,
+            Err(e) => {
+                debug!("[wlr_direct] Wayland connection failed: {}", e);
+                return false;
+            }
+        };
+
+        // Try to bind protocols
+        match bind_protocols(&conn) {
+            Ok(_) => {
+                debug!("[wlr_direct] All required protocols available");
+                true
+            }
+            Err(e) => {
+                debug!("[wlr_direct] Protocol check failed: {}", e);
+                false
+            }
+        }
+    }
+}
+
+impl Default for WlrDirectStrategy {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl SessionStrategy for WlrDirectStrategy {
+    fn name(&self) -> &'static str {
+        "wlr-direct"
+    }
+
+    fn requires_initial_setup(&self) -> bool {
+        // No user dialog required - direct protocol access
+        false
+    }
+
+    fn supports_unattended_restore(&self) -> bool {
+        // No session tokens needed - always available
+        true
+    }
+
+    async fn create_session(&self) -> Result<Arc<dyn SessionHandle>> {
+        info!("🚀 wlr_direct: Creating session with native Wayland protocols");
+
+        // Connect to Wayland compositor
+        let conn = Connection::connect_to_env()
+            .context("Failed to connect to Wayland display. Ensure WAYLAND_DISPLAY is set.")?;
+
+        info!("🔌 wlr_direct: Connected to Wayland display");
+
+        // Bind to protocols and create virtual devices
+        let (keyboard, pointer, event_queue) = bind_protocols_and_create_devices(&conn)
+            .context("Failed to bind protocols and create virtual devices")?;
+
+        info!("✅ wlr_direct: Virtual keyboard and pointer created successfully");
+
+        // Create session handle
+        let handle = WlrSessionHandleImpl {
+            connection: conn,
+            event_queue: Mutex::new(event_queue),
+            keyboard,
+            pointer,
+            streams: vec![], // Populated by video capture strategy
+        };
+
+        Ok(Arc::new(handle))
+    }
+
+    async fn cleanup(&self, _session: &dyn SessionHandle) -> Result<()> {
+        // Virtual devices are automatically destroyed when dropped
+        info!("🔒 wlr_direct: Session cleanup complete");
+        Ok(())
+    }
+}
+
+/// wlr-direct session handle implementation
+///
+/// Implements the SessionHandle trait for wlroots direct protocol access.
+///
+/// # Input Injection
+///
+/// All input methods receive pre-translated inputs from the input handler:
+/// - Keyboard: evdev keycodes (not RDP scancodes)
+/// - Mouse buttons: evdev button codes (272-276)
+/// - Mouse coordinates: Stream-relative, already transformed
+///
+/// The handle just forwards these to the virtual devices.
+pub struct WlrSessionHandleImpl {
+    connection: Connection,
+    event_queue: Mutex<wayland_client::EventQueue<WlrState>>,
+    keyboard: VirtualKeyboard,
+    pointer: VirtualPointer,
+    streams: Vec<StreamInfo>,
+}
+
+impl WlrSessionHandleImpl {
+    /// Flush pending Wayland events
+    ///
+    /// Dispatches any pending protocol events and flushes the connection.
+    /// This is non-blocking and only processes events already in the queue.
+    fn flush(&self) -> Result<()> {
+        let mut queue = self.event_queue.lock().unwrap();
+
+        // Dispatch pending events (non-blocking)
+        if let Err(e) = queue.dispatch_pending(&mut WlrState::new()) {
+            warn!("⚠️  wlr_direct: Failed to dispatch pending events: {}", e);
+            // Non-fatal - input events are one-way
+        }
+
+        // Flush connection to send queued requests
+        self.connection
+            .flush()
+            .context("Failed to flush Wayland connection")?;
+
+        Ok(())
+    }
+
+    /// Find stream by node ID
+    ///
+    /// For multi-monitor setups, maps the PipeWire stream ID to stream info
+    /// containing dimensions for coordinate transformation.
+    fn find_stream(&self, stream_id: u32) -> Result<&StreamInfo> {
+        self.streams
+            .iter()
+            .find(|s| s.node_id == stream_id)
+            .ok_or_else(|| {
+                anyhow!(
+                    "Stream {} not found. Available streams: {:?}",
+                    stream_id,
+                    self.streams.iter().map(|s| s.node_id).collect::<Vec<_>>()
+                )
+            })
+    }
+}
+
+#[async_trait]
+impl SessionHandle for WlrSessionHandleImpl {
+    fn pipewire_access(&self) -> PipeWireAccess {
+        // wlr-direct does not provide video capture (input only)
+        // Video would come from a separate strategy (Portal or wlr-screencopy)
+        warn!(
+            "⚠️  wlr_direct: pipewire_access() called but this strategy provides input only. \
+             Video capture requires Portal ScreenCast or wlr-screencopy."
+        );
+        PipeWireAccess::NodeId(0)
+    }
+
+    fn streams(&self) -> Vec<StreamInfo> {
+        self.streams.clone()
+    }
+
+    fn session_type(&self) -> SessionType {
+        SessionType::WlrDirect
+    }
+
+    async fn notify_keyboard_keycode(&self, keycode: i32, pressed: bool) -> Result<()> {
+        let time = current_time_millis();
+        let state = KeyState::from(pressed);
+
+        self.keyboard.key(time, keycode as u32, state);
+
+        self.flush()
+            .context("Failed to flush keyboard event to compositor")?;
+
+        Ok(())
+    }
+
+    async fn notify_pointer_motion_absolute(&self, stream_id: u32, x: f64, y: f64) -> Result<()> {
+        // For MVP with input-only support, we don't have stream info from video capture
+        // Use default screen dimensions or accept that motion may not work without video
+        //
+        // In a full implementation, this would be populated by the video capture strategy
+        // For now, use a sensible default or the first stream if available
+
+        let (x_extent, y_extent) = if self.streams.is_empty() {
+            // No video streams - use common default dimensions
+            // This works for single-monitor 1920x1080 setups
+            // Note: This warning will appear frequently - consider rate limiting in production
+            debug!(
+                "[wlr_direct] No stream info available (input-only mode). \
+                 Using default 1920x1080 extents."
+            );
+            (1920_u32, 1080_u32)
+        } else {
+            // Use stream dimensions
+            match self.find_stream(stream_id) {
+                Ok(stream) => (stream.width, stream.height),
+                Err(e) => {
+                    warn!("⚠️  wlr_direct: {}", e);
+                    // Fallback to first stream
+                    (self.streams[0].width, self.streams[0].height)
+                }
+            }
+        };
+
+        let time = current_time_millis();
+
+        self.pointer
+            .motion_absolute(time, x as u32, y as u32, x_extent, y_extent);
+        self.pointer.frame();
+
+        self.flush()
+            .context("Failed to flush pointer motion to compositor")?;
+
+        Ok(())
+    }
+
+    async fn notify_pointer_button(&self, button: i32, pressed: bool) -> Result<()> {
+        let time = current_time_millis();
+        let state = ButtonState::from(pressed);
+
+        self.pointer.button(time, button as u32, state);
+        self.pointer.frame();
+
+        self.flush()
+            .context("Failed to flush pointer button event to compositor")?;
+
+        Ok(())
+    }
+
+    async fn notify_pointer_axis(&self, dx: f64, dy: f64) -> Result<()> {
+        let time = current_time_millis();
+
+        // Set axis source to wheel (RDP scroll events are typically wheel-based)
+        self.pointer.axis_source(AxisSource::Wheel);
+
+        // Send axis events for non-zero deltas
+        if dx.abs() > 0.01 {
+            self.pointer.axis(time, Axis::HorizontalScroll, dx);
+        }
+        if dy.abs() > 0.01 {
+            self.pointer.axis(time, Axis::VerticalScroll, dy);
+        }
+
+        self.pointer.frame();
+
+        self.flush()
+            .context("Failed to flush pointer axis event to compositor")?;
+
+        Ok(())
+    }
+
+    fn portal_clipboard(&self) -> Option<ClipboardComponents> {
+        // wlr-direct does not provide clipboard support
+        // Caller must use FUSE approach or create separate Portal session
+        None
+    }
+}
+
+/// Bind to required Wayland protocols and create virtual devices
+///
+/// Uses registry_queue_init to enumerate globals and bind to required protocols.
+fn bind_protocols_and_create_devices(
+    conn: &Connection,
+) -> Result<(
+    VirtualKeyboard,
+    VirtualPointer,
+    wayland_client::EventQueue<WlrState>,
+)> {
+    // Initialize registry and event queue
+    let (globals, mut event_queue) =
+        registry_queue_init::<WlrState>(conn).context("Failed to initialize Wayland registry")?;
+
+    let qh = event_queue.handle();
+
+    // Bind to virtual keyboard manager
+    let keyboard_manager: ZwpVirtualKeyboardManagerV1 = globals.bind(&qh, 1..=1, ()).context(
+        "Failed to bind zwp_virtual_keyboard_manager_v1. \
+             Compositor does not support virtual keyboard protocol.",
+    )?;
+
+    debug!("[wlr_direct] Bound zwp_virtual_keyboard_manager_v1");
+
+    // Bind to virtual pointer manager
+    let pointer_manager: ZwlrVirtualPointerManagerV1 = globals.bind(&qh, 1..=2, ()).context(
+        "Failed to bind zwlr_virtual_pointer_manager_v1. \
+             Compositor does not support wlr virtual pointer protocol (requires wlroots 0.12+).",
+    )?;
+
+    debug!("[wlr_direct] Bound zwlr_virtual_pointer_manager_v1");
+
+    // Bind to seat (use first available seat)
+    let seat: WlSeat = globals
+        .bind(&qh, 1..=8, ())
+        .context("Failed to bind wl_seat. No seat available.")?;
+
+    debug!("[wlr_direct] Bound wl_seat");
+
+    // Create virtual devices
+    let keyboard = VirtualKeyboard::new(&keyboard_manager, &seat, &qh)
+        .context("Failed to create virtual keyboard")?;
+
+    let pointer = VirtualPointer::new(&pointer_manager, &seat, &qh)
+        .context("Failed to create virtual pointer")?;
+
+    // Roundtrip to complete protocol setup
+    event_queue
+        .roundtrip(&mut WlrState::new())
+        .context("Failed to complete Wayland roundtrip for protocol setup")?;
+
+    Ok((keyboard, pointer, event_queue))
+}
+
+/// Check if required protocols are available (used by is_available)
+fn bind_protocols(conn: &Connection) -> Result<()> {
+    let (globals, _event_queue) =
+        registry_queue_init::<WlrState>(conn).context("Failed to initialize Wayland registry")?;
+
+    // Check for required protocols by attempting to bind
+    let has_keyboard = globals.contents().with_list(|list| {
+        list.iter()
+            .any(|global| global.interface == "zwp_virtual_keyboard_manager_v1")
+    });
+
+    let has_pointer = globals.contents().with_list(|list| {
+        list.iter()
+            .any(|global| global.interface == "zwlr_virtual_pointer_manager_v1")
+    });
+
+    let has_seat = globals
+        .contents()
+        .with_list(|list| list.iter().any(|global| global.interface == "wl_seat"));
+
+    if !has_keyboard {
+        return Err(anyhow!("zwp_virtual_keyboard_manager_v1 not found"));
+    }
+    if !has_pointer {
+        return Err(anyhow!("zwlr_virtual_pointer_manager_v1 not found"));
+    }
+    if !has_seat {
+        return Err(anyhow!("wl_seat not found"));
+    }
+
+    Ok(())
+}
+
+/// Get current time in milliseconds since UNIX epoch
+///
+/// Used for event timestamps in the Wayland protocol.
+fn current_time_millis() -> u32 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u32
+}
+
+// Implement Dispatch for all protocol objects with WlrState
+impl Dispatch<wl_registry::WlRegistry, ()> for WlrState {
+    fn event(
+        _state: &mut Self,
+        _proxy: &wl_registry::WlRegistry,
+        _event: wl_registry::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        // Registry events handled by registry_queue_init
+    }
+}
+
+impl Dispatch<ZwpVirtualKeyboardManagerV1, ()> for WlrState {
+    fn event(
+        _state: &mut Self,
+        _proxy: &ZwpVirtualKeyboardManagerV1,
+        _event: <ZwpVirtualKeyboardManagerV1 as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        // No events expected from keyboard manager
+    }
+}
+
+impl Dispatch<ZwlrVirtualPointerManagerV1, ()> for WlrState {
+    fn event(
+        _state: &mut Self,
+        _proxy: &ZwlrVirtualPointerManagerV1,
+        _event: <ZwlrVirtualPointerManagerV1 as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        // No events expected from pointer manager
+    }
+}
+
+impl Dispatch<WlSeat, ()> for WlrState {
+    fn event(
+        _state: &mut Self,
+        _proxy: &WlSeat,
+        _event: <WlSeat as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        // Ignore seat events (capabilities, name, etc.)
+    }
+}
+
+impl Dispatch<wayland_protocols_misc::zwp_virtual_keyboard_v1::client::zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1, ()> for WlrState {
+    fn event(
+        _state: &mut Self,
+        _proxy: &wayland_protocols_misc::zwp_virtual_keyboard_v1::client::zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1,
+        _event: <wayland_protocols_misc::zwp_virtual_keyboard_v1::client::zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1 as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        // No events expected from virtual keyboard
+    }
+}
+
+impl Dispatch<wayland_protocols_wlr::virtual_pointer::v1::client::zwlr_virtual_pointer_v1::ZwlrVirtualPointerV1, ()> for WlrState {
+    fn event(
+        _state: &mut Self,
+        _proxy: &wayland_protocols_wlr::virtual_pointer::v1::client::zwlr_virtual_pointer_v1::ZwlrVirtualPointerV1,
+        _event: <wayland_protocols_wlr::virtual_pointer::v1::client::zwlr_virtual_pointer_v1::ZwlrVirtualPointerV1 as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        // No events expected from virtual pointer
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    #[ignore] // Requires wlroots compositor running
+    async fn test_wlr_direct_availability() {
+        let available = WlrDirectStrategy::is_available().await;
+        println!("wlr-direct available: {}", available);
+        // This will be true on Sway/Hyprland, false on GNOME
+    }
+
+    #[tokio::test]
+    #[ignore] // Requires wlroots compositor running
+    async fn test_create_session() {
+        if !WlrDirectStrategy::is_available().await {
+            println!("Skipping: wlr-direct not available on this compositor");
+            return;
+        }
+
+        let strategy = WlrDirectStrategy::new();
+        let session = strategy
+            .create_session()
+            .await
+            .expect("Failed to create session");
+
+        assert_eq!(session.session_type(), SessionType::WlrDirect);
+    }
+
+    #[test]
+    fn test_current_time_millis() {
+        let time = current_time_millis();
+        assert!(time > 0);
+        println!("Current time: {} ms", time);
+    }
+}

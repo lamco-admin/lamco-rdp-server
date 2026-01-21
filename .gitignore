@@ -1,0 +1,27 @@
+# Build artifacts
+target/
+*.log
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local configuration
+config.toml
+*.pem
+*.key
+*.crt
+
+# Flatpak build (should not be in dev repo)
+.flatpak-builder/
+build-dir/
+*.flatpak
+
+# Vendor (created during build, not committed)
+vendor/

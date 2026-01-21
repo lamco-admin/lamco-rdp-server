@@ -1,0 +1,37 @@
+[package]
+name = "lamco-clipboard-core"
+version = "0.5.0"
+edition = "2021"
+rust-version = "1.77"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/lamco-admin/lamco-rdp"
+homepage = "https://lamco.ai"
+authors = ["Lamco <contact@lamco.ai>"]
+description = "Protocol-agnostic clipboard utilities - format conversion, loop detection, transfer engine"
+documentation = "https://docs.rs/lamco-clipboard-core"
+keywords = ["clipboard", "format", "conversion", "rdp", "sync"]
+categories = ["encoding", "data-structures"]
+readme = "README.md"
+
+[package.metadata.docs.rs]
+all-features = true
+targets = ["x86_64-unknown-linux-gnu"]
+rustdoc-args = ["--cfg", "docsrs"]
+
+[badges]
+maintenance = { status = "actively-developed" }
+
+[features]
+default = []
+image = ["dep:image", "dep:bytes"]
+
+[dependencies]
+sha2 = "0.10"
+thiserror = "2"
+tracing = "0.1"
+
+# Optional dependencies for image conversion
+image = { version = "0.25", optional = true, default-features = false, features = ["png", "jpeg", "gif", "bmp"] }
+bytes = { version = "1.5", optional = true }
+
+[dev-dependencies]
