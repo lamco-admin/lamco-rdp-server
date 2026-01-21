@@ -58,7 +58,6 @@ jobs:
         run: |
           mkdir -p AppDir/usr/bin
           mkdir -p AppDir/usr/share/applications
-          mkdir -p AppDir/usr/share/icons/hicolor/scalable/apps
           mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
           mkdir -p AppDir/usr/share/icons/hicolor/128x128/apps
           mkdir -p AppDir/usr/share/icons/hicolor/64x64/apps
@@ -72,8 +71,7 @@ jobs:
           # Copy desktop file
           cp packaging/io.lamco.rdp-server.desktop AppDir/usr/share/applications/
 
-          # Copy icons
-          cp packaging/icons/io.lamco.rdp-server.svg AppDir/usr/share/icons/hicolor/scalable/apps/
+          # Copy icons (PNG only - no SVG due to rendering issues)
           cp packaging/icons/io.lamco.rdp-server-256.png AppDir/usr/share/icons/hicolor/256x256/apps/io.lamco.rdp-server.png
           cp packaging/icons/io.lamco.rdp-server-128.png AppDir/usr/share/icons/hicolor/128x128/apps/io.lamco.rdp-server.png
           cp packaging/icons/io.lamco.rdp-server-64.png AppDir/usr/share/icons/hicolor/64x64/apps/io.lamco.rdp-server.png
