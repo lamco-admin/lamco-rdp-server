@@ -118,6 +118,28 @@ pub mod egfx;
 /// - Statistics tracking for monitoring
 pub mod damage;
 
+/// Audio output via RDPSND (MS-RDPEA)
+///
+/// This module implements audio streaming from the server to RDP clients
+/// using the Audio Output Virtual Channel Extension protocol.
+///
+/// Key features:
+/// - **OPUS codec**: Modern, efficient, royalty-free (Windows 10+, FreeRDP)
+/// - **PCM fallback**: Universal compatibility for all clients
+/// - **Legacy codecs**: ADPCM, G.711 for older Windows versions
+/// - **PipeWire integration**: Desktop audio capture via portal session
+/// - **Low latency**: Target <100ms end-to-end
+///
+/// # Codec Priority
+///
+/// 1. OPUS (0x704F) - best quality/bandwidth, modern clients
+/// 2. ADPCM (0x0002) - good compression, legacy support
+/// 3. PCM (0x0001) - universal fallback
+/// 4. G.711 μ-law/A-law - telephony quality fallback
+///
+/// See: docs/architecture/RDPSND-IMPLEMENTATION-PLAN.md
+pub mod audio;
+
 /// Compositor capability probing
 ///
 /// This module automatically detects the running Wayland compositor

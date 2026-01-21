@@ -3568,6 +3568,7 @@ dependencies = [
  "anyhow",
  "ashpd 0.12.1",
  "async-trait",
+ "bytemuck",
  "bytes",
  "chrono",
  "clap",
@@ -3590,6 +3591,7 @@ dependencies = [
  "ironrdp-dvc",
  "ironrdp-egfx",
  "ironrdp-pdu",
+ "ironrdp-rdpsnd",
  "ironrdp-server",
  "ironrdp-svc",
  "ironrdp-tokio",
@@ -3610,6 +3612,7 @@ dependencies = [
  "nvidia-video-codec-sdk",
  "openh264",
  "openh264-sys2",
+ "opus2",
  "pam",
  "parking_lot",
  "percent-encoding",
@@ -3700,6 +3703,17 @@ name = "libm"
 version = "0.2.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9fbbcab51052fe104eb5e5d351cf728d30a5be1fe14d9be8a3b097481fb97de"
+
+[[package]]
+name = "libopus_sys"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b81c32f233fb2507347a93f97b9919493be9db7ec2249ce2c3ed0c89ad8edf60"
+dependencies = [
+ "cmake",
+ "log",
+ "pkg-config",
+]
 
 [[package]]
 name = "libredox"
@@ -4740,6 +4754,15 @@ name = "option-ext"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
+
+[[package]]
+name = "opus2"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3a4200c196ebf402d8a7091ce21845e8f2cd2f9c0c00deb73aaa14d024f6e6e"
+dependencies = [
+ "libopus_sys",
+]
 
 [[package]]
 name = "orbclient"

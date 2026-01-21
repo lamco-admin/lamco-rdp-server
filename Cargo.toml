@@ -101,6 +101,7 @@ ironrdp-core = { git = "https://github.com/lamco-admin/IronRDP", branch = "maste
 ironrdp-dvc = { git = "https://github.com/lamco-admin/IronRDP", branch = "master" }
 ironrdp-svc = { git = "https://github.com/lamco-admin/IronRDP", branch = "master" }
 ironrdp-egfx = { git = "https://github.com/lamco-admin/IronRDP", branch = "master" }
+ironrdp-rdpsnd = { git = "https://github.com/lamco-admin/IronRDP", branch = "master" }
 
 # -----------------------------------------------------------------------------
 # Wayland and Portal integration
@@ -123,6 +124,14 @@ reis = { version = "0.5", features = ["tokio"], optional = true }
 pipewire = "0.8"
 libspa = "0.8"
 libspa-sys = "0.8"
+
+# -----------------------------------------------------------------------------
+# Audio encoding (RDPSND)
+# -----------------------------------------------------------------------------
+# OPUS codec - royalty-free, low latency, high quality
+opus2 = { version = "0.3", features = ["bundled"] }
+# Byte slice casting for audio sample conversion
+bytemuck = "1.14"
 
 # -----------------------------------------------------------------------------
 # Input handling
@@ -348,6 +357,7 @@ ironrdp-core = { git = "https://github.com/lamco-admin/IronRDP", branch = "maste
 ironrdp-tokio = { git = "https://github.com/lamco-admin/IronRDP", branch = "master" }
 ironrdp-displaycontrol = { git = "https://github.com/lamco-admin/IronRDP", branch = "master" }
 ironrdp-egfx = { git = "https://github.com/lamco-admin/IronRDP", branch = "master" }
+ironrdp-rdpsnd = { git = "https://github.com/lamco-admin/IronRDP", branch = "master" }
 
 # Patch git dependencies from lamco-rdp-workspace (lamco-rdp-clipboard uses git fork)
 # Redirect glamberson fork references to lamco-admin fork
