@@ -57,6 +57,34 @@ pub mod server;
 /// Utility functions
 pub mod utils;
 
+/// Unified capability detection and fallback system
+///
+/// This module provides comprehensive capability detection across all subsystems
+/// with consistent fallback behavior and diagnostic reporting.
+///
+/// Key features:
+/// - **Pre-flight checks**: Detect capabilities before attempting operations
+/// - **Graceful fallbacks**: Automatic fallback to software rendering, etc.
+/// - **Diagnostic reporting**: Detailed reports for troubleshooting
+/// - **VM support**: Proper handling of VMs without GPU passthrough
+///
+/// # Example
+///
+/// ```ignore
+/// use lamco_rdp_server::capabilities::CapabilityManager;
+///
+/// // Initialize at startup
+/// CapabilityManager::initialize().await?;
+///
+/// // Check if GUI can run
+/// let mgr = CapabilityManager::global();
+/// let state = mgr.read().await;
+/// if !state.state.minimum_viable.can_render_gui() {
+///     eprintln!("GUI not available");
+/// }
+/// ```
+pub mod capabilities;
+
 /// Clipboard orchestration (bridges portal ↔ RDP)
 ///
 /// This module provides the glue code that connects:
@@ -89,6 +117,28 @@ pub mod egfx;
 /// - Automatic region merging
 /// - Statistics tracking for monitoring
 pub mod damage;
+
+/// Audio output via RDPSND (MS-RDPEA)
+///
+/// This module implements audio streaming from the server to RDP clients
+/// using the Audio Output Virtual Channel Extension protocol.
+///
+/// Key features:
+/// - **OPUS codec**: Modern, efficient, royalty-free (Windows 10+, FreeRDP)
+/// - **PCM fallback**: Universal compatibility for all clients
+/// - **Legacy codecs**: ADPCM, G.711 for older Windows versions
+/// - **PipeWire integration**: Desktop audio capture via portal session
+/// - **Low latency**: Target <100ms end-to-end
+///
+/// # Codec Priority
+///
+/// 1. OPUS (0x704F) - best quality/bandwidth, modern clients
+/// 2. ADPCM (0x0002) - good compression, legacy support
+/// 3. PCM (0x0001) - universal fallback
+/// 4. G.711 μ-law/A-law - telephony quality fallback
+///
+/// See: docs/architecture/RDPSND-IMPLEMENTATION-PLAN.md
+pub mod audio;
 
 /// Compositor capability probing
 ///
@@ -190,9 +240,18 @@ pub mod session;
 /// See: docs/architecture/SESSION-PERSISTENCE-ARCHITECTURE.md (Phase 3)
 pub mod mutter;
 
-/// GUI configuration application (optional)
+/// GUI for configuration (optional)
 ///
-/// Provides a graphical interface for configuring the RDP server.
+/// Provides a complete graphical user interface for configuring the RDP server
+/// using the iced framework. This module includes:
+///
+/// - 10 configuration tabs for all 85+ parameters
+/// - Service registry and capabilities display
+/// - Live log viewer with filtering
+/// - Hardware detection (VA-API, NVENC)
+/// - Certificate generation
+/// - Preset systems for common configurations
+///
 /// Requires the `gui` feature to be enabled.
 #[cfg(feature = "gui")]
 pub mod gui;

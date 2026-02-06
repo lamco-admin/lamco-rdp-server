@@ -8,7 +8,7 @@
 //! AVC444 blur issue on RHEL 9.
 
 use super::capabilities::{BufferType, CaptureBackend, CompositorType};
-use super::probing::{detect_os_release, OsRelease};
+use super::probing::detect_os_release;
 
 /// Known compositor quirks that require workarounds
 #[derive(Debug, Clone, PartialEq, Eq)]

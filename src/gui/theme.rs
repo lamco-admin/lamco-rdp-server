@@ -13,36 +13,36 @@ pub mod colors {
     use iced::Color;
 
     // Brand accent - sophisticated teal/cyan
-    pub const PRIMARY: Color = Color::from_rgb(0.0, 0.75, 0.85);       // #00BFD8 - vibrant cyan
+    pub const PRIMARY: Color = Color::from_rgb(0.0, 0.75, 0.85); // #00BFD8 - vibrant cyan
     pub const PRIMARY_LIGHT: Color = Color::from_rgb(0.2, 0.85, 0.95); // Lighter for hover
-    pub const PRIMARY_DARK: Color = Color::from_rgb(0.0, 0.55, 0.65);  // Deeper for pressed
+    pub const PRIMARY_DARK: Color = Color::from_rgb(0.0, 0.55, 0.65); // Deeper for pressed
 
     // Dark slate backgrounds - layered for depth
-    pub const BACKGROUND: Color = Color::from_rgb(0.08, 0.09, 0.11);   // #14171C - deepest
-    pub const SURFACE: Color = Color::from_rgb(0.11, 0.12, 0.14);      // #1C1F24 - cards/panels
+    pub const BACKGROUND: Color = Color::from_rgb(0.08, 0.09, 0.11); // #14171C - deepest
+    pub const SURFACE: Color = Color::from_rgb(0.11, 0.12, 0.14); // #1C1F24 - cards/panels
     pub const SURFACE_DARK: Color = Color::from_rgb(0.14, 0.15, 0.18); // #242630 - elevated
-    pub const SURFACE_LIGHT: Color = Color::from_rgb(0.18, 0.19, 0.22);// #2E3138 - hover states
+    pub const SURFACE_LIGHT: Color = Color::from_rgb(0.18, 0.19, 0.22); // #2E3138 - hover states
 
     // Borders - subtle definition
-    pub const BORDER: Color = Color::from_rgb(0.22, 0.24, 0.28);       // #383D47
+    pub const BORDER: Color = Color::from_rgb(0.22, 0.24, 0.28); // #383D47
     pub const BORDER_LIGHT: Color = Color::from_rgb(0.28, 0.30, 0.35); // Highlighted borders
 
     // Typography - high contrast for readability
     pub const TEXT_PRIMARY: Color = Color::from_rgb(0.93, 0.94, 0.96); // #EDEFFA - bright white
-    pub const TEXT_SECONDARY: Color = Color::from_rgb(0.65, 0.68, 0.75);// #A6AEC0 - muted
-    pub const TEXT_MUTED: Color = Color::from_rgb(0.45, 0.48, 0.55);   // #737A8C - subtle
+    pub const TEXT_SECONDARY: Color = Color::from_rgb(0.65, 0.68, 0.75); // #A6AEC0 - muted
+    pub const TEXT_MUTED: Color = Color::from_rgb(0.45, 0.48, 0.55); // #737A8C - subtle
 
     // Semantic status colors - vivid for visibility on dark bg
-    pub const SUCCESS: Color = Color::from_rgb(0.2, 0.85, 0.5);        // #33D980 - green
-    pub const WARNING: Color = Color::from_rgb(1.0, 0.75, 0.2);        // #FFBF33 - amber
-    pub const ERROR: Color = Color::from_rgb(1.0, 0.35, 0.4);          // #FF5966 - red
-    pub const INFO: Color = Color::from_rgb(0.4, 0.65, 1.0);           // #66A6FF - blue
+    pub const SUCCESS: Color = Color::from_rgb(0.2, 0.85, 0.5); // #33D980 - green
+    pub const WARNING: Color = Color::from_rgb(1.0, 0.75, 0.2); // #FFBF33 - amber
+    pub const ERROR: Color = Color::from_rgb(1.0, 0.35, 0.4); // #FF5966 - red
+    pub const INFO: Color = Color::from_rgb(0.4, 0.65, 1.0); // #66A6FF - blue
 
     // Service registry levels - enterprise dashboard style
-    pub const GUARANTEED: Color = Color::from_rgb(0.2, 0.9, 0.55);     // Bright green
-    pub const BEST_EFFORT: Color = Color::from_rgb(0.4, 0.7, 1.0);     // Sky blue
-    pub const DEGRADED: Color = Color::from_rgb(1.0, 0.75, 0.3);       // Amber
-    pub const UNAVAILABLE: Color = Color::from_rgb(0.55, 0.58, 0.65);  // Gray
+    pub const GUARANTEED: Color = Color::from_rgb(0.2, 0.9, 0.55); // Bright green
+    pub const BEST_EFFORT: Color = Color::from_rgb(0.4, 0.7, 1.0); // Sky blue
+    pub const DEGRADED: Color = Color::from_rgb(1.0, 0.75, 0.3); // Amber
+    pub const UNAVAILABLE: Color = Color::from_rgb(0.55, 0.58, 0.65); // Gray
 
     // Log viewer - terminal aesthetic
     pub const LOG_ERROR: Color = Color::from_rgb(1.0, 0.4, 0.45);
@@ -57,7 +57,7 @@ pub mod colors {
     pub const TAB_HOVER: Color = PRIMARY_LIGHT;
 
     // Header gradient endpoints (for future gradient support)
-    pub const HEADER_BG: Color = Color::from_rgb(0.06, 0.07, 0.09);    // Darkest
+    pub const HEADER_BG: Color = Color::from_rgb(0.06, 0.07, 0.09); // Darkest
 }
 
 /// Subtle shadow for elevation
@@ -249,7 +249,11 @@ pub fn tab_button_style(active: bool) -> impl Fn(&Theme, button::Status) -> butt
                 colors::TEXT_SECONDARY
             },
             border: Border {
-                color: if active { colors::PRIMARY } else { Color::TRANSPARENT },
+                color: if active {
+                    colors::PRIMARY
+                } else {
+                    Color::TRANSPARENT
+                },
                 width: if active { 0.0 } else { 0.0 },
                 radius: 8.0.into(),
             },
@@ -343,7 +347,11 @@ pub fn preset_button_style(selected: bool) -> impl Fn(&Theme, button::Status) ->
                 width: 1.0,
                 radius: 6.0.into(),
             },
-            shadow: if selected { accent_glow() } else { Shadow::default() },
+            shadow: if selected {
+                accent_glow()
+            } else {
+                Shadow::default()
+            },
             snap: false,
         };
 
@@ -425,12 +433,12 @@ pub fn status_badge_style(running: bool) -> impl Fn(&Theme) -> container::Style 
     move |_theme: &Theme| {
         let (bg, border) = if running {
             (
-                Color::from_rgba(0.2, 0.85, 0.5, 0.15),  // Green tint
+                Color::from_rgba(0.2, 0.85, 0.5, 0.15), // Green tint
                 Color::from_rgba(0.2, 0.85, 0.5, 0.4),
             )
         } else {
             (
-                Color::from_rgba(1.0, 0.35, 0.4, 0.15),  // Red tint
+                Color::from_rgba(1.0, 0.35, 0.4, 0.15), // Red tint
                 Color::from_rgba(1.0, 0.35, 0.4, 0.4),
             )
         };

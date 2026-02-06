@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
 use zeroize::Zeroizing;
 
-use super::credentials::{detect_deployment_context, CredentialStorageMethod, EncryptionType};
+use super::credentials::{detect_deployment_context, CredentialStorageMethod};
 use super::flatpak_secret::FlatpakSecretManager;
 use super::secret_service::AsyncSecretServiceClient;
 use super::tpm_store::AsyncTpmCredentialStore;

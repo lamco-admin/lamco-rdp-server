@@ -256,7 +256,7 @@ impl StreamParameters {
         key: &str,
         index: usize,
     ) -> Option<i32> {
-        use zbus::zvariant::{Str, Structure};
+        use zbus::zvariant::Structure;
 
         dict.get(key).and_then(|value| {
             // Attempt to downcast to Structure

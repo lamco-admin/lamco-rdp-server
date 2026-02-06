@@ -939,3 +939,73 @@ impl Default for AdvancedVideoConfig {
         }
     }
 }
+
+/// Audio configuration (RDPSND)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AudioConfig {
+    /// Enable audio support
+    #[serde(default = "default_audio_enabled")]
+    pub enabled: bool,
+
+    /// Preferred codec ("opus", "pcm", "adpcm", "auto")
+    /// - "opus": High quality, low bandwidth (recommended)
+    /// - "pcm": Uncompressed, highest quality but bandwidth-heavy
+    /// - "adpcm": Legacy compatibility, moderate compression
+    /// - "auto": Let client choose best supported codec
+    #[serde(default = "default_audio_codec")]
+    pub codec: String,
+
+    /// Sample rate in Hz (8000, 16000, 44100, 48000)
+    #[serde(default = "default_audio_sample_rate")]
+    pub sample_rate: u32,
+
+    /// Number of channels (1 = mono, 2 = stereo)
+    #[serde(default = "default_audio_channels")]
+    pub channels: u8,
+
+    /// Frame duration in milliseconds (10, 20, 40, 60)
+    /// Lower = less latency but more overhead
+    #[serde(default = "default_audio_frame_ms")]
+    pub frame_ms: u32,
+
+    /// OPUS bitrate in bps (default: 64000)
+    #[serde(default = "default_opus_bitrate")]
+    pub opus_bitrate: u32,
+}
+
+fn default_audio_enabled() -> bool {
+    true
+}
+
+fn default_audio_codec() -> String {
+    "auto".to_string()
+}
+
+fn default_audio_sample_rate() -> u32 {
+    48000
+}
+
+fn default_audio_channels() -> u8 {
+    2
+}
+
+fn default_audio_frame_ms() -> u32 {
+    20
+}
+
+fn default_opus_bitrate() -> u32 {
+    64000
+}
+
+impl Default for AudioConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_audio_enabled(),
+            codec: default_audio_codec(),
+            sample_rate: default_audio_sample_rate(),
+            channels: default_audio_channels(),
+            frame_ms: default_audio_frame_ms(),
+            opus_bitrate: default_opus_bitrate(),
+        }
+    }
+}

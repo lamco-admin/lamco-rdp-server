@@ -41,8 +41,6 @@ pub use remote_desktop::{MutterRemoteDesktop, MutterRemoteDesktopSession};
 pub use screencast::{MutterScreenCast, MutterScreenCastSession, MutterScreenCastStream};
 pub use session_manager::{MutterSessionHandle, MutterSessionManager};
 
-use anyhow::Result;
-
 /// Check if Mutter ScreenCast API is available
 ///
 /// Returns true if org.gnome.Mutter.ScreenCast is accessible on D-Bus

@@ -8,7 +8,7 @@
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use std::sync::Arc;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 use crate::mutter::{MutterSessionHandle, MutterSessionManager};
 use crate::session::strategy::{

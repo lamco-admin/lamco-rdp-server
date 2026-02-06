@@ -13,6 +13,7 @@ pub enum Tab {
     Server,
     Security,
     Video,
+    Audio,
     Input,
     Clipboard,
     Logging,
@@ -28,6 +29,7 @@ impl Tab {
             Tab::Server,
             Tab::Security,
             Tab::Video,
+            Tab::Audio,
             Tab::Input,
             Tab::Clipboard,
             Tab::Logging,
@@ -43,6 +45,7 @@ impl Tab {
             Tab::Server => "Server",
             Tab::Security => "Security",
             Tab::Video => "Video",
+            Tab::Audio => "Audio",
             Tab::Input => "Input",
             Tab::Clipboard => "Clipboard",
             Tab::Logging => "Logging",
@@ -58,6 +61,7 @@ impl Tab {
             Tab::Server => "🖥",
             Tab::Security => "🔒",
             Tab::Video => "🎬",
+            Tab::Audio => "🔊",
             Tab::Input => "⌨",
             Tab::Clipboard => "📋",
             Tab::Logging => "📝",
@@ -90,6 +94,11 @@ pub struct EditStrings {
     // Clipboard tab
     pub max_size_mb: String,
     pub rate_limit: String,
+
+    // Audio tab
+    pub audio_sample_rate: String,
+    pub audio_frame_ms: String,
+    pub audio_opus_bitrate: String,
 
     // Logging tab
     pub log_dir: String,
@@ -161,6 +170,11 @@ impl EditStrings {
             // Clipboard (convert bytes to MB for display)
             max_size_mb: (config.clipboard.max_size / (1024 * 1024)).to_string(),
             rate_limit: config.clipboard.rate_limit_ms.to_string(),
+
+            // Audio
+            audio_sample_rate: config.audio.sample_rate.to_string(),
+            audio_frame_ms: config.audio.frame_ms.to_string(),
+            audio_opus_bitrate: (config.audio.opus_bitrate / 1000).to_string(), // Display as kbps
 
             // Logging
             log_dir: config

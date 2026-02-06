@@ -51,6 +51,22 @@ impl ColorRange {
             ColorRange::Full => 1,
         }
     }
+
+    /// Y range per ITU-R BT.601: limited 16-235, full 0-255
+    pub const fn y_range(&self) -> (u8, u8) {
+        match self {
+            ColorRange::Limited => (16, 235),
+            ColorRange::Full => (0, 255),
+        }
+    }
+
+    /// UV range per ITU-R BT.601: limited 16-240, full 0-255
+    pub const fn uv_range(&self) -> (u8, u8) {
+        match self {
+            ColorRange::Limited => (16, 240),
+            ColorRange::Full => (0, 255),
+        }
+    }
 }
 
 /// H.264 VUI colour_primaries values (ITU-T H.264 Table E-3)

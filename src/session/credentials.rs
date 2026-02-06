@@ -6,7 +6,7 @@
 use anyhow::{anyhow, Context, Result};
 use std::path::Path;
 use std::process::Command;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 /// Deployment context affecting available strategies
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

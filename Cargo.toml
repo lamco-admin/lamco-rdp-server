@@ -1,9 +1,9 @@
 [package]
 name = "lamco-rdp-server"
-version = "1.0.0"
+version = "1.2.2"
 edition = "2021"
-rust-version = "1.77"
-authors = ["Lamco <contact@lamco.ai>"]
+rust-version = "1.85"
+authors = ["Greg Lamberson <greg@lamco.io>"]
 description = "Wayland RDP server - Portal mode for Linux desktop sharing"
 license = "BUSL-1.1"
 repository = "https://github.com/lamco-admin/lamco-rdp-server"
@@ -101,6 +101,7 @@ ironrdp-core = { git = "https://github.com/lamco-admin/IronRDP", branch = "maste
 ironrdp-dvc = { git = "https://github.com/lamco-admin/IronRDP", branch = "master" }
 ironrdp-svc = { git = "https://github.com/lamco-admin/IronRDP", branch = "master" }
 ironrdp-egfx = { git = "https://github.com/lamco-admin/IronRDP", branch = "master" }
+ironrdp-rdpsnd = { git = "https://github.com/lamco-admin/IronRDP", branch = "master" }
 
 # -----------------------------------------------------------------------------
 # Wayland and Portal integration
@@ -125,6 +126,14 @@ libspa = "0.8"
 libspa-sys = "0.8"
 
 # -----------------------------------------------------------------------------
+# Audio encoding (RDPSND)
+# -----------------------------------------------------------------------------
+# OPUS codec - royalty-free, low latency, high quality
+opus2 = { version = "0.3", features = ["bundled"] }
+# Byte slice casting for audio sample conversion
+bytemuck = "1.14"
+
+# -----------------------------------------------------------------------------
 # Input handling
 # -----------------------------------------------------------------------------
 xkbcommon = "0.7"
@@ -140,7 +149,7 @@ sha2 = "0.10"
 # H.264 encoding (optional, for EGFX)
 # -----------------------------------------------------------------------------
 # Using published version with VUI support and NUM_REF extension for AVC444
-openh264 = { version = "0.9.1", optional = true }
+openh264 = { version = "0.9.2", optional = true }
 openh264-sys2 = { version = "0.9.1", default-features = false, features = ["source"], optional = true }
 
 # -----------------------------------------------------------------------------
@@ -162,7 +171,7 @@ cudarc = { version = "0.16", optional = true, default-features = false, features
 nix = { version = "0.29", features = ["signal", "process", "mman"] }
 libc = "0.2"
 fuser = "0.15"  # FUSE filesystem for clipboard file transfer
-chrono = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1.6", features = ["v4", "serde"] }
 sysinfo = "0.30"
 hostname = "0.4"
@@ -201,9 +210,9 @@ time = { version = "0.3", features = ["formatting", "macros"] }
 pam = { version = "0.7", optional = true }
 
 # -----------------------------------------------------------------------------
-# GUI (optional)
+# GUI (optional - for configuration GUI)
 # -----------------------------------------------------------------------------
-iced = { version = "0.14", optional = true, features = ["tokio", "advanced", "lazy"] }
+iced = { version = "0.14", optional = true, features = ["tokio", "advanced", "canvas", "lazy", "svg"] }
 rfd = { version = "0.15", optional = true, default-features = false, features = ["xdg-portal", "tokio"] }
 
 # =============================================================================
@@ -225,7 +234,6 @@ default = ["pam-auth", "h264"]
 
 # GUI for configuration (optional, adds ~40MB to binary)
 gui = ["iced", "rfd"]
-
 wayland = ["wayland-client", "wayland-protocols", "wayland-protocols-misc", "wayland-protocols-wlr"]
 libei = ["reis"]
 pam-auth = ["pam"]
@@ -327,15 +335,6 @@ cast_possible_wrap = "allow"
 # =============================================================================
 
 [patch.crates-io]
-# openh264-rs from lamco-admin fork - MSRV lowered from 1.88 to 1.77 for OBS compatibility
-# Upstream uses edition 2024 (requires Rust 1.88), we use edition 2021
-openh264 = { git = "https://github.com/lamco-admin/openh264-rs", branch = "lamco-lower-msrv" }
-openh264-sys2 = { git = "https://github.com/lamco-admin/openh264-rs", branch = "lamco-lower-msrv" }
-
-# zune-jpeg from GitHub main - MSRV fix merged but not released to crates.io yet
-# Crates.io 0.5.8 requires Rust 1.87, GitHub main has MSRV 1.75 (commit 2841ef7)
-zune-jpeg = { git = "https://github.com/etemesi254/zune-image", branch = "main" }
-
 # IronRDP from lamco-admin fork - EGFX + clipboard file transfer
 # PRs pending upstream: #1057 (EGFX), #1063-1066 (clipboard)
 # All crates patched to same source to avoid trait conflicts
@@ -350,6 +349,7 @@ ironrdp-core = { git = "https://github.com/lamco-admin/IronRDP", branch = "maste
 ironrdp-tokio = { git = "https://github.com/lamco-admin/IronRDP", branch = "master" }
 ironrdp-displaycontrol = { git = "https://github.com/lamco-admin/IronRDP", branch = "master" }
 ironrdp-egfx = { git = "https://github.com/lamco-admin/IronRDP", branch = "master" }
+ironrdp-rdpsnd = { git = "https://github.com/lamco-admin/IronRDP", branch = "master" }
 
 # Patch git dependencies from lamco-rdp-workspace (lamco-rdp-clipboard uses git fork)
 # Redirect glamberson fork references to lamco-admin fork

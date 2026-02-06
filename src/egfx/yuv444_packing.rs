@@ -239,7 +239,7 @@ pub fn pack_main_view(yuv444: &Yuv444Frame) -> Yuv420Frame {
     // macroblock alignment internally. Padding breaks openh264-rs buffer validation.
 
     // DEEP DIAGNOSTIC: Sample multiple screen positions to capture colorful areas
-    use tracing::{debug, trace};
+    use tracing::debug;
     if width == 1280 && height == 800 {
         debug!("═══ MAIN VIEW MULTI-POSITION ANALYSIS ═══");
 
@@ -509,7 +509,7 @@ fn pack_auxiliary_view_spec_compliant(yuv444: &Yuv444Frame) -> Yuv420Frame {
     }
 
     // DIAGNOSTIC: Multi-position auxiliary view analysis
-    use tracing::{debug, trace};
+    use tracing::debug;
     if width == 1280 && height == 800 {
         debug!("═══ AUXILIARY VIEW MULTI-POSITION ANALYSIS ═══");
 

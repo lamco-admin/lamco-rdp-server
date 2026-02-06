@@ -84,7 +84,7 @@ use crate::portal::StreamInfo;
 use crate::server::egfx_sender::EgfxFrameSender;
 use crate::server::event_multiplexer::GraphicsFrame;
 use crate::server::gfx_factory::HandlerState;
-use crate::services::{ServiceId, ServiceLevel, ServiceRegistry};
+use crate::services::{ServiceId, ServiceRegistry};
 use crate::video::{BitmapConverter, BitmapUpdate, RdpPixelFormat};
 
 /// Video encoder abstraction for codec-agnostic frame encoding

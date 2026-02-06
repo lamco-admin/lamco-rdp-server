@@ -10,7 +10,7 @@
 //! 4. Portal + Token (universal, one-time dialog)
 //! 5. Basic Portal (fallback, dialog each time)
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
