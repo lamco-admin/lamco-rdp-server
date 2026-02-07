@@ -1,7 +1,4 @@
-//! Capability probes for each subsystem
-//!
-//! This module contains specialized probes for detecting capabilities
-//! in different subsystems.
+//! Capability probes for each subsystem.
 
 mod display;
 mod encoding;
@@ -24,16 +21,14 @@ pub use storage::{StorageBackend, StorageCapabilities, StorageProbe};
 use std::path::Path;
 use std::process::Command;
 
-/// Common probe utilities
-pub mod utils {
+/// Environment detection (virtualization, display server, command availability)
+pub mod environment {
     use super::*;
 
-    /// Check if a path exists
     pub fn path_exists(path: impl AsRef<Path>) -> bool {
         path.as_ref().exists()
     }
 
-    /// Check if a command is available
     pub fn command_available(cmd: &str) -> bool {
         Command::new("which")
             .arg(cmd)
@@ -42,7 +37,6 @@ pub mod utils {
             .unwrap_or(false)
     }
 
-    /// Run a command and capture output
     pub fn run_command(cmd: &str, args: &[&str]) -> Result<String, std::io::Error> {
         let output = Command::new(cmd).args(args).output()?;
 
@@ -56,49 +50,33 @@ pub mod utils {
         }
     }
 
-    /// Detect virtualization type
     #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
     pub enum VirtualizationType {
-        /// Not running in a VM
         None,
-        /// QEMU (often with KVM)
         Qemu,
-        /// KVM hypervisor
         Kvm,
-        /// Oracle VirtualBox
         VirtualBox,
-        /// VMware products
         VMware,
-        /// Microsoft Hyper-V
         HyperV,
-        /// Xen hypervisor
         Xen,
-        /// Docker container
         Docker,
-        /// Podman container
         Podman,
-        /// LXC/LXD container
         Lxc,
-        /// Other virtualization
         Other(String),
     }
 
     impl VirtualizationType {
-        /// Check if this virtualization typically has GPU passthrough
         pub fn has_gpu_passthrough(&self) -> bool {
-            // Can't reliably determine this; assume no for safety
             matches!(self, Self::None)
         }
 
-        /// Check if this is any form of virtualization
         pub fn is_virtualized(&self) -> bool {
             !matches!(self, Self::None)
         }
     }
 
-    /// Detect what type of virtualization we're running under
     pub fn detect_virtualization() -> VirtualizationType {
-        // Try systemd-detect-virt first (most reliable)
+        // Most reliable detection method
         if let Ok(output) = run_command("systemd-detect-virt", &[]) {
             let virt = output.trim().to_lowercase();
             return match virt.as_str() {
@@ -117,7 +95,6 @@ pub mod utils {
             };
         }
 
-        // Fallback: check DMI
         if let Ok(content) = std::fs::read_to_string("/sys/devices/virtual/dmi/id/product_name") {
             let content = content.to_lowercase();
             if content.contains("virtualbox") {
@@ -131,7 +108,6 @@ pub mod utils {
             }
         }
 
-        // Check for container
         if Path::new("/.dockerenv").exists() {
             return VirtualizationType::Docker;
         }
@@ -147,16 +123,12 @@ pub mod utils {
         VirtualizationType::None
     }
 
-    /// Detect display server
     #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
     pub enum DisplayServer {
-        /// Wayland compositor
         Wayland,
-        /// X11 server
         X11,
     }
 
-    /// Detect which display server is in use
     pub fn detect_display_server() -> Option<DisplayServer> {
         if std::env::var("WAYLAND_DISPLAY").is_ok() {
             Some(DisplayServer::Wayland)

@@ -40,22 +40,6 @@ use super::nvenc::NvencEncoder;
 /// 2. VA-API
 /// 3. NVENC (fallback if VA-API preferred but failed)
 ///
-/// # Arguments
-///
-/// * `config` - Hardware encoding configuration
-/// * `width` - Initial frame width
-/// * `height` - Initial frame height
-///
-/// # Returns
-///
-/// A boxed hardware encoder implementing `HardwareEncoder` trait
-///
-/// # Errors
-///
-/// Returns `HardwareEncoderError::NoBackendAvailable` if:
-/// - No hardware features are enabled at compile time
-/// - All enabled backends fail to initialize
-///
 /// # Example
 ///
 /// ```rust,ignore
@@ -188,10 +172,7 @@ fn try_nvenc(
     Ok(Box::new(encoder))
 }
 
-/// Check if hardware encoding is likely to be available
-///
 /// Performs quick checks without actually initializing an encoder.
-/// Useful for configuration validation or UI hints.
 ///
 /// Returns (vaapi_available, nvenc_available)
 pub fn probe_backends() -> (bool, bool) {

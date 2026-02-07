@@ -22,7 +22,6 @@ use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 use tracing::debug;
 
-/// Latency mode selection
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum LatencyMode {
@@ -38,7 +37,6 @@ pub enum LatencyMode {
 }
 
 impl LatencyMode {
-    /// Get target latency for this mode
     pub fn target_latency_ms(&self) -> u32 {
         match self {
             Self::Interactive => 50,
@@ -47,7 +45,6 @@ impl LatencyMode {
         }
     }
 
-    /// Get human-readable description
     pub fn description(&self) -> &'static str {
         match self {
             Self::Interactive => "Low latency (<50ms) - Gaming, CAD, interactive design",
@@ -80,7 +77,6 @@ impl std::str::FromStr for LatencyMode {
     }
 }
 
-/// Mode-specific settings
 #[derive(Debug, Clone)]
 struct ModeSettings {
     /// Maximum delay before forcing frame encode (ms)
@@ -118,7 +114,6 @@ impl ModeSettings {
     }
 }
 
-/// Encoding decision from the governor
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EncodingDecision {
     /// Encode frame immediately (damage threshold met)
@@ -141,7 +136,6 @@ pub enum EncodingDecision {
 }
 
 impl EncodingDecision {
-    /// Check if this decision means we should encode
     pub fn should_encode(&self) -> bool {
         matches!(
             self,
@@ -150,14 +144,10 @@ impl EncodingDecision {
     }
 }
 
-/// Frame accumulator for batching
 #[derive(Debug, Default)]
 struct FrameAccumulator {
-    /// Total damage accumulated since last encode
     pending_damage: f32,
-    /// Time of first damage in current batch
     first_damage_time: Option<Instant>,
-    /// Number of frames accumulated
     frame_count: u32,
 }
 
@@ -183,20 +173,14 @@ impl FrameAccumulator {
     }
 }
 
-/// Latency metrics for monitoring
 #[derive(Debug, Clone, Default)]
 pub struct LatencyMetrics {
-    /// Rolling average: capture to encode start
     pub capture_to_encode_avg_ms: f32,
-    /// Rolling average: encode duration
     pub encode_duration_avg_ms: f32,
-    /// Rolling average: total latency
     pub total_latency_avg_ms: f32,
-    /// Frames encoded
     pub frames_encoded: u64,
-    /// Frames skipped
     pub frames_skipped: u64,
-    /// Batches (quality mode)
+    /// Only used in Quality mode
     pub batches_encoded: u64,
 }
 
@@ -205,20 +189,14 @@ pub struct LatencyMetrics {
 /// Decides when to encode frames based on damage accumulation
 /// and mode-specific latency targets.
 pub struct LatencyGovernor {
-    /// Current mode
     mode: LatencyMode,
-    /// Mode-specific settings
     settings: ModeSettings,
-    /// Frame accumulator
     accumulator: FrameAccumulator,
-    /// Last encode time
     last_encode_time: Instant,
-    /// Metrics
     metrics: LatencyMetrics,
 }
 
 impl LatencyGovernor {
-    /// Create a new latency governor with the specified mode
     pub fn new(mode: LatencyMode) -> Self {
         Self {
             settings: ModeSettings::for_mode(mode),
@@ -229,9 +207,7 @@ impl LatencyGovernor {
         }
     }
 
-    /// Determine if we should encode this frame
-    ///
-    /// Call this after damage detection to get an encoding decision.
+    /// Call after damage detection for each frame.
     pub fn should_encode_frame(&mut self, damage_ratio: f32) -> EncodingDecision {
         self.accumulator.add_damage(damage_ratio);
 
@@ -275,7 +251,6 @@ impl LatencyGovernor {
             }
         };
 
-        // Update metrics and reset accumulator if encoding
         if decision.should_encode() {
             self.record_encode();
         } else {
@@ -294,7 +269,6 @@ impl LatencyGovernor {
         decision
     }
 
-    /// Record that an encode was performed
     fn record_encode(&mut self) {
         self.metrics.frames_encoded += 1;
         if self.accumulator.frame_count > 1 {
@@ -304,7 +278,6 @@ impl LatencyGovernor {
         self.accumulator.reset();
     }
 
-    /// Record encode timing for metrics
     pub fn record_encode_timing(&mut self, capture_to_encode_ms: f32, encode_duration_ms: f32) {
         // Simple exponential moving average
         const ALPHA: f32 = 0.1;
@@ -319,12 +292,10 @@ impl LatencyGovernor {
             self.metrics.capture_to_encode_avg_ms + self.metrics.encode_duration_avg_ms;
     }
 
-    /// Get current mode
     pub fn mode(&self) -> LatencyMode {
         self.mode
     }
 
-    /// Set latency mode
     pub fn set_mode(&mut self, mode: LatencyMode) {
         if mode != self.mode {
             debug!("Latency mode changed: {:?} -> {:?}", self.mode, mode);
@@ -334,27 +305,22 @@ impl LatencyGovernor {
         }
     }
 
-    /// Check if adaptive FPS should be used with current mode
     pub fn should_use_adaptive_fps(&self) -> bool {
         self.settings.use_adaptive_fps
     }
 
-    /// Get encode timeout for current mode
     pub fn encode_timeout(&self) -> Duration {
         Duration::from_millis(self.settings.encode_timeout_ms as u64)
     }
 
-    /// Get metrics
     pub fn metrics(&self) -> &LatencyMetrics {
         &self.metrics
     }
 
-    /// Reset metrics
     pub fn reset_metrics(&mut self) {
         self.metrics = LatencyMetrics::default();
     }
 
-    /// Get time since last encode
     pub fn time_since_last_encode(&self) -> Duration {
         self.last_encode_time.elapsed()
     }

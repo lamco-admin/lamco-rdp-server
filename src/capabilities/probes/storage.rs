@@ -32,7 +32,6 @@ pub enum StorageBackend {
 }
 
 impl StorageBackend {
-    /// Get human-readable name
     pub fn name(&self) -> &str {
         match self {
             Self::SecretService => "Secret Service (Keyring)",
@@ -42,7 +41,6 @@ impl StorageBackend {
         }
     }
 
-    /// Get service level for this backend
     pub fn service_level(&self) -> ServiceLevel {
         match self {
             Self::SecretService => ServiceLevel::Full,
@@ -57,25 +55,21 @@ impl StorageBackend {
 pub struct StorageProbe;
 
 impl StorageProbe {
-    /// Probe storage capabilities
     pub async fn probe() -> StorageCapabilities {
         info!("Probing storage capabilities...");
 
         let mut backends = Vec::new();
 
-        // Check Flatpak Secret Portal first (if in Flatpak)
         if std::env::var("FLATPAK_ID").is_ok() {
             backends.push(StorageBackend::FlatpakSecret);
             debug!("Flatpak Secret Portal available");
         }
 
-        // Check Secret Service (D-Bus)
         if Self::check_secret_service() {
             backends.push(StorageBackend::SecretService);
             debug!("Secret Service available");
         }
 
-        // Check TPM 2.0
         if Self::check_tpm() {
             backends.push(StorageBackend::Tpm);
             debug!("TPM 2.0 available");
@@ -85,7 +79,6 @@ impl StorageProbe {
         backends.push(StorageBackend::EncryptedFile);
         debug!("Encrypted file storage always available");
 
-        // Sort by service level (best first)
         backends.sort_by(|a, b| b.service_level().cmp(&a.service_level()));
 
         let selected = backends.first().cloned();
@@ -107,8 +100,7 @@ impl StorageProbe {
     }
 
     fn check_secret_service() -> bool {
-        // Check if org.freedesktop.secrets is available on D-Bus
-        // This is a heuristic - we assume it's available if GNOME or KDE
+        // Heuristic: assume available if GNOME or KDE (both ship a Secret Service provider)
         let desktop = std::env::var("XDG_CURRENT_DESKTOP")
             .unwrap_or_default()
             .to_lowercase();
@@ -122,7 +114,6 @@ impl StorageProbe {
     }
 
     fn check_tpm() -> bool {
-        // Check for TPM 2.0 device
         std::path::Path::new("/dev/tpm0").exists() || std::path::Path::new("/dev/tpmrm0").exists()
     }
 }

@@ -7,6 +7,51 @@ use std::time::{Duration, SystemTime};
 
 use crate::config::Config;
 
+/// Tab categories for organized navigation
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TabCategory {
+    #[default]
+    Core,
+    System,
+    Media,
+}
+
+impl TabCategory {
+    pub fn all() -> &'static [TabCategory] {
+        &[TabCategory::Core, TabCategory::System, TabCategory::Media]
+    }
+
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            TabCategory::Core => "Core",
+            TabCategory::System => "System",
+            TabCategory::Media => "Media & I/O",
+        }
+    }
+
+    pub fn icon(&self) -> &'static str {
+        match self {
+            TabCategory::Core => "🖥",
+            TabCategory::System => "⚙",
+            TabCategory::Media => "🎬",
+        }
+    }
+
+    pub fn tabs(&self) -> &'static [Tab] {
+        match self {
+            TabCategory::Core => &[Tab::Server, Tab::Security],
+            TabCategory::System => &[Tab::Performance, Tab::Advanced, Tab::Status],
+            TabCategory::Media => &[
+                Tab::Video,
+                Tab::Egfx,
+                Tab::Audio,
+                Tab::Input,
+                Tab::Clipboard,
+            ],
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Tab {
     #[default]
@@ -16,7 +61,6 @@ pub enum Tab {
     Audio,
     Input,
     Clipboard,
-    Logging,
     Performance,
     Egfx,
     Advanced,
@@ -32,7 +76,6 @@ impl Tab {
             Tab::Audio,
             Tab::Input,
             Tab::Clipboard,
-            Tab::Logging,
             Tab::Performance,
             Tab::Egfx,
             Tab::Advanced,
@@ -48,7 +91,6 @@ impl Tab {
             Tab::Audio => "Audio",
             Tab::Input => "Input",
             Tab::Clipboard => "Clipboard",
-            Tab::Logging => "Logging",
             Tab::Performance => "Performance",
             Tab::Egfx => "EGFX",
             Tab::Advanced => "Advanced",
@@ -64,11 +106,18 @@ impl Tab {
             Tab::Audio => "🔊",
             Tab::Input => "⌨",
             Tab::Clipboard => "📋",
-            Tab::Logging => "📝",
             Tab::Performance => "⚡",
             Tab::Egfx => "🎨",
             Tab::Advanced => "⚙",
             Tab::Status => "📊",
+        }
+    }
+
+    pub fn category(&self) -> TabCategory {
+        match self {
+            Tab::Server | Tab::Security => TabCategory::Core,
+            Tab::Video | Tab::Audio | Tab::Input | Tab::Clipboard | Tab::Egfx => TabCategory::Media,
+            Tab::Performance | Tab::Advanced | Tab::Status => TabCategory::System,
         }
     }
 }
@@ -147,6 +196,9 @@ pub struct EditStrings {
     pub lookahead: String,
     pub max_pred_dist: String,
     pub min_velocity: String,
+
+    // Multimon tab
+    pub max_monitors: String,
 }
 
 impl EditStrings {
@@ -164,8 +216,8 @@ impl EditStrings {
             key_path: config.security.key_path.display().to_string(),
             valid_days: "365".to_string(),
 
-            // Video
-            vaapi_device: config.video.vaapi_device.display().to_string(),
+            // Hardware Encoding
+            vaapi_device: config.hardware_encoding.vaapi_device.display().to_string(),
 
             // Clipboard (convert bytes to MB for display)
             max_size_mb: (config.clipboard.max_size / (1024 * 1024)).to_string(),
@@ -240,6 +292,9 @@ impl EditStrings {
             lookahead: format!("{:.1}", config.cursor.predictor.lookahead_ms),
             max_pred_dist: config.cursor.predictor.max_prediction_distance.to_string(),
             min_velocity: format!("{:.1}", config.cursor.predictor.min_velocity_threshold),
+
+            // Multimon
+            max_monitors: config.multimon.max_monitors.to_string(),
         }
     }
 
@@ -294,6 +349,8 @@ pub struct AppState {
     pub cursor_expanded: bool,
     pub cursor_predictor_expanded: bool,
     pub egfx_expert_mode: bool,
+    pub multimon_expanded: bool,
+    pub logging_expanded: bool,
 
     // Certificate generation dialog state
     pub cert_gen_dialog: Option<CertGenState>,
@@ -310,6 +367,13 @@ pub struct AppState {
     // Dialog states
     pub confirm_discard_dialog: bool,
     pub pending_action: Option<PendingAction>,
+
+    // First-run certificate setup
+    pub first_run_cert_dialog: bool,
+    pub first_run_cert_generating: bool,
+
+    // Close behavior: true = closing GUI stops server, false = GUI closes but server keeps running
+    pub close_stops_server: bool,
 }
 
 impl AppState {
@@ -319,6 +383,30 @@ impl AppState {
         let config = Config::load(config_path.to_str().unwrap_or_default())
             .unwrap_or_else(|_| Config::default_config().unwrap_or_default());
         let edit_strings = EditStrings::from_config(&config);
+
+        // Extract gui_state values before moving config into the struct
+        let gui_state = &config.gui_state;
+        let expert_mode = gui_state.expert_mode;
+        let egfx_expert_mode = gui_state.egfx_expert_mode;
+        let video_pipeline_expanded = gui_state.video_pipeline_expanded;
+        let adaptive_fps_expanded = gui_state.adaptive_fps_expanded;
+        let latency_expanded = gui_state.latency_expanded;
+        let damage_tracking_expanded = gui_state.damage_tracking_expanded;
+        let hardware_encoding_expanded = gui_state.hardware_encoding_expanded;
+        let display_expanded = gui_state.display_expanded;
+        let advanced_video_expanded = gui_state.advanced_video_expanded;
+        let cursor_expanded = gui_state.cursor_expanded;
+        let cursor_predictor_expanded = gui_state.cursor_predictor_expanded;
+        let log_auto_scroll = gui_state.log_auto_scroll;
+        let log_filter_level = match gui_state.log_filter_level.as_str() {
+            "trace" => LogLevel::Trace,
+            "debug" => LogLevel::Debug,
+            "info" => LogLevel::Info,
+            "warn" => LogLevel::Warn,
+            "error" => LogLevel::Error,
+            _ => LogLevel::Info,
+        };
+        let close_stops_server = gui_state.close_stops_server;
 
         Self {
             config,
@@ -332,25 +420,30 @@ impl AppState {
             detected_vaapi_devices: Vec::new(),
             detected_capabilities: None,
             active_preset: None,
-            expert_mode: false,
-            video_pipeline_expanded: false,
-            adaptive_fps_expanded: true,
-            latency_expanded: true,
-            damage_tracking_expanded: true,
-            hardware_encoding_expanded: true,
-            display_expanded: true,
-            advanced_video_expanded: false,
-            cursor_expanded: true,
-            cursor_predictor_expanded: false,
-            egfx_expert_mode: false,
+            expert_mode,
+            video_pipeline_expanded,
+            adaptive_fps_expanded,
+            latency_expanded,
+            damage_tracking_expanded,
+            hardware_encoding_expanded,
+            display_expanded,
+            advanced_video_expanded,
+            cursor_expanded,
+            cursor_predictor_expanded,
+            egfx_expert_mode,
+            multimon_expanded: false,
+            logging_expanded: false,
             cert_gen_dialog: None,
             log_buffer: Vec::new(),
-            log_auto_scroll: true,
-            log_filter_level: LogLevel::Info,
+            log_auto_scroll,
+            log_filter_level,
             max_log_lines: 1000,
             messages: Vec::new(),
             confirm_discard_dialog: false,
             pending_action: None,
+            first_run_cert_dialog: false,
+            first_run_cert_generating: false,
+            close_stops_server,
         }
     }
 
@@ -366,9 +459,50 @@ impl AppState {
         self.last_saved = Some(SystemTime::now());
     }
 
+    /// Sync GUI state back to config before saving
+    ///
+    /// This ensures UI preferences (expanded sections, expert mode, etc.)
+    /// are persisted when the config file is saved.
+    pub fn sync_gui_state_to_config(&mut self) {
+        self.config.gui_state.expert_mode = self.expert_mode;
+        self.config.gui_state.egfx_expert_mode = self.egfx_expert_mode;
+        self.config.gui_state.video_pipeline_expanded = self.video_pipeline_expanded;
+        self.config.gui_state.adaptive_fps_expanded = self.adaptive_fps_expanded;
+        self.config.gui_state.latency_expanded = self.latency_expanded;
+        self.config.gui_state.damage_tracking_expanded = self.damage_tracking_expanded;
+        self.config.gui_state.hardware_encoding_expanded = self.hardware_encoding_expanded;
+        self.config.gui_state.display_expanded = self.display_expanded;
+        self.config.gui_state.advanced_video_expanded = self.advanced_video_expanded;
+        self.config.gui_state.cursor_expanded = self.cursor_expanded;
+        self.config.gui_state.cursor_predictor_expanded = self.cursor_predictor_expanded;
+        self.config.gui_state.log_auto_scroll = self.log_auto_scroll;
+        self.config.gui_state.log_filter_level = match self.log_filter_level {
+            LogLevel::Trace => "trace".to_string(),
+            LogLevel::Debug => "debug".to_string(),
+            LogLevel::Info => "info".to_string(),
+            LogLevel::Warn => "warn".to_string(),
+            LogLevel::Error => "error".to_string(),
+        };
+        self.config.gui_state.close_stops_server = self.close_stops_server;
+    }
+
     /// Get default config file path
+    ///
+    /// Location depends on deployment context:
+    /// - Flatpak: ~/.var/app/io.lamco.rdp-server/config/config.toml
+    /// - Native: ~/.config/lamco-rdp-server/config.toml or /etc/lamco-rdp-server/config.toml
     fn default_config_path() -> PathBuf {
-        // Try in order:
+        use crate::config::is_flatpak;
+
+        if is_flatpak() {
+            // In Flatpak, only use the sandboxed config directory
+            // dirs::config_dir() returns ~/.var/app/<app-id>/config in Flatpak
+            return dirs::config_dir()
+                .unwrap_or_else(|| PathBuf::from("/app/config"))
+                .join("config.toml");
+        }
+
+        // Native: Try in order:
         // 1. $XDG_CONFIG_HOME/lamco-rdp-server/config.toml
         // 2. ~/.config/lamco-rdp-server/config.toml
         // 3. /etc/lamco-rdp-server/config.toml
@@ -403,7 +537,6 @@ impl AppState {
     /// Add log line to buffer
     pub fn add_log_line(&mut self, line: LogLine) {
         self.log_buffer.push(line);
-        // Trim to max lines
         if self.log_buffer.len() > self.max_log_lines {
             self.log_buffer.remove(0);
         }
@@ -543,6 +676,11 @@ pub struct DetectedCapabilities {
     pub recommended_fps: Option<u32>,
     pub recommended_codec: Option<String>,
     pub zero_copy_available: bool,
+
+    // Authentication (derived from services)
+    /// Available authentication methods based on deployment context
+    /// Derived from PamAuthentication/NoAuthentication service levels
+    pub available_auth_methods: Vec<String>,
 
     // Timestamp
     pub detected_at: SystemTime,

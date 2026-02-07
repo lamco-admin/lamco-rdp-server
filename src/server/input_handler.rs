@@ -86,6 +86,10 @@ use crate::input::{
     CoordinateTransformer, InputError, KeyboardHandler, MonitorInfo, MouseButton, MouseHandler,
 };
 
+fn portal_err(e: impl std::fmt::Display) -> InputError {
+    InputError::PortalError(e.to_string())
+}
+
 /// WRD Input Handler
 ///
 /// Bridges IronRDP input events to our Portal-based input injection system.
@@ -128,32 +132,17 @@ pub struct LamcoInputHandler {
 }
 
 impl LamcoInputHandler {
-    /// Create a new input handler
-    ///
-    /// # Arguments
-    ///
-    /// * `portal` - RemoteDesktop portal manager
-    /// * `session` - Portal session handle (must remain alive)
-    /// * `monitors` - Monitor configuration for coordinate transformation
-    ///
-    /// # Returns
-    ///
-    /// A new `WrdInputHandler` instance ready to process input events
-    ///
-    /// # Errors
-    ///
-    /// Returns error if coordinate transformer initialization fails
     pub fn new(
         session_handle: Arc<dyn crate::session::SessionHandle>,
         monitors: Vec<MonitorInfo>,
         primary_stream_id: u32,
         input_tx: mpsc::Sender<InputEvent>,
         mut input_rx: mpsc::Receiver<InputEvent>,
+        mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
     ) -> Result<Self, InputError> {
         let keyboard_handler = Arc::new(Mutex::new(KeyboardHandler::new()));
         let mouse_handler = Arc::new(Mutex::new(MouseHandler::new()));
 
-        // Create coordinate transformer with monitor configuration
         let coordinate_transformer = Arc::new(Mutex::new(CoordinateTransformer::new(monitors)?));
 
         debug!(
@@ -222,8 +211,15 @@ impl LamcoInputHandler {
 
                         last_flush = Instant::now();
                     }
+
+                    _ = shutdown_rx.recv() => {
+                        info!("🛑 Input batching task received shutdown signal");
+                        break;
+                    }
                 }
             }
+
+            info!("Input batching task stopped");
         });
 
         info!("Input batching task started (REAL task, 10ms flush interval)");
@@ -236,6 +232,28 @@ impl LamcoInputHandler {
             primary_stream_id,
             input_tx,
         })
+    }
+
+    /// Notify input handler that client reconnected
+    ///
+    /// Resets internal state to handle new client connection.
+    /// Call this when reconnection is detected (e.g., display_updates channel recreated).
+    pub async fn notify_reconnection(&self) {
+        info!("🔄 Input handler: Client reconnected, resetting state");
+
+        {
+            let mut kbd = self.keyboard_handler.lock().await;
+            *kbd = KeyboardHandler::new();
+            debug!("Keyboard handler state reset");
+        }
+
+        {
+            let mut mouse = self.mouse_handler.lock().await;
+            *mouse = MouseHandler::new();
+            debug!("Mouse handler state reset");
+        }
+
+        info!("✅ Input handler ready for reconnected client");
     }
 
     /// Update coordinate transformer when monitor configuration changes
@@ -269,10 +287,8 @@ impl LamcoInputHandler {
                 }
                 debug!("Keyboard pressed: code={}, extended={}", code, extended);
 
-                // Process key down through keyboard handler
                 let kbd_event = keyboard.handle_key_down(code as u16, extended, false)?;
 
-                // Extract keycode from our event
                 let keycode = match kbd_event {
                     crate::input::KeyboardEvent::KeyDown { keycode, .. }
                     | crate::input::KeyboardEvent::KeyRepeat { keycode, .. } => keycode,
@@ -302,13 +318,10 @@ impl LamcoInputHandler {
                     );
                 }
 
-                // Inject key press via session (Portal or Mutter)
                 session_handle
                     .notify_keyboard_keycode(keycode as i32, true)
                     .await
-                    .map_err(|e| {
-                        InputError::PortalError(format!("Failed to inject key press: {}", e))
-                    })?;
+                    .map_err(portal_err)?;
             }
 
             IronKeyboardEvent::Released { code, extended } => {
@@ -322,10 +335,8 @@ impl LamcoInputHandler {
                 }
                 debug!("Keyboard released: code={}, extended={}", code, extended);
 
-                // Process key up through keyboard handler
                 let kbd_event = keyboard.handle_key_up(code as u16, extended, false)?;
 
-                // Extract keycode from our event
                 let keycode = match kbd_event {
                     crate::input::KeyboardEvent::KeyUp { keycode, .. } => keycode,
                     _ => {
@@ -344,13 +355,10 @@ impl LamcoInputHandler {
                     );
                 }
 
-                // Inject key release via session (Portal or Mutter)
                 session_handle
                     .notify_keyboard_keycode(keycode as i32, false)
                     .await
-                    .map_err(|e| {
-                        InputError::PortalError(format!("Failed to inject key release: {}", e))
-                    })?;
+                    .map_err(portal_err)?;
             }
 
             IronKeyboardEvent::UnicodePressed(unicode) => {
@@ -399,11 +407,9 @@ impl LamcoInputHandler {
             IronMouseEvent::Move { x, y } => {
                 debug!("Mouse move: x={}, y={}", x, y);
 
-                // Process absolute move through mouse handler
                 let mouse_event =
                     mouse.handle_absolute_move(x as u32, y as u32, &mut transformer)?;
 
-                // Extract coordinates from our event
                 let (stream_x, stream_y) = match mouse_event {
                     crate::input::MouseEvent::Move { x, y, .. } => (x, y),
                     _ => {
@@ -413,23 +419,17 @@ impl LamcoInputHandler {
                     }
                 };
 
-                // Inject mouse movement via session (Portal or Mutter)
-                // Uses PipeWire node ID for stream identification
                 session_handle
                     .notify_pointer_motion_absolute(stream_id, stream_x, stream_y)
                     .await
-                    .map_err(|e| {
-                        InputError::PortalError(format!("Failed to inject mouse move: {}", e))
-                    })?;
+                    .map_err(portal_err)?;
             }
 
             IronMouseEvent::RelMove { x, y } => {
                 debug!("Mouse relative move: dx={}, dy={}", x, y);
 
-                // Process relative move through mouse handler
                 let mouse_event = mouse.handle_relative_move(x, y, &mut transformer)?;
 
-                // Extract coordinates
                 let (stream_x, stream_y) = match mouse_event {
                     crate::input::MouseEvent::Move { x, y, .. } => (x, y),
                     _ => {
@@ -439,153 +439,111 @@ impl LamcoInputHandler {
                     }
                 };
 
-                // Inject via session absolute API (we converted relative to absolute already)
+                // We converted relative to absolute already
                 session_handle
                     .notify_pointer_motion_absolute(stream_id, stream_x, stream_y)
                     .await
-                    .map_err(|e| {
-                        InputError::PortalError(format!("Failed to inject relative move: {}", e))
-                    })?;
+                    .map_err(portal_err)?;
             }
 
             IronMouseEvent::LeftPressed => {
-                debug!("Left mouse button pressed");
                 mouse.handle_button_down(MouseButton::Left)?;
                 session_handle
-                    .notify_pointer_button(272, true) // BTN_LEFT = 0x110 = 272 (evdev code)
+                    .notify_pointer_button(272, true) // BTN_LEFT
                     .await
-                    .map_err(|e| {
-                        InputError::PortalError(format!("Failed to inject left press: {}", e))
-                    })?;
+                    .map_err(portal_err)?;
             }
 
             IronMouseEvent::LeftReleased => {
-                debug!("Left mouse button released");
                 mouse.handle_button_up(MouseButton::Left)?;
                 session_handle
-                    .notify_pointer_button(272, false) // BTN_LEFT = 0x110 = 272
+                    .notify_pointer_button(272, false)
                     .await
-                    .map_err(|e| {
-                        InputError::PortalError(format!("Failed to inject left release: {}", e))
-                    })?;
+                    .map_err(portal_err)?;
             }
 
             IronMouseEvent::RightPressed => {
-                debug!("Right mouse button pressed");
                 mouse.handle_button_down(MouseButton::Right)?;
                 session_handle
-                    .notify_pointer_button(273, true) // BTN_RIGHT = 0x111 = 273
+                    .notify_pointer_button(273, true) // BTN_RIGHT
                     .await
-                    .map_err(|e| {
-                        InputError::PortalError(format!("Failed to inject right press: {}", e))
-                    })?;
+                    .map_err(portal_err)?;
             }
 
             IronMouseEvent::RightReleased => {
-                debug!("Right mouse button released");
                 mouse.handle_button_up(MouseButton::Right)?;
                 session_handle
-                    .notify_pointer_button(273, false) // BTN_RIGHT = 0x111 = 273
+                    .notify_pointer_button(273, false)
                     .await
-                    .map_err(|e| {
-                        InputError::PortalError(format!("Failed to inject right release: {}", e))
-                    })?;
+                    .map_err(portal_err)?;
             }
 
             IronMouseEvent::MiddlePressed => {
-                debug!("Middle mouse button pressed");
                 mouse.handle_button_down(MouseButton::Middle)?;
                 session_handle
-                    .notify_pointer_button(274, true) // BTN_MIDDLE = 0x112 = 274
+                    .notify_pointer_button(274, true) // BTN_MIDDLE
                     .await
-                    .map_err(|e| {
-                        InputError::PortalError(format!("Failed to inject middle press: {}", e))
-                    })?;
+                    .map_err(portal_err)?;
             }
 
             IronMouseEvent::MiddleReleased => {
-                debug!("Middle mouse button released");
                 mouse.handle_button_up(MouseButton::Middle)?;
                 session_handle
-                    .notify_pointer_button(274, false) // BTN_MIDDLE = 0x112 = 274
+                    .notify_pointer_button(274, false)
                     .await
-                    .map_err(|e| {
-                        InputError::PortalError(format!("Failed to inject middle release: {}", e))
-                    })?;
+                    .map_err(portal_err)?;
             }
 
             IronMouseEvent::Button4Pressed => {
-                debug!("Mouse button 4 pressed");
                 mouse.handle_button_down(MouseButton::Extra1)?;
                 session_handle
-                    .notify_pointer_button(275, true) // BTN_SIDE = 8
+                    .notify_pointer_button(275, true) // BTN_SIDE
                     .await
-                    .map_err(|e| {
-                        InputError::PortalError(format!("Failed to inject button4 press: {}", e))
-                    })?;
+                    .map_err(portal_err)?;
             }
 
             IronMouseEvent::Button4Released => {
-                debug!("Mouse button 4 released");
                 mouse.handle_button_up(MouseButton::Extra1)?;
                 session_handle
                     .notify_pointer_button(275, false)
                     .await
-                    .map_err(|e| {
-                        InputError::PortalError(format!("Failed to inject button4 release: {}", e))
-                    })?;
+                    .map_err(portal_err)?;
             }
 
             IronMouseEvent::Button5Pressed => {
-                debug!("Mouse button 5 pressed");
                 mouse.handle_button_down(MouseButton::Extra2)?;
                 session_handle
-                    .notify_pointer_button(276, true) // BTN_EXTRA = 9
+                    .notify_pointer_button(276, true) // BTN_EXTRA
                     .await
-                    .map_err(|e| {
-                        InputError::PortalError(format!("Failed to inject button5 press: {}", e))
-                    })?;
+                    .map_err(portal_err)?;
             }
 
             IronMouseEvent::Button5Released => {
-                debug!("Mouse button 5 released");
                 mouse.handle_button_up(MouseButton::Extra2)?;
                 session_handle
                     .notify_pointer_button(276, false)
                     .await
-                    .map_err(|e| {
-                        InputError::PortalError(format!("Failed to inject button5 release: {}", e))
-                    })?;
+                    .map_err(portal_err)?;
             }
 
             IronMouseEvent::VerticalScroll { value } => {
-                debug!("Mouse vertical scroll: {}", value);
                 // RDP scroll units are in 120ths
                 mouse.handle_scroll(0, value as i32)?;
-
-                // Session scroll API takes continuous values
-                let delta_y = (value as f64 / 120.0) * 15.0; // 15 pixels per scroll unit
+                let delta_y = (value as f64 / 120.0) * 15.0;
                 session_handle
                     .notify_pointer_axis(0.0, delta_y)
                     .await
-                    .map_err(|e| {
-                        InputError::PortalError(format!("Failed to inject vertical scroll: {}", e))
-                    })?;
+                    .map_err(portal_err)?;
             }
 
             IronMouseEvent::Scroll { x, y } => {
-                debug!("Mouse scroll: x={}, y={}", x, y);
                 mouse.handle_scroll(x, y)?;
-
-                // Normalize scroll values
                 let delta_x = (x as f64 / 120.0) * 15.0;
                 let delta_y = (y as f64 / 120.0) * 15.0;
                 session_handle
                     .notify_pointer_axis(delta_x, delta_y)
                     .await
-                    .map_err(|e| {
-                        InputError::PortalError(format!("Failed to inject scroll: {}", e))
-                    })?;
+                    .map_err(portal_err)?;
             }
         }
 
@@ -593,15 +551,8 @@ impl LamcoInputHandler {
     }
 }
 
-/// Implement IronRDP's `RdpServerInputHandler` trait
-///
-/// This is a synchronous trait, so we spawn async tasks for each event.
-/// The portal API requires async operations, so we bridge the synchronous
-/// trait to async execution.
 impl RdpServerInputHandler for LamcoInputHandler {
     fn keyboard(&mut self, event: IronKeyboardEvent) {
-        // Send to batching queue (processed every 10ms)
-        // Use try_send (non-blocking, bounded queue)
         trace!("⌨️  Input multiplexer: routing keyboard to queue");
         if let Err(e) = self.input_tx.try_send(InputEvent::Keyboard(event)) {
             error!("Failed to queue keyboard event for batching: {}", e);
@@ -609,8 +560,6 @@ impl RdpServerInputHandler for LamcoInputHandler {
     }
 
     fn mouse(&mut self, event: IronMouseEvent) {
-        // Send to batching queue (processed every 10ms)
-        // Use try_send (non-blocking, bounded queue)
         trace!("🖱️  Input multiplexer: routing mouse to queue");
         if let Err(e) = self.input_tx.try_send(InputEvent::Mouse(event)) {
             error!("Failed to queue mouse event for batching: {}", e);
@@ -618,8 +567,7 @@ impl RdpServerInputHandler for LamcoInputHandler {
     }
 }
 
-/// Custom Clone implementation to allow handler to be cloned
-/// This is necessary because RdpServer needs ownership but we want to share state
+/// RdpServer needs ownership but we want to share state
 impl Clone for LamcoInputHandler {
     fn clone(&self) -> Self {
         Self {

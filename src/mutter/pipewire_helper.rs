@@ -37,7 +37,6 @@ pub fn connect_to_pipewire_daemon() -> Result<RawFd> {
 
     debug!("Attempting to connect to PipeWire socket: {}", socket_path);
 
-    // Use Unix domain socket to connect
     use std::os::unix::net::UnixStream;
 
     let stream = UnixStream::connect(&socket_path).context(format!(

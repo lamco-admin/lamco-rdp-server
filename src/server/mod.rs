@@ -73,6 +73,7 @@ pub use gfx_factory::{HandlerState, LamcoGfxFactory, SharedHandlerState};
 pub use input_handler::LamcoInputHandler;
 
 use anyhow::{Context, Result};
+use ironrdp_graphics::zgfx::CompressionMode;
 use ironrdp_pdu::rdp::capability_sets::server_codecs_capabilities;
 use ironrdp_server::{Credentials, RdpServer};
 use std::net::SocketAddr;
@@ -81,8 +82,8 @@ use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, error, info, warn};
 
 use crate::audio::factory::create_sound_factory;
-use crate::clipboard::{ClipboardConfig, ClipboardManager, LamcoCliprdrFactory};
-use crate::config::Config;
+use crate::clipboard::{ClipboardOrchestrator, ClipboardOrchestratorConfig, LamcoCliprdrFactory};
+use crate::config::{is_flatpak, Config};
 use crate::input::MonitorInfo as InputMonitorInfo;
 use crate::portal::PortalManager;
 use crate::security::TlsConfig;
@@ -108,30 +109,42 @@ pub struct LamcoRdpServer {
     /// Display handler (kept for lifecycle management)
     #[allow(dead_code)]
     display_handler: Arc<LamcoDisplayHandler>,
+
+    /// Service registry for capability/feature decisions
+    service_registry: Arc<ServiceRegistry>,
+
+    /// Clipboard manager (for cleanup on shutdown)
+    clipboard_manager: Option<Arc<tokio::sync::Mutex<ClipboardOrchestrator>>>,
+
+    /// Portal session for RemoteDesktop (for explicit close on shutdown)
+    portal_session: Option<
+        Arc<
+            tokio::sync::RwLock<
+                ashpd::desktop::Session<
+                    'static,
+                    ashpd::desktop::remote_desktop::RemoteDesktop<'static>,
+                >,
+            >,
+        >,
+    >,
+
+    /// Shutdown broadcast for coordinating async task shutdown
+    shutdown_broadcast: Arc<tokio::sync::broadcast::Sender<()>>,
+
+    /// Prevents double cleanup (run() path + Drop safety net)
+    cleanup_done: bool,
 }
 
 impl LamcoRdpServer {
-    /// Create a new server instance
-    ///
-    /// # Arguments
-    ///
-    /// * `config` - Server configuration
-    ///
-    /// # Returns
-    ///
-    /// A new `WrdServer` instance ready to run
     pub async fn new(config: Config) -> Result<Self> {
         info!("Initializing server");
         let config = Arc::new(config);
 
-        // === CAPABILITY PROBING ===
-        // Detect compositor and adapt configuration automatically
         info!("Probing compositor capabilities...");
         let capabilities = crate::compositor::probe_capabilities()
             .await
             .context("Failed to probe compositor capabilities")?;
 
-        // Apply quirks based on detected profile
         for quirk in &capabilities.profile.quirks {
             match quirk {
                 crate::compositor::Quirk::RequiresWaylandSession => {
@@ -174,8 +187,6 @@ impl LamcoRdpServer {
             capabilities.profile.recommended_buffer_type
         );
 
-        // === SESSION PERSISTENCE SETUP ===
-        // Detect deployment context and credential storage
         info!("Detecting deployment context and credential storage...");
 
         let deployment = crate::session::detect_deployment_context();
@@ -188,12 +199,10 @@ impl LamcoRdpServer {
             storage_method, encryption, accessible
         );
 
-        // Create TokenManager for session persistence
-        let token_manager = crate::session::TokenManager::new(storage_method)
+        let token_manager = crate::session::Tokens::new(storage_method)
             .await
-            .context("Failed to create TokenManager")?;
+            .context("Failed to create Tokens")?;
 
-        // Try to load existing restore token
         let restore_token = token_manager
             .load_token("default")
             .await
@@ -207,12 +216,24 @@ impl LamcoRdpServer {
             info!("   Permission dialog will appear (one-time grant)");
         }
 
-        // === SERVICE ADVERTISEMENT ===
-        // Translate compositor capabilities into advertised services
         let service_registry = Arc::new(ServiceRegistry::from_compositor(capabilities.clone()));
         service_registry.log_summary();
 
-        // Log service-aware premium feature decisions
+        let pam_level = service_registry.pam_auth_level();
+        if pam_level >= ServiceLevel::BestEffort {
+            info!("🔐 Authentication: PAM available ({:?})", pam_level);
+        } else {
+            info!("🔐 Authentication: PAM unavailable (sandboxed environment)");
+            info!(
+                "   Available methods: {:?}",
+                service_registry.available_auth_methods()
+            );
+            info!(
+                "   Recommended: {}",
+                service_registry.recommended_auth_method()
+            );
+        }
+
         let damage_level = service_registry.service_level(ServiceId::DamageTracking);
         let cursor_level = service_registry.service_level(ServiceId::MetadataCursor);
         let dmabuf_level = service_registry.service_level(ServiceId::DmaBufZeroCopy);
@@ -248,12 +269,13 @@ impl LamcoRdpServer {
             info!("   ⚠️ DMA-BUF: {} - using memory copy path", dmabuf_level);
         }
 
-        // === SESSION STRATEGY SELECTION ===
-        // Select best strategy based on detected capabilities
         info!("Selecting session strategy based on detected capabilities");
 
-        let strategy_selector =
-            SessionStrategySelector::new(service_registry.clone(), Arc::new(token_manager));
+        let strategy_selector = SessionStrategySelector::with_keyboard_layout(
+            service_registry.clone(),
+            Arc::new(token_manager),
+            config.input.keyboard_layout.clone(),
+        );
 
         let strategy = strategy_selector
             .select_strategy()
@@ -262,7 +284,6 @@ impl LamcoRdpServer {
 
         info!("🎯 Selected strategy: {}", strategy.name());
 
-        // Create session via selected strategy
         info!("Creating session via selected strategy");
         let session_handle = strategy
             .create_session()
@@ -271,13 +292,11 @@ impl LamcoRdpServer {
 
         info!("✅ Session created successfully via {}", strategy.name());
 
-        // Extract session details and handle different PipeWire access methods
         let (pipewire_fd, stream_info) = match session_handle.pipewire_access() {
             PipeWireAccess::FileDescriptor(fd) => {
                 // Portal path: FD directly provided
                 info!("Using Portal-provided PipeWire file descriptor: {}", fd);
 
-                // Convert strategy StreamInfo to portal StreamInfo format
                 let strategy_streams = session_handle.streams();
                 let portal_streams: Vec<crate::portal::StreamInfo> = strategy_streams
                     .iter()
@@ -292,7 +311,6 @@ impl LamcoRdpServer {
                 (fd, portal_streams)
             }
             PipeWireAccess::NodeId(node_id) => {
-                // Mutter path: Node ID provided, need to connect to PipeWire daemon
                 info!("Using Mutter-provided PipeWire node ID: {}", node_id);
 
                 let fd = crate::mutter::get_pipewire_fd_for_mutter()
@@ -300,7 +318,6 @@ impl LamcoRdpServer {
 
                 info!("Connected to PipeWire daemon, FD: {}", fd);
 
-                // Convert strategy StreamInfo to portal StreamInfo format
                 let strategy_streams = session_handle.streams();
                 let portal_streams: Vec<crate::portal::StreamInfo> = strategy_streams
                     .iter()
@@ -316,7 +333,6 @@ impl LamcoRdpServer {
             }
         };
 
-        // Create Portal manager for input+clipboard (needed for both strategies)
         let mut portal_config = config.to_portal_config();
         portal_config.persist_mode = ashpd::desktop::PersistMode::DoNot; // Don't persist (causes errors)
         portal_config.restore_token = None;
@@ -350,19 +366,19 @@ impl LamcoRdpServer {
                 info!("Strategy doesn't provide clipboard, creating separate Portal session for input+clipboard");
                 info!("HYBRID MODE: Mutter for video (zero dialogs), Portal for input+clipboard (one dialog)");
 
-                let session_id = format!("lamco-rdp-input-clipboard-{}", uuid::Uuid::new_v4());
-                let (portal_handle, _) = portal_manager
-                    .create_session(session_id, None)
-                    .await
-                    .context("Failed to create Portal session for input+clipboard")?;
-
-                // Only create clipboard if Portal supports it (v2+)
+                // CRITICAL: Create clipboard manager BEFORE session creation
+                // Clipboard must be requested during session setup, not after
                 let clipboard_mgr = if capabilities.portal.supports_clipboard {
-                    Some(Arc::new(
-                        lamco_portal::ClipboardManager::new()
-                            .await
-                            .context("Failed to create Portal clipboard manager")?,
-                    ))
+                    match lamco_portal::ClipboardManager::new().await {
+                        Ok(mgr) => {
+                            info!("Portal clipboard manager created (will be used during session creation)");
+                            Some(Arc::new(mgr))
+                        }
+                        Err(e) => {
+                            warn!("Failed to create clipboard manager: {}", e);
+                            None
+                        }
+                    }
                 } else {
                     info!(
                         "Skipping clipboard creation - Portal v{} doesn't support clipboard",
@@ -370,6 +386,12 @@ impl LamcoRdpServer {
                     );
                     None
                 };
+
+                let session_id = format!("lamco-rdp-input-clipboard-{}", uuid::Uuid::new_v4());
+                let (portal_handle, _) = portal_manager
+                    .create_session(session_id, clipboard_mgr.as_ref().map(|c| c.as_ref()))
+                    .await
+                    .context("Failed to create Portal session for input+clipboard")?;
 
                 info!("Separate Portal session created for input+clipboard (non-persistent)");
 
@@ -398,7 +420,6 @@ impl LamcoRdpServer {
             pipewire_fd
         );
 
-        // Determine initial desktop size from first stream
         let initial_size = stream_info
             .first()
             .map(|s| (s.size.0 as u16, s.size.1 as u16))
@@ -409,31 +430,35 @@ impl LamcoRdpServer {
             initial_size.0, initial_size.1
         );
 
-        // Create ALL 4 multiplexer queues (full implementation)
-        let (input_tx, input_rx) = tokio::sync::mpsc::channel(32); // Priority 1: Input
+        let (input_tx, input_rx) = tokio::sync::mpsc::channel(256); // Priority 1: Input - increased for mouse burst handling
         let (_control_tx, control_rx) = tokio::sync::mpsc::channel(16); // Priority 2: Control
         let (_clipboard_tx, clipboard_rx) = tokio::sync::mpsc::channel(8); // Priority 3: Clipboard
         let (graphics_tx, graphics_rx) = tokio::sync::mpsc::channel(64); // Priority 4: Graphics - increased for frame coalescing
         info!("📊 Full multiplexer queues created:");
-        info!("   Input queue: 32 (Priority 1 - never starve)");
+        info!("   Input queue: 256 (Priority 1 - handles mouse bursts)");
         info!("   Control queue: 16 (Priority 2 - session critical)");
         info!("   Clipboard queue: 8 (Priority 3 - user operations)");
         info!("   Graphics queue: 64 (Priority 4 - damage region coalescing)");
 
-        // Create EGFX/H.264 factory for video streaming BEFORE display handler
-        // This enables hardware-accelerated H.264 encoding when client supports it
-        //
-        // Check for platform quirks that affect codec selection:
-        // - Avc444Unreliable: Force AVC420 only (e.g., RHEL 9 blur issue)
+        // Avc444Unreliable quirk: Force AVC420 only (e.g., RHEL 9 blur issue)
         let force_avc420_only = capabilities
             .profile
             .has_quirk(&crate::compositor::Quirk::Avc444Unreliable);
-        let gfx_factory = LamcoGfxFactory::with_quirks(
+
+        let compression_mode = match config.egfx.zgfx_compression.to_lowercase().as_str() {
+            "auto" => CompressionMode::Auto,
+            "always" => CompressionMode::Always,
+            _ => CompressionMode::Never, // Default: no compression
+        };
+        info!("ZGFX compression mode: {:?}", compression_mode);
+
+        let gfx_factory = LamcoGfxFactory::with_config(
             initial_size.0 as u16,
             initial_size.1 as u16,
             force_avc420_only,
+            config.egfx.max_frames_in_flight,
+            compression_mode,
         );
-        // Get shared references BEFORE passing factory to builder
         let gfx_handler_state = gfx_factory.handler_state();
         let gfx_server_handle = gfx_factory.server_handle();
         if force_avc420_only {
@@ -442,7 +467,6 @@ impl LamcoRdpServer {
             info!("EGFX factory created for H.264/AVC420+AVC444 streaming");
         }
 
-        // Create display handler with PipeWire FD, stream info, graphics queue, and EGFX references
         let display_handler = Arc::new(
             LamcoDisplayHandler::new(
                 initial_size.0,
@@ -459,19 +483,15 @@ impl LamcoRdpServer {
             .context("Failed to create display handler")?,
         );
 
-        // Start the graphics drain task
         let update_sender = display_handler.get_update_sender();
         let _graphics_drain_handle =
             graphics_drain::start_graphics_drain_task(graphics_rx, update_sender);
         info!("Graphics drain task started");
 
-        // Start the display pipeline
         Arc::clone(&display_handler).start_pipeline();
 
-        // Create input handler for mouse and keyboard injection
         info!("Creating input handler for mouse/keyboard control");
 
-        // Convert stream info to monitor info for coordinate transformation
         let monitors: Vec<InputMonitorInfo> = stream_info
             .iter()
             .enumerate()
@@ -492,7 +512,6 @@ impl LamcoRdpServer {
             })
             .collect();
 
-        // Get the primary stream node ID for Portal input injection
         let primary_stream_id = stream_info.first().map(|s| s.node_id).unwrap_or(0);
 
         info!(
@@ -500,7 +519,9 @@ impl LamcoRdpServer {
             primary_stream_id
         );
 
-        // Create input handler using Portal session handle (works correctly)
+        let (shutdown_broadcast, _) = tokio::sync::broadcast::channel(16);
+        let shutdown_broadcast = Arc::new(shutdown_broadcast);
+
         // HYBRID: For Mutter strategy, uses Portal for input while Mutter handles video
         let input_handler = LamcoInputHandler::new(
             portal_input_handle, // Use Portal session for input (works on all DEs)
@@ -508,14 +529,18 @@ impl LamcoRdpServer {
             primary_stream_id,
             input_tx.clone(), // Multiplexer input queue sender (for handler callbacks)
             input_rx,         // Multiplexer input queue receiver (for batching task)
+            shutdown_broadcast.subscribe(), // Shutdown signal for batching task
         )
         .context("Failed to create input handler")?;
 
         info!("Input handler created successfully - mouse/keyboard enabled via Portal");
 
-        // Start full multiplexer drain loop
-        // Note: Input queue is handled by input_handler's batching task
-        // Multiplexer loop handles control/clipboard priorities
+        display_handler
+            .set_input_handler(Arc::new(input_handler.clone()))
+            .await;
+
+        // Input queue is handled by input_handler's batching task;
+        // multiplexer loop handles control/clipboard priorities
         let portal_for_mux = portal_manager.remote_desktop().clone();
         let keyboard_handler = input_handler.keyboard_handler.clone();
         let mouse_handler = input_handler.mouse_handler.clone();
@@ -535,63 +560,146 @@ impl LamcoRdpServer {
         ));
         info!("🚀 Full multiplexer drain loop started (control + clipboard priorities)");
 
-        // Create TLS acceptor from security config
         info!("Setting up TLS");
-        let tls_config =
-            TlsConfig::from_files(&config.security.cert_path, &config.security.key_path)
-                .context("Failed to load TLS certificates")?;
+        let tls_config = TlsConfig::from_files_with_options(
+            &config.security.cert_path,
+            &config.security.key_path,
+            config.security.require_tls_13,
+        )
+        .context("Failed to load TLS certificates")?;
 
         let tls_acceptor =
             ironrdp_server::tokio_rustls::TlsAcceptor::from(tls_config.server_config());
 
-        // Configure RemoteFX codec (IronRDP's built-in codec)
-        // Server uses "remotefx" string to enable RemoteFX codec (default enabled)
         let codecs = server_codecs_capabilities(&["remotefx"])
             .map_err(|e| anyhow::anyhow!("Failed to create codec capabilities: {}", e))?;
 
-        // Create clipboard manager
-        info!("Initializing clipboard manager");
-        let clipboard_config = ClipboardConfig::default();
-        let mut clipboard_mgr = ClipboardManager::new(clipboard_config)
-            .await
-            .context("Failed to create clipboard manager")?;
+        // Check for KDE Portal Clipboard bug (Bug 515465)
+        // All current KDE versions (6.3.90-6.5.x) have threading bugs in Portal Clipboard
+        // Disable clipboard entirely on KDE until upstream fix (v6.6+, NOT backported to 6.5.x)
+        let kde_clipboard_disabled = matches!(
+            capabilities.compositor,
+            crate::compositor::CompositorType::Kde { .. }
+        );
 
-        // Set Portal clipboard reference if available (from session or fallback)
-        if let Some(clipboard_mgr_arc) = portal_clipboard_manager {
-            clipboard_mgr
-                .set_portal_clipboard(clipboard_mgr_arc, Arc::clone(&portal_clipboard_session))
-                .await;
-            // Note: Success message logged inside set_portal_clipboard
+        let clipboard_manager = if config.clipboard.enabled && !kde_clipboard_disabled {
+            info!("Initializing clipboard manager");
+
+            // allowed_types: empty = all allowed, otherwise check for specific patterns
+            let all_allowed = config.clipboard.allowed_types.is_empty();
+            let has_type = |patterns: &[&str]| {
+                all_allowed
+                    || config
+                        .clipboard
+                        .allowed_types
+                        .iter()
+                        .any(|t| patterns.iter().any(|p| t.contains(p)))
+            };
+
+            let clipboard_config = ClipboardOrchestratorConfig {
+                max_data_size: config.clipboard.max_size,
+                enable_images: has_type(&["image/"]),
+                enable_files: has_type(&["uri-list", "file", "x-special"]),
+                enable_html: has_type(&["text/html"]),
+                enable_rtf: has_type(&["rtf"]),
+                rate_limit_ms: config.clipboard.rate_limit_ms,
+                kde_syncselection_hint: config.clipboard.kde_syncselection_hint,
+                ..ClipboardOrchestratorConfig::default()
+            };
+
+            let mut clipboard_mgr = ClipboardOrchestrator::new(clipboard_config)
+                .await
+                .context("Failed to create clipboard manager")?;
+
+            if let Some(clipboard_mgr_arc) = portal_clipboard_manager {
+                clipboard_mgr
+                    .set_portal_clipboard(clipboard_mgr_arc, Arc::clone(&portal_clipboard_session))
+                    .await;
+            } else {
+                info!("Clipboard: no Portal clipboard manager available");
+            }
+
+            let clipboard_strategy = crate::clipboard::ClipboardIntegrationMode::select(
+                &service_registry,
+                &config.clipboard,
+                is_flatpak(),
+            );
+
+            let session_connection = if clipboard_strategy.uses_klipper_cooperation() {
+                match zbus::Connection::session().await {
+                    Ok(conn) => {
+                        info!("D-Bus session connection established for Klipper cooperation");
+                        Some(conn)
+                    }
+                    Err(e) => {
+                        warn!("Failed to get D-Bus session connection: {}", e);
+                        warn!("Klipper cooperation will be disabled, falling back to Tier 3");
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+
+            if let Err(e) = clipboard_mgr
+                .initialize_strategy(clipboard_strategy, session_connection)
+                .await
+            {
+                warn!("Failed to initialize clipboard strategy: {:#}", e);
+                warn!("Clipboard may use default strategy");
+            }
+
+            // FUSE is not available in Flatpak sandbox (no /dev/fuse access)
+            if is_flatpak() {
+                info!("Flatpak detected - skipping FUSE mount (using staging fallback for file clipboard)");
+            } else if let Err(e) = clipboard_mgr.mount_fuse().await {
+                warn!("Failed to mount FUSE clipboard filesystem: {:?}", e);
+                warn!("File clipboard will use staging fallback (download files upfront)");
+            }
+
+            Arc::new(Mutex::new(clipboard_mgr))
         } else {
-            info!("Clipboard disabled - no Portal clipboard manager available");
-        }
+            if kde_clipboard_disabled {
+                warn!("═══════════════════════════════════════════════════════════");
+                warn!("  Clipboard DISABLED on KDE (Portal Bug 515465)");
+                warn!("═══════════════════════════════════════════════════════════");
+                warn!("KDE Portal Clipboard has critical threading bugs causing crashes.");
+                warn!("Bug: https://bugs.kde.org/show_bug.cgi?id=515465");
+                warn!("Status: Fix landed in KDE 6.6 (releases Feb 17, 2026)");
+                warn!("Note: Fix NOT backported to 6.5.x branch.");
+                warn!("");
+                warn!("Video and input work perfectly - only clipboard affected.");
+                warn!("Clipboard will be available after upgrading to KDE 6.6+.");
+                warn!("═══════════════════════════════════════════════════════════");
+            } else {
+                info!("Clipboard disabled by configuration");
+            }
+            let clipboard_mgr = ClipboardOrchestrator::new(ClipboardOrchestratorConfig::default())
+                .await
+                .context("Failed to create clipboard manager")?;
+            Arc::new(Mutex::new(clipboard_mgr))
+        };
 
-        // Mount FUSE filesystem for clipboard file transfer
-        // This enables on-demand file streaming for Windows → Linux file copy
-        if let Err(e) = clipboard_mgr.mount_fuse().await {
-            warn!("Failed to mount FUSE clipboard filesystem: {:?}", e);
-            warn!("File clipboard will use staging fallback (download files upfront)");
-        }
+        // Set clipboard manager reference in display handler for reconnection cleanup
+        // When client reconnects (detected via display channel exhaustion), display handler
+        // will clear Portal clipboard to prevent KDE Portal crash (Bug 515465)
+        display_handler
+            .set_clipboard_manager(Arc::clone(&clipboard_manager))
+            .await;
 
-        let clipboard_manager = Arc::new(Mutex::new(clipboard_mgr));
-
-        // Create clipboard factory for IronRDP
-        // Factory automatically starts event bridge task internally
         let clipboard_factory = LamcoCliprdrFactory::new(Arc::clone(&clipboard_manager));
 
-        // Note: gfx_factory was created earlier (before display handler)
-        // to share references with display handler
-
-        // Create sound factory for RDPSND audio support
         // TODO: Get audio node ID from portal session for targeted capture
-        let sound_factory = create_sound_factory(config.audio.enabled, None);
+        let sound_factory = create_sound_factory(&config.audio, None);
         if config.audio.enabled {
-            info!("Audio support enabled (RDPSND)");
+            info!(
+                "Audio support enabled: codec={}, sample_rate={}, channels={}",
+                config.audio.codec, config.audio.sample_rate, config.audio.channels
+            );
         } else {
             debug!("Audio support disabled by configuration");
         }
 
-        // Build IronRDP server using builder pattern
         info!("Building IronRDP server");
         let listen_addr: SocketAddr = config
             .server
@@ -599,7 +707,6 @@ impl LamcoRdpServer {
             .parse()
             .context("Invalid listen address")?;
 
-        // Build RDP server
         let rdp_server = RdpServer::builder()
             .with_addr(listen_addr)
             .with_tls(tls_acceptor)
@@ -611,7 +718,6 @@ impl LamcoRdpServer {
             .with_sound_factory(Some(Box::new(sound_factory)))
             .build();
 
-        // Set server event sender in display handler for EGFX message routing
         display_handler
             .set_server_event_sender(rdp_server.event_sender().clone())
             .await;
@@ -624,13 +730,15 @@ impl LamcoRdpServer {
             rdp_server,
             portal_manager,
             display_handler,
+            service_registry,
+            clipboard_manager: Some(clipboard_manager),
+            portal_session: Some(portal_clipboard_session),
+            shutdown_broadcast,
+            cleanup_done: false,
         })
     }
 
-    /// Run the server
-    ///
-    /// This starts the RDP server and handles incoming connections.
-    /// Blocks until the server is shut down.
+    /// Run the server, blocking until shutdown.
     pub async fn run(mut self) -> Result<()> {
         info!("╔════════════════════════════════════════════════════════════╗");
         info!("║          Server Starting                                   ║");
@@ -644,28 +752,59 @@ impl LamcoRdpServer {
         info!("Server is ready and listening for RDP connections");
         info!("Waiting for clients to connect...");
 
-        // Set credentials for RDP authentication
-        // Even with auth_method="none", we need to set empty/test credentials
-        // for IronRDP to complete the protocol handshake properly
-        let credentials = if self.config.security.auth_method == "none" {
+        // If config specifies PAM but PAM is unavailable (Flatpak), fall back gracefully
+        let configured_auth = &self.config.security.auth_method;
+        let effective_auth_method =
+            if configured_auth == "pam" && !self.service_registry.has_pam_auth() {
+                warn!("⚠️  PAM authentication configured but unavailable in this deployment");
+                warn!(
+                    "   PAM service level: {:?}",
+                    self.service_registry.pam_auth_level()
+                );
+                warn!(
+                    "   Falling back to recommended method: {}",
+                    self.service_registry.recommended_auth_method()
+                );
+                self.service_registry.recommended_auth_method()
+            } else {
+                configured_auth.as_str()
+            };
+
+        // Even with auth_method="none", IronRDP needs credentials
+        // to complete the protocol handshake
+        let credentials = if effective_auth_method == "none" {
             Some(Credentials {
                 username: String::new(),
                 password: String::new(),
                 domain: None,
             })
         } else {
-            // For future authentication support
+            // For future authentication support (PAM integration)
             None
         };
 
         self.rdp_server.set_credentials(credentials);
-        info!(
-            "Authentication configured: {}",
-            self.config.security.auth_method
-        );
 
-        // Run the IronRDP server
-        let result = self.rdp_server.run().await.context("RDP server error");
+        if effective_auth_method != configured_auth {
+            info!(
+                "Authentication: {} (configured: {}, fallback due to deployment)",
+                effective_auth_method, configured_auth
+            );
+        } else {
+            info!("Authentication: {}", effective_auth_method);
+        }
+
+        // Race rdp_server.run() against our shutdown broadcast.
+        // IronRDP's Quit event only closes the active connection — its outer accept
+        // loop continues waiting for new clients. The broadcast breaks our select.
+        let mut shutdown_rx = self.shutdown_broadcast.subscribe();
+        let result = tokio::select! {
+            result = self.rdp_server.run() => result.context("RDP server error"),
+            _ = shutdown_rx.recv() => {
+                info!("Shutdown broadcast received — stopping server");
+                Ok(())
+            }
+        };
 
         if let Err(ref e) = result {
             error!("Server stopped with error: {:#}", e);
@@ -673,14 +812,35 @@ impl LamcoRdpServer {
             info!("Server stopped gracefully");
         }
 
-        info!("Server shutdown complete");
+        info!("Performing post-run cleanup...");
+        if let Err(e) = self.on_disconnect().await {
+            warn!("Disconnect cleanup failed: {:#}", e);
+        }
+
+        if let Err(e) = self.cleanup_resources().await {
+            warn!("Resource cleanup failed: {:#}", e);
+        }
+
         result
     }
 
-    /// Graceful shutdown
-    ///
-    /// Sends a quit event to stop the server gracefully.
-    pub fn shutdown(&self) {
+    /// Useful for signal handlers that need to trigger shutdown after `run()` consumes self.
+    pub fn shutdown_sender(
+        &self,
+    ) -> tokio::sync::mpsc::UnboundedSender<ironrdp_server::ServerEvent> {
+        self.rdp_server.event_sender().clone()
+    }
+
+    /// Broadcast sender for coordinating shutdown across all async tasks.
+    /// Signal handlers should send on this AND on `shutdown_sender()` —
+    /// IronRDP needs the Quit event to close the TLS connection gracefully,
+    /// while the broadcast breaks our outer select loop and stops clipboard/PipeWire tasks.
+    pub fn shutdown_broadcast(&self) -> Arc<tokio::sync::broadcast::Sender<()>> {
+        Arc::clone(&self.shutdown_broadcast)
+    }
+
+    /// Signal graceful shutdown. Actual cleanup happens in cleanup_resources().
+    pub fn signal_shutdown(&self) {
         info!("Initiating graceful shutdown");
         let _ = self
             .rdp_server
@@ -688,14 +848,102 @@ impl LamcoRdpServer {
             .send(ironrdp_server::ServerEvent::Quit(
                 "Shutdown requested".to_string(),
             ));
+        let _ = self.shutdown_broadcast.send(());
+    }
+
+    /// Explicit cleanup preventing KDE Portal crashes during reconnect.
+    /// Portal sessions must be closed and clipboard operations cancelled
+    /// before resources are freed. See: docs/COMPREHENSIVE-CLEANUP-PLAN-2026-02-03.md Phase 1
+    pub async fn cleanup_resources(&mut self) -> Result<()> {
+        if self.cleanup_done {
+            debug!("Cleanup already performed, skipping");
+            return Ok(());
+        }
+        self.cleanup_done = true;
+
+        info!("═══════════════════════════════════════════════════════════");
+        info!("  Server Shutdown - Cleaning Resources");
+        info!("═══════════════════════════════════════════════════════════");
+
+        info!("  Broadcast shutdown signal to all subsystems...");
+        let subscriber_count = self.shutdown_broadcast.receiver_count();
+        info!("  Broadcasting to {} subscribers", subscriber_count);
+        let _ = self.shutdown_broadcast.send(());
+        info!("  ✅ Shutdown broadcast sent");
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+        if let Some(clipboard_arc) = &self.clipboard_manager {
+            info!("  Shutting down clipboard manager...");
+            let mut clipboard = clipboard_arc.lock().await;
+            clipboard.shutdown().await?;
+            info!("  ✅ Clipboard manager stopped");
+        }
+
+        // PipeWire is in Arc<Mutex<>> with references from spawned tasks;
+        // explicit shutdown ensures immediate cleanup
+        info!("  Shutting down PipeWire...");
+        self.display_handler.shutdown_pipewire().await;
+
+        if let Some(session_arc) = &self.portal_session {
+            info!("  Closing Portal session...");
+
+            let session_guard = session_arc.read().await;
+
+            match session_guard.close().await {
+                Ok(_) => {
+                    info!("  ✅ Portal session closed successfully");
+                }
+                Err(e) => {
+                    warn!("  ⚠️  Portal session close failed: {}", e);
+                    // Best effort cleanup
+                }
+            }
+        }
+
+        info!("  ═══════════════════════════════════════════════════════════");
+        info!("  ✅ Server shutdown complete");
+        info!("  ═══════════════════════════════════════════════════════════");
+
+        Ok(())
+    }
+
+    /// Clears transient state without closing Portal session (reusable for reconnect).
+    async fn on_disconnect(&self) -> Result<()> {
+        info!("Client disconnected - performing cleanup");
+
+        if let Some(clipboard_arc) = &self.clipboard_manager {
+            info!("  Clearing Portal clipboard...");
+            let clipboard = clipboard_arc.lock().await;
+            if let Err(e) = clipboard.clear_portal_clipboard().await {
+                warn!("  Failed to clear clipboard: {}", e);
+            } else {
+                info!("  ✅ Portal clipboard cleared");
+            }
+        }
+
+        info!("✅ Disconnect cleanup complete");
+        Ok(())
     }
 }
 
 impl Drop for LamcoRdpServer {
     fn drop(&mut self) {
-        debug!("LamcoRdpServer dropped - cleaning up resources");
-        // Resources are automatically cleaned up through Arc<Mutex<>> drops
-        // and tokio task cancellation
+        info!("LamcoRdpServer dropping - initiating cleanup");
+
+        // cleanup_resources() is async but Drop is sync
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.block_on(async {
+                if let Err(e) = self.cleanup_resources().await {
+                    error!("Error during cleanup: {:#}", e);
+                } else {
+                    info!("✅ Cleanup completed successfully");
+                }
+            });
+        } else {
+            warn!("No tokio runtime available for cleanup - resources may leak!");
+            warn!("Portal session not closed - will leak in Portal daemon");
+        }
     }
 }
 

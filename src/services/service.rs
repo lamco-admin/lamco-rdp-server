@@ -36,6 +36,9 @@ pub enum ServiceId {
     /// Clipboard integration
     Clipboard,
 
+    /// Clipboard manager detection (Klipper, CopyQ, etc.)
+    ClipboardManager,
+
     /// Remote input injection (keyboard/mouse)
     RemoteInput,
 
@@ -71,10 +74,19 @@ pub enum ServiceId {
     /// libei/EIS input via Portal RemoteDesktop
     /// Flatpak-compatible wlroots input injection
     LibeiInput,
+
+    // === Authentication Services ===
+    // Added for proper auth method detection across deployment contexts
+    /// PAM authentication availability
+    /// Unavailable in Flatpak (sandboxed), available in native installs
+    PamAuthentication,
+
+    /// No-authentication mode
+    /// Always available, used when PAM unavailable or for testing
+    NoAuthentication,
 }
 
 impl ServiceId {
-    /// Get human-readable name
     pub fn name(&self) -> &'static str {
         match self {
             Self::DamageTracking => "Damage Tracking",
@@ -86,6 +98,7 @@ impl ServiceId {
             Self::WindowCapture => "Window Capture",
             Self::HdrColorSpace => "HDR Color Space",
             Self::Clipboard => "Clipboard",
+            Self::ClipboardManager => "Clipboard Manager",
             Self::RemoteInput => "Remote Input",
             Self::VideoCapture => "Video Capture",
             // Session persistence services
@@ -96,10 +109,12 @@ impl ServiceId {
             Self::WlrScreencopy => "wlr-screencopy",
             Self::WlrDirectInput => "wlr-direct Input",
             Self::LibeiInput => "libei/EIS Input",
+            // Authentication services
+            Self::PamAuthentication => "PAM Authentication",
+            Self::NoAuthentication => "No Authentication",
         }
     }
 
-    /// Get all known service IDs
     pub fn all() -> &'static [ServiceId] {
         &[
             // Video and display services
@@ -113,6 +128,7 @@ impl ServiceId {
             Self::HdrColorSpace,
             // I/O services
             Self::Clipboard,
+            Self::ClipboardManager,
             Self::RemoteInput,
             Self::VideoCapture,
             // Session persistence services
@@ -123,6 +139,9 @@ impl ServiceId {
             Self::WlrScreencopy,
             Self::WlrDirectInput,
             Self::LibeiInput,
+            // Authentication services
+            Self::PamAuthentication,
+            Self::NoAuthentication,
         ]
     }
 }
@@ -153,17 +172,14 @@ pub enum ServiceLevel {
 }
 
 impl ServiceLevel {
-    /// Check if service is usable (at least degraded)
     pub fn is_usable(&self) -> bool {
         *self > Self::Unavailable
     }
 
-    /// Check if service is reliable (best-effort or guaranteed)
     pub fn is_reliable(&self) -> bool {
         *self >= Self::BestEffort
     }
 
-    /// Get emoji indicator for logging
     pub fn emoji(&self) -> &'static str {
         match self {
             Self::Guaranteed => "✅",
@@ -205,7 +221,6 @@ pub struct PerformanceHints {
 }
 
 impl PerformanceHints {
-    /// Create hints for zero-copy DMA-BUF path
     pub fn zero_copy() -> Self {
         Self {
             zero_copy_available: true,
@@ -216,7 +231,6 @@ impl PerformanceHints {
         }
     }
 
-    /// Create hints for memory-copy path
     pub fn memcpy() -> Self {
         Self {
             zero_copy_available: false,
@@ -254,7 +268,6 @@ pub struct AdvertisedService {
 }
 
 impl AdvertisedService {
-    /// Create a new service with guaranteed level
     pub fn guaranteed(id: ServiceId, source: WaylandFeature) -> Self {
         Self {
             id,
@@ -267,7 +280,6 @@ impl AdvertisedService {
         }
     }
 
-    /// Create a new service with best-effort level
     pub fn best_effort(id: ServiceId, source: WaylandFeature) -> Self {
         Self {
             id,
@@ -280,7 +292,6 @@ impl AdvertisedService {
         }
     }
 
-    /// Create a new service with degraded level
     pub fn degraded(id: ServiceId, source: WaylandFeature, note: &str) -> Self {
         Self {
             id,
@@ -293,7 +304,6 @@ impl AdvertisedService {
         }
     }
 
-    /// Create an unavailable service
     pub fn unavailable(id: ServiceId) -> Self {
         Self {
             id,
@@ -306,19 +316,16 @@ impl AdvertisedService {
         }
     }
 
-    /// Set the RDP capability mapping
     pub fn with_rdp_capability(mut self, cap: RdpCapability) -> Self {
         self.rdp_capability = Some(cap);
         self
     }
 
-    /// Set performance hints
     pub fn with_performance(mut self, hints: PerformanceHints) -> Self {
         self.performance = hints;
         self
     }
 
-    /// Add a note
     pub fn with_note(mut self, note: &str) -> Self {
         self.notes = Some(note.to_string());
         self

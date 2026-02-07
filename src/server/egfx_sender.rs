@@ -123,13 +123,6 @@ pub struct EgfxFrameSender {
 }
 
 impl EgfxFrameSender {
-    /// Create a new EGFX frame sender
-    ///
-    /// # Arguments
-    ///
-    /// * `gfx_server` - Handle to the shared GraphicsPipelineServer
-    /// * `handler_state` - Shared handler state for readiness checks
-    /// * `event_tx` - Channel for sending ServerEvent::Egfx messages
     pub fn new(
         gfx_server: GfxServerHandle,
         handler_state: Arc<tokio::sync::RwLock<Option<HandlerState>>>,
@@ -172,23 +165,8 @@ impl EgfxFrameSender {
 
     /// Send an H.264 encoded frame through EGFX
     ///
-    /// # Arguments
-    ///
-    /// * `h264_data` - H.264 NAL units (Annex B format with start codes)
-    /// * `encoded_width` - Width used for H.264 encoding (MUST be aligned to 16)
-    /// * `encoded_height` - Height used for H.264 encoding (MUST be aligned to 16)
-    /// * `display_width` - Actual width to display (may be < encoded_width)
-    /// * `display_height` - Actual height to display (may be < encoded_height)
-    /// * `timestamp_ms` - Frame timestamp in milliseconds
-    ///
-    /// # Returns
-    ///
-    /// `Ok(frame_id)` if the frame was sent successfully, or an error.
-    ///
-    /// # Note
-    ///
-    /// The encoded dimensions must be 16-pixel aligned per MS-RDPEGFX spec.
-    /// The display dimensions specify the visible region (DestRect) for cropping.
+    /// Encoded dimensions must be 16-pixel aligned per MS-RDPEGFX spec.
+    /// Display dimensions specify the visible region (DestRect) for cropping.
     pub async fn send_frame(
         &self,
         h264_data: &[u8],
@@ -198,7 +176,6 @@ impl EgfxFrameSender {
         display_height: u16,
         timestamp_ms: u32,
     ) -> SendResult<u32> {
-        // Check readiness
         let state = self
             .handler_state
             .read()
@@ -347,28 +324,22 @@ impl EgfxFrameSender {
             encoded_height.saturating_sub(display_height)
         );
 
-        // Lock the server and send frame
-        // Also query channel_id while holding the lock
-        // Note: Using std::sync::Mutex (not tokio) because GfxServerHandle
-        // is shared with DvcProcessor which requires sync methods
+        // std::sync::Mutex (not tokio) because GfxServerHandle is shared
+        // with DvcProcessor which requires sync methods
         let (frame_id, dvc_messages, channel_id) = {
             let mut server = self.gfx_server.lock().map_err(|_| SendError::LockFailed)?;
 
-            // Get channel_id from the server (set by DVC infrastructure in start())
             let channel_id = server.channel_id().ok_or(SendError::NotReady)?;
 
-            // Send the frame
             let frame_id = server
                 .send_avc420_frame(surface_id, h264_data, &regions, timestamp_ms)
                 .ok_or(SendError::Backpressure)?;
 
-            // Drain output to get DVC messages
             let messages = server.drain_output();
 
             (frame_id, messages, channel_id)
         };
 
-        // Convert DVC messages to SVC messages
         if !dvc_messages.is_empty() {
             trace!(
                 "EGFX: drain_output returned {} DVC messages for frame {}",
@@ -404,7 +375,6 @@ impl EgfxFrameSender {
             );
         }
 
-        // Update stats
         let count = self
             .frame_count
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -426,22 +396,6 @@ impl EgfxFrameSender {
 
     /// Send an AVC444 encoded frame (dual H.264 streams) through EGFX
     ///
-    /// # Arguments
-    ///
-    /// * `stream1_data` - Main view H.264 NAL units (luma + subsampled chroma)
-    /// * `stream2_data` - Auxiliary view H.264 NAL units (additional chroma)
-    /// * `encoded_width` - Width used for H.264 encoding (MUST be aligned to 16)
-    /// * `encoded_height` - Height used for H.264 encoding (MUST be aligned to 16)
-    /// * `display_width` - Actual width to display (may be < encoded_width)
-    /// * `display_height` - Actual height to display (may be < encoded_height)
-    /// * `timestamp_ms` - Frame timestamp in milliseconds
-    ///
-    /// # Returns
-    ///
-    /// `Ok(frame_id)` if the frame was sent successfully, or an error.
-    ///
-    /// # Note
-    ///
     /// AVC444 provides full 4:4:4 chroma resolution for graphics/CAD applications.
     /// Both streams must use the same encoded dimensions.
     pub async fn send_avc444_frame(
@@ -454,7 +408,6 @@ impl EgfxFrameSender {
         display_height: u16,
         timestamp_ms: u32,
     ) -> SendResult<u32> {
-        // Check readiness (same as AVC420)
         let state = self
             .handler_state
             .read()
@@ -483,17 +436,14 @@ impl EgfxFrameSender {
             display_height
         );
 
-        // Create regions for both streams (same dimensions)
         let luma_regions = vec![Avc420Region::full_frame(display_width, display_height, 22)];
         let chroma_regions = vec![Avc420Region::full_frame(display_width, display_height, 22)];
 
-        // Lock the server and send AVC444 frame
         let (frame_id, dvc_messages, channel_id) = {
             let mut server = self.gfx_server.lock().map_err(|_| SendError::LockFailed)?;
 
             let channel_id = server.channel_id().ok_or(SendError::NotReady)?;
 
-            // Send the AVC444 frame using ironrdp-egfx's send_avc444_frame method
             let frame_id = server
                 .send_avc444_frame(
                     surface_id,
@@ -510,7 +460,6 @@ impl EgfxFrameSender {
             (frame_id, messages, channel_id)
         };
 
-        // Convert DVC messages to SVC messages (same as AVC420)
         if !dvc_messages.is_empty() {
             trace!(
                 "EGFX AVC444: drain_output returned {} DVC messages for frame {}",
@@ -539,7 +488,6 @@ impl EgfxFrameSender {
             );
         }
 
-        // Update stats
         let count = self
             .frame_count
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -574,22 +522,8 @@ impl EgfxFrameSender {
 
     /// Send an H.264 frame with specific damage regions
     ///
-    /// This method allows specifying which regions of the frame have changed,
-    /// enabling the client to optimize rendering by only updating those areas.
-    ///
-    /// # Arguments
-    ///
-    /// * `h264_data` - H.264 NAL units (Annex B format)
-    /// * `encoded_width` - Width used for encoding (16-pixel aligned)
-    /// * `encoded_height` - Height used for encoding (16-pixel aligned)
-    /// * `display_width` - Actual display width
-    /// * `display_height` - Actual display height
-    /// * `damage_regions` - List of changed regions (empty = full frame)
-    /// * `timestamp_ms` - Frame timestamp
-    ///
-    /// # Returns
-    ///
-    /// `Ok(frame_id)` on success, or an error.
+    /// Damage regions tell the client which areas changed, enabling partial rendering.
+    /// Empty damage_regions = full frame update.
     pub async fn send_frame_with_regions(
         &self,
         h264_data: &[u8],
@@ -600,7 +534,6 @@ impl EgfxFrameSender {
         damage_regions: &[DamageRegion],
         timestamp_ms: u32,
     ) -> SendResult<u32> {
-        // Check readiness
         let state = self
             .handler_state
             .read()
@@ -619,15 +552,12 @@ impl EgfxFrameSender {
 
         let surface_id = state.primary_surface_id.ok_or(SendError::NoSurface)?;
 
-        // Convert damage regions to EGFX regions
-        // If no regions provided, use full frame
         let regions = if damage_regions.is_empty() {
             vec![Avc420Region::full_frame(display_width, display_height, 22)]
         } else {
             damage_regions_to_avc420(damage_regions, display_width, display_height)
         };
 
-        // Log region info
         if regions.len() > 1 {
             let total_area: u64 = damage_regions.iter().map(|r| r.area()).sum();
             let frame_area = display_width as u64 * display_height as u64;
@@ -641,7 +571,6 @@ impl EgfxFrameSender {
             );
         }
 
-        // Lock the server and send frame
         let (frame_id, dvc_messages, channel_id) = {
             let mut server = self.gfx_server.lock().map_err(|_| SendError::LockFailed)?;
             let channel_id = server.channel_id().ok_or(SendError::NotReady)?;
@@ -654,7 +583,6 @@ impl EgfxFrameSender {
             (frame_id, messages, channel_id)
         };
 
-        // Send DVC messages
         if !dvc_messages.is_empty() {
             let svc_messages =
                 encode_dvc_messages(channel_id, dvc_messages, ChannelFlags::SHOW_PROTOCOL)
@@ -670,7 +598,6 @@ impl EgfxFrameSender {
                 .map_err(|_| SendError::ChannelClosed)?;
         }
 
-        // Update stats
         self.frame_count
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
@@ -697,7 +624,6 @@ impl EgfxFrameSender {
         damage_regions: &[DamageRegion],
         timestamp_ms: u32,
     ) -> SendResult<u32> {
-        // Check readiness
         let state = self
             .handler_state
             .read()
@@ -716,14 +642,12 @@ impl EgfxFrameSender {
 
         let surface_id = state.primary_surface_id.ok_or(SendError::NoSurface)?;
 
-        // Convert damage regions to EGFX regions
         let regions = if damage_regions.is_empty() {
             vec![Avc420Region::full_frame(display_width, display_height, 22)]
         } else {
             damage_regions_to_avc420(damage_regions, display_width, display_height)
         };
 
-        // Log region info for AVC444
         if regions.len() > 1 {
             debug!(
                 "EGFX AVC444: Sending {} regions for {}×{} frame",
@@ -733,7 +657,6 @@ impl EgfxFrameSender {
             );
         }
 
-        // Lock the server and send AVC444 frame
         let (frame_id, dvc_messages, channel_id) = {
             let mut server = self.gfx_server.lock().map_err(|_| SendError::LockFailed)?;
             let channel_id = server.channel_id().ok_or(SendError::NotReady)?;
@@ -758,7 +681,6 @@ impl EgfxFrameSender {
             (frame_id, messages, channel_id)
         };
 
-        // Send DVC messages
         if !dvc_messages.is_empty() {
             let svc_messages =
                 encode_dvc_messages(channel_id, dvc_messages, ChannelFlags::SHOW_PROTOCOL)
@@ -774,7 +696,6 @@ impl EgfxFrameSender {
                 .map_err(|_| SendError::ChannelClosed)?;
         }
 
-        // Update stats
         self.frame_count
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 

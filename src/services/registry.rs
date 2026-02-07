@@ -32,10 +32,6 @@ pub struct ServiceRegistry {
 }
 
 impl ServiceRegistry {
-    /// Create a service registry from compositor capabilities
-    ///
-    /// This is the main entry point - it translates compositor
-    /// capabilities into advertised services.
     pub fn from_compositor(caps: CompositorCapabilities) -> Self {
         let compositor_name = caps.compositor.to_string();
         let services_list = translate_capabilities(&caps);
@@ -53,7 +49,6 @@ impl ServiceRegistry {
         }
     }
 
-    /// Check if a service is available (at any level)
     pub fn has_service(&self, id: ServiceId) -> bool {
         self.services
             .get(&id)
@@ -61,9 +56,7 @@ impl ServiceRegistry {
             .unwrap_or(false)
     }
 
-    /// Get the service level for a service ID
-    ///
-    /// Returns `Unavailable` if service doesn't exist.
+    /// Returns `Unavailable` if service doesn't exist in the registry.
     pub fn service_level(&self, id: ServiceId) -> ServiceLevel {
         self.services
             .get(&id)
@@ -71,17 +64,14 @@ impl ServiceRegistry {
             .unwrap_or(ServiceLevel::Unavailable)
     }
 
-    /// Get a specific service by ID
     pub fn get_service(&self, id: ServiceId) -> Option<&AdvertisedService> {
         self.services.get(&id)
     }
 
-    /// Get all advertised services
     pub fn all_services(&self) -> &[AdvertisedService] {
         &self.services_list
     }
 
-    /// Get all services at or above a certain level
     pub fn services_at_level(&self, min_level: ServiceLevel) -> Vec<&AdvertisedService> {
         self.services_list
             .iter()
@@ -89,27 +79,22 @@ impl ServiceRegistry {
             .collect()
     }
 
-    /// Get all guaranteed services
     pub fn guaranteed_services(&self) -> Vec<&AdvertisedService> {
         self.services_at_level(ServiceLevel::Guaranteed)
     }
 
-    /// Get all usable services (anything above Unavailable)
     pub fn usable_services(&self) -> Vec<&AdvertisedService> {
         self.services_at_level(ServiceLevel::Degraded)
     }
 
-    /// Get the underlying compositor capabilities
     pub fn compositor_capabilities(&self) -> &CompositorCapabilities {
         &self.compositor_caps
     }
 
-    /// Get compositor name
     pub fn compositor_name(&self) -> &str {
         &self.compositor_name
     }
 
-    /// Count services by level
     pub fn service_counts(&self) -> ServiceCounts {
         let mut counts = ServiceCounts::default();
         for service in &self.services_list {
@@ -123,7 +108,6 @@ impl ServiceRegistry {
         counts
     }
 
-    /// Log a summary of the service registry
     pub fn log_summary(&self) {
         info!("╔════════════════════════════════════════════════════════════╗");
         info!("║              Service Advertisement Registry                ║");
@@ -160,7 +144,6 @@ impl ServiceRegistry {
         info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     }
 
-    /// Generate a concise status line for logging
     pub fn status_line(&self) -> String {
         let counts = self.service_counts();
         format!(
@@ -169,14 +152,11 @@ impl ServiceRegistry {
         )
     }
 
-    /// Get recommended codec list based on service levels
-    ///
-    /// Returns a list of codec names suitable for IronRDP's `server_codecs_capabilities()`.
-    /// The order reflects preference based on available services.
+    /// Codec names suitable for IronRDP's `server_codecs_capabilities()`.
+    /// Order reflects preference based on available services.
     pub fn recommended_codecs(&self) -> Vec<&'static str> {
         let mut codecs = Vec::new();
 
-        // Check DMA-BUF service for zero-copy path
         let dmabuf_level = self.service_level(ServiceId::DmaBufZeroCopy);
         let damage_level = self.service_level(ServiceId::DamageTracking);
 
@@ -198,8 +178,6 @@ impl ServiceRegistry {
         codecs
     }
 
-    /// Check if AVC444 mode should be enabled
-    ///
     /// AVC444 requires reliable damage tracking and preferably zero-copy buffers.
     pub fn should_enable_avc444(&self) -> bool {
         let dmabuf_level = self.service_level(ServiceId::DmaBufZeroCopy);
@@ -209,17 +187,14 @@ impl ServiceRegistry {
         dmabuf_level >= ServiceLevel::Guaranteed && damage_level >= ServiceLevel::Guaranteed
     }
 
-    /// Get recommended FPS cap based on compositor profile
     pub fn recommended_fps(&self) -> u32 {
         self.compositor_caps.profile.recommended_fps_cap
     }
 
-    /// Check if adaptive FPS should be enabled
     pub fn should_enable_adaptive_fps(&self) -> bool {
         self.service_level(ServiceId::DamageTracking) >= ServiceLevel::BestEffort
     }
 
-    /// Check if predictive cursor should be used
     pub fn should_use_predictive_cursor(&self) -> bool {
         // Predictive cursor is most valuable when metadata cursor is available
         // but network latency makes raw position updates feel laggy
@@ -230,54 +205,37 @@ impl ServiceRegistry {
     // PHASE 2: Session Persistence Query Methods
     // ========================================================================
 
-    /// Check if session persistence is available (portal restore tokens)
-    ///
-    /// Returns true if portal v4+ and credential storage is available
+    /// Portal v4+ restore tokens and credential storage needed.
     pub fn supports_session_persistence(&self) -> bool {
         self.service_level(ServiceId::SessionPersistence) >= ServiceLevel::BestEffort
     }
 
-    /// Check if unattended operation is possible
-    ///
-    /// Returns true if we can start without user interaction (tokens or direct API)
+    /// Requires restore tokens or direct API to start without user interaction.
     pub fn supports_unattended_access(&self) -> bool {
         self.service_level(ServiceId::UnattendedAccess) >= ServiceLevel::BestEffort
     }
 
-    /// Check if Mutter Direct API is available (GNOME bypass)
-    ///
-    /// Returns true if GNOME compositor with Mutter D-Bus interfaces detected
+    /// GNOME compositor with Mutter D-Bus interfaces (bypasses portal).
     pub fn has_mutter_direct_api(&self) -> bool {
         self.service_level(ServiceId::DirectCompositorAPI) >= ServiceLevel::BestEffort
     }
 
-    /// Check if wlr-screencopy is available (wlroots bypass)
-    ///
-    /// Returns true if wlroots compositor with screencopy protocol detected
+    /// wlroots compositor with screencopy protocol (bypasses portal).
     pub fn has_wlr_screencopy(&self) -> bool {
         self.service_level(ServiceId::WlrScreencopy) >= ServiceLevel::Guaranteed
     }
 
-    /// Get credential storage service level
     pub fn credential_storage_level(&self) -> ServiceLevel {
         self.service_level(ServiceId::CredentialStorage)
     }
 
-    /// Check if server can avoid permission dialog (via any method)
-    ///
-    /// Returns true if one of these is available:
-    /// - Portal restore tokens
-    /// - Mutter Direct API
-    /// - wlr-screencopy
+    /// Portal restore tokens, Mutter Direct API, or wlr-screencopy can bypass the dialog.
     pub fn can_avoid_permission_dialog(&self) -> bool {
         self.supports_session_persistence()
             || self.has_mutter_direct_api()
             || self.has_wlr_screencopy()
     }
 
-    /// Get the best available session strategy
-    ///
-    /// Returns a string describing the recommended session persistence strategy
     pub fn recommended_session_strategy(&self) -> &'static str {
         if self.has_wlr_screencopy() {
             "wlr-screencopy (no dialog)"
@@ -288,6 +246,44 @@ impl ServiceRegistry {
         } else {
             "Basic Portal (dialog each time)"
         }
+    }
+
+    // === Authentication Service Queries ===
+
+    /// Not available in Flatpak (sandboxed, no /etc/pam.d/ access).
+    pub fn has_pam_auth(&self) -> bool {
+        self.service_level(ServiceId::PamAuthentication) >= ServiceLevel::BestEffort
+    }
+
+    pub fn pam_auth_level(&self) -> ServiceLevel {
+        self.service_level(ServiceId::PamAuthentication)
+    }
+
+    pub fn recommended_auth_method(&self) -> &'static str {
+        if self.has_pam_auth() {
+            "pam"
+        } else {
+            "none"
+        }
+    }
+
+    /// NLA requires a working authentication backend (PAM).
+    /// Disabled in Flatpak where PAM is inaccessible.
+    pub fn should_enable_nla(&self) -> bool {
+        self.has_pam_auth()
+    }
+
+    pub fn available_auth_methods(&self) -> Vec<&'static str> {
+        let mut methods = vec![];
+
+        if self.service_level(ServiceId::PamAuthentication) >= ServiceLevel::Degraded {
+            methods.push("pam");
+        }
+
+        // "none" is always available
+        methods.push("none");
+
+        methods
     }
 }
 
@@ -305,12 +301,10 @@ pub struct ServiceCounts {
 }
 
 impl ServiceCounts {
-    /// Total usable services (everything except unavailable)
     pub fn usable(&self) -> usize {
         self.guaranteed + self.best_effort + self.degraded
     }
 
-    /// Total reliable services (guaranteed + best-effort)
     pub fn reliable(&self) -> usize {
         self.guaranteed + self.best_effort
     }

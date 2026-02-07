@@ -90,8 +90,6 @@ pub enum HardwareEncoderError {
 }
 
 impl HardwareEncoderError {
-    /// Check if this error indicates the backend is unavailable
-    /// (vs a runtime error that might be recoverable)
     pub fn is_backend_unavailable(&self) -> bool {
         matches!(
             self,
@@ -102,7 +100,6 @@ impl HardwareEncoderError {
         )
     }
 
-    /// Check if this error might be recoverable by retrying
     pub fn is_recoverable(&self) -> bool {
         matches!(
             self,

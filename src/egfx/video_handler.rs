@@ -141,18 +141,6 @@ pub struct EgfxVideoHandler {
 }
 
 impl EgfxVideoHandler {
-    /// Create a new EGFX video handler
-    ///
-    /// # Arguments
-    ///
-    /// * `config` - Video encoding configuration
-    /// * `initial_width` - Initial surface width
-    /// * `initial_height` - Initial surface height
-    /// * `output_tx` - Channel to send encoded frames
-    ///
-    /// # Returns
-    ///
-    /// New handler instance or error if encoder initialization fails
     #[cfg(feature = "h264")]
     pub fn new(
         config: EgfxVideoConfig,
@@ -197,15 +185,6 @@ impl EgfxVideoHandler {
         ))
     }
 
-    /// Process a video frame and encode to H.264
-    ///
-    /// # Arguments
-    ///
-    /// * `frame` - Video frame from PipeWire
-    ///
-    /// # Returns
-    ///
-    /// Ok(true) if frame was encoded and sent, Ok(false) if skipped, Err on failure
     #[cfg(feature = "h264")]
     pub async fn process_frame(&self, frame: VideoFrame) -> EncoderResult<bool> {
         let frame_num = self
@@ -213,7 +192,6 @@ impl EgfxVideoHandler {
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let timestamp_ms = self.session_start.elapsed().as_millis() as u64;
 
-        // Check for dimension changes
         let (current_w, current_h) = *self.surface_size.read().await;
         if frame.width != current_w || frame.height != current_h {
             info!(
@@ -224,7 +202,6 @@ impl EgfxVideoHandler {
             // Encoder will handle resize internally
         }
 
-        // Encode frame
         let encode_start = Instant::now();
 
         let encoded = {
@@ -234,7 +211,6 @@ impl EgfxVideoHandler {
 
         let encode_time_us = encode_start.elapsed().as_micros() as u64;
 
-        // Update stats
         {
             let mut stats = self.stats.write().await;
             stats.frames_encoded += 1;
@@ -246,7 +222,6 @@ impl EgfxVideoHandler {
                 ((stats.avg_encode_time_us as f64 * (n - 1.0) + encode_time_us as f64) / n) as u64;
         }
 
-        // Check if encoder produced output
         let h264_frame = match encoded {
             Some(f) => f,
             None => {
@@ -264,7 +239,6 @@ impl EgfxVideoHandler {
             stats.total_bytes += h264_frame.data.len() as u64;
         }
 
-        // Create output frame
         let encoded_frame = EncodedFrame {
             h264_data: h264_frame.data,
             timestamp_ms,
@@ -320,56 +294,29 @@ impl EgfxVideoHandler {
     #[cfg(not(feature = "h264"))]
     pub async fn force_keyframe(&self) {}
 
-    /// Get current encoding statistics
     pub async fn get_stats(&self) -> EncodingStats {
         self.stats.read().await.clone()
     }
 
-    /// Reset statistics
     pub async fn reset_stats(&self) {
         *self.stats.write().await = EncodingStats::default();
     }
 
-    /// Get current surface dimensions
     pub async fn surface_size(&self) -> (u32, u32) {
         *self.surface_size.read().await
     }
 }
 
-/// Factory for creating EGFX video handlers per connection
-///
-/// This trait mirrors the pattern used by IronRDP's `CliprdrServerFactory`
-/// and will be used when integrating EGFX into the server builder.
-pub trait EgfxVideoHandlerFactory: Send + Sync {
-    /// Build a new EGFX video handler for a connection
-    ///
-    /// # Arguments
-    ///
-    /// * `width` - Initial surface width
-    /// * `height` - Initial surface height
-    ///
-    /// # Returns
-    ///
-    /// Channel receiver for encoded frames, or None if EGFX unavailable
-    fn build_handler(&self, width: u32, height: u32) -> Option<mpsc::Receiver<EncodedFrame>>;
-
-    /// Check if EGFX/H.264 encoding is available
-    fn is_available(&self) -> bool;
-}
-
-/// Default factory implementation
-pub struct DefaultEgfxVideoHandlerFactory {
+pub struct EgfxVideoHandlerFactory {
     config: EgfxVideoConfig,
 }
 
-impl DefaultEgfxVideoHandlerFactory {
+impl EgfxVideoHandlerFactory {
     pub fn new(config: EgfxVideoConfig) -> Self {
         Self { config }
     }
-}
 
-impl EgfxVideoHandlerFactory for DefaultEgfxVideoHandlerFactory {
-    fn build_handler(
+    pub fn build_handler(
         &self,
         #[cfg_attr(not(feature = "h264"), allow(unused_variables))] width: u32,
         #[cfg_attr(not(feature = "h264"), allow(unused_variables))] height: u32,
@@ -379,9 +326,7 @@ impl EgfxVideoHandlerFactory for DefaultEgfxVideoHandlerFactory {
             let (tx, rx) = mpsc::channel(16);
 
             match EgfxVideoHandler::new(self.config.clone(), width, height, tx) {
-                Ok(handler) => {
-                    // Handler would be stored and driven by frame source
-                    // For now, just return the receiver
+                Ok(_handler) => {
                     info!(
                         "EGFX video handler created: {}x{}, {}kbps",
                         width, height, self.config.bitrate_kbps
@@ -402,7 +347,7 @@ impl EgfxVideoHandlerFactory for DefaultEgfxVideoHandlerFactory {
         }
     }
 
-    fn is_available(&self) -> bool {
+    pub fn is_available(&self) -> bool {
         cfg!(feature = "h264")
     }
 }
@@ -421,7 +366,7 @@ mod tests {
 
     #[test]
     fn test_factory_availability() {
-        let factory = DefaultEgfxVideoHandlerFactory::new(EgfxVideoConfig::default());
+        let factory = EgfxVideoHandlerFactory::new(EgfxVideoConfig::default());
         // Availability depends on feature flag
         #[cfg(feature = "h264")]
         assert!(factory.is_available());

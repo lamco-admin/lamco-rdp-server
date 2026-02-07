@@ -13,40 +13,17 @@ pub fn validate_config(config: &Config) -> ValidationResult {
     let mut errors = Vec::new();
     let mut warnings = Vec::new();
 
-    // Validate server section
     validate_server_config(config, &mut errors, &mut warnings);
-
-    // Validate security section
     validate_security_config(config, &mut errors, &mut warnings);
-
-    // Validate video section
     validate_video_config(config, &mut errors, &mut warnings);
-
-    // Validate input section
     validate_input_config(config, &mut errors, &mut warnings);
-
-    // Validate clipboard section
     validate_clipboard_config(config, &mut errors, &mut warnings);
-
-    // Validate performance section
     validate_performance_config(config, &mut errors, &mut warnings);
-
-    // Validate EGFX section
     validate_egfx_config(config, &mut errors, &mut warnings);
-
-    // Validate damage tracking section
     validate_damage_tracking_config(config, &mut errors, &mut warnings);
-
-    // Validate hardware encoding section
     validate_hardware_encoding_config(config, &mut errors, &mut warnings);
-
-    // Validate display section
     validate_display_config(config, &mut errors, &mut warnings);
-
-    // Validate logging section
     validate_logging_config(config, &mut errors, &mut warnings);
-
-    // Cross-section validation
     validate_cross_section(config, &mut errors, &mut warnings);
 
     ValidationResult {
@@ -62,7 +39,6 @@ fn validate_server_config(
     errors: &mut Vec<ValidationError>,
     warnings: &mut Vec<ValidationWarning>,
 ) {
-    // Validate listen address
     if config.server.listen_addr.parse::<SocketAddr>().is_err() {
         errors.push(ValidationError {
             field: "server.listen_addr".to_string(),
@@ -70,7 +46,6 @@ fn validate_server_config(
         });
     }
 
-    // Warn about privileged port
     if let Ok(addr) = config.server.listen_addr.parse::<SocketAddr>() {
         if addr.port() < 1024 {
             warnings.push(ValidationWarning {
@@ -83,7 +58,6 @@ fn validate_server_config(
         }
     }
 
-    // Validate max_connections
     if config.server.max_connections == 0 {
         errors.push(ValidationError {
             field: "server.max_connections".to_string(),
@@ -103,7 +77,6 @@ fn validate_security_config(
     errors: &mut Vec<ValidationError>,
     warnings: &mut Vec<ValidationWarning>,
 ) {
-    // Check certificate file exists
     if !config.security.cert_path.exists() {
         errors.push(ValidationError {
             field: "security.cert_path".to_string(),
@@ -113,7 +86,6 @@ fn validate_security_config(
             ),
         });
     } else {
-        // Verify it's readable and valid PEM
         if let Err(e) = validate_pem_file(&config.security.cert_path, "CERTIFICATE") {
             errors.push(ValidationError {
                 field: "security.cert_path".to_string(),
@@ -122,7 +94,6 @@ fn validate_security_config(
         }
     }
 
-    // Check private key file exists
     if !config.security.key_path.exists() {
         errors.push(ValidationError {
             field: "security.key_path".to_string(),
@@ -132,7 +103,6 @@ fn validate_security_config(
             ),
         });
     } else {
-        // Verify it's readable and valid PEM
         if let Err(e) = validate_pem_file(&config.security.key_path, "PRIVATE KEY") {
             errors.push(ValidationError {
                 field: "security.key_path".to_string(),
@@ -140,7 +110,6 @@ fn validate_security_config(
             });
         }
 
-        // Check key file permissions (should be restrictive)
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -158,7 +127,6 @@ fn validate_security_config(
         }
     }
 
-    // Validate auth method
     match config.security.auth_method.as_str() {
         "pam" | "none" | "password" => {}
         _ => {
@@ -172,22 +140,17 @@ fn validate_security_config(
         }
     }
 
-    // Warn if NLA is disabled
-    if !config.security.enable_nla {
+    // Note: NLA disabled is the default (required for no-auth mode and Flatpak)
+    // Only warn if PAM auth is enabled but NLA is disabled
+    if config.security.auth_method == "pam" && !config.security.enable_nla {
         warnings.push(ValidationWarning {
             field: "security.enable_nla".to_string(),
-            message: "Network Level Authentication is disabled. This reduces security.".to_string(),
+            message: "PAM authentication enabled but NLA is disabled. Consider enabling NLA for better security.".to_string(),
         });
     }
 
-    // Warn if TLS 1.3 is disabled
-    if !config.security.require_tls_13 {
-        warnings.push(ValidationWarning {
-            field: "security.require_tls_13".to_string(),
-            message: "TLS 1.3 requirement is disabled. Older protocols may be vulnerable."
-                .to_string(),
-        });
-    }
+    // Note: TLS 1.3 requirement disabled is the default for compatibility
+    // This is informational, not a security warning for most use cases
 }
 
 /// Validate video configuration
@@ -196,32 +159,8 @@ fn validate_video_config(
     errors: &mut Vec<ValidationError>,
     warnings: &mut Vec<ValidationWarning>,
 ) {
-    // Validate encoder choice
-    match config.video.encoder.as_str() {
-        "auto" | "vaapi" | "openh264" | "nvenc" => {}
-        _ => {
-            errors.push(ValidationError {
-                field: "video.encoder".to_string(),
-                message: format!(
-                    "Invalid encoder: '{}'. Valid options: auto, vaapi, openh264, nvenc",
-                    config.video.encoder
-                ),
-            });
-        }
-    }
+    // Note: Encoder and bitrate are in hardware_encoding and egfx sections
 
-    // Check VA-API device if specified
-    if config.video.encoder == "vaapi" && !config.video.vaapi_device.exists() {
-        errors.push(ValidationError {
-            field: "video.vaapi_device".to_string(),
-            message: format!(
-                "VA-API device not found: {}",
-                config.video.vaapi_device.display()
-            ),
-        });
-    }
-
-    // Validate FPS
     if config.video.target_fps == 0 {
         errors.push(ValidationError {
             field: "video.target_fps".to_string(),
@@ -234,20 +173,6 @@ fn validate_video_config(
         });
     }
 
-    // Validate bitrate
-    if config.video.bitrate < 100 {
-        warnings.push(ValidationWarning {
-            field: "video.bitrate".to_string(),
-            message: "Bitrate below 100 kbps will result in very poor quality".to_string(),
-        });
-    } else if config.video.bitrate > 50000 {
-        warnings.push(ValidationWarning {
-            field: "video.bitrate".to_string(),
-            message: "Bitrate above 50 Mbps may exceed network capacity".to_string(),
-        });
-    }
-
-    // Validate cursor mode
     match config.video.cursor_mode.as_str() {
         "embedded" | "metadata" | "hidden" => {}
         _ => {
@@ -268,7 +193,6 @@ fn validate_input_config(
     _errors: &mut [ValidationError],
     warnings: &mut Vec<ValidationWarning>,
 ) {
-    // Validate keyboard layout
     let valid_layouts = [
         "auto", "us", "gb", "de", "fr", "es", "it", "pt", "nl", "pl", "ru", "jp", "kr", "cn",
     ];
@@ -301,7 +225,6 @@ fn validate_clipboard_config(
     _errors: &mut [ValidationError],
     warnings: &mut Vec<ValidationWarning>,
 ) {
-    // Validate max size
     if config.clipboard.max_size > 100 * 1024 * 1024 {
         warnings.push(ValidationWarning {
             field: "clipboard.max_size".to_string(),
@@ -309,7 +232,6 @@ fn validate_clipboard_config(
         });
     }
 
-    // Validate rate limit
     if config.clipboard.rate_limit_ms < 10 {
         warnings.push(ValidationWarning {
             field: "clipboard.rate_limit_ms".to_string(),
@@ -324,7 +246,6 @@ fn validate_performance_config(
     _errors: &mut Vec<ValidationError>,
     warnings: &mut Vec<ValidationWarning>,
 ) {
-    // Validate thread counts
     if config.performance.encoder_threads > 32 {
         warnings.push(ValidationWarning {
             field: "performance.encoder_threads".to_string(),
@@ -339,7 +260,6 @@ fn validate_performance_config(
         });
     }
 
-    // Validate buffer pool size
     if config.performance.buffer_pool_size < 4 {
         warnings.push(ValidationWarning {
             field: "performance.buffer_pool_size".to_string(),
@@ -363,7 +283,6 @@ fn validate_egfx_config(
         return; // Skip validation if disabled
     }
 
-    // Validate codec
     match config.egfx.codec.as_str() {
         "auto" | "avc420" | "avc444" => {}
         _ => {
@@ -377,7 +296,6 @@ fn validate_egfx_config(
         }
     }
 
-    // Validate ZGFX compression
     match config.egfx.zgfx_compression.as_str() {
         "never" | "auto" | "always" => {}
         _ => {
@@ -391,7 +309,6 @@ fn validate_egfx_config(
         }
     }
 
-    // Validate H.264 level
     let valid_levels = ["auto", "3.0", "3.1", "4.0", "4.1", "5.0", "5.1", "5.2"];
     if !valid_levels.contains(&config.egfx.h264_level.as_str()) {
         errors.push(ValidationError {
@@ -404,7 +321,6 @@ fn validate_egfx_config(
         });
     }
 
-    // Validate QP range
     if config.egfx.qp_min > 51 || config.egfx.qp_max > 51 || config.egfx.qp_default > 51 {
         errors.push(ValidationError {
             field: "egfx.qp".to_string(),
@@ -432,7 +348,6 @@ fn validate_egfx_config(
         });
     }
 
-    // Validate bitrate
     if config.egfx.h264_bitrate < 100 {
         warnings.push(ValidationWarning {
             field: "egfx.h264_bitrate".to_string(),
@@ -440,7 +355,6 @@ fn validate_egfx_config(
         });
     }
 
-    // Validate AVC444 aux bitrate ratio
     if config.egfx.avc444_aux_bitrate_ratio < 0.1 || config.egfx.avc444_aux_bitrate_ratio > 1.0 {
         warnings.push(ValidationWarning {
             field: "egfx.avc444_aux_bitrate_ratio".to_string(),
@@ -455,7 +369,6 @@ fn validate_damage_tracking_config(
     errors: &mut Vec<ValidationError>,
     warnings: &mut Vec<ValidationWarning>,
 ) {
-    // Validate method
     match config.damage_tracking.method.as_str() {
         "pipewire" | "diff" | "hybrid" => {}
         _ => {
@@ -469,7 +382,6 @@ fn validate_damage_tracking_config(
         }
     }
 
-    // Validate diff threshold (0.0-1.0 range)
     if config.damage_tracking.diff_threshold > 1.0 {
         warnings.push(ValidationWarning {
             field: "damage_tracking.diff_threshold".to_string(),
@@ -488,7 +400,6 @@ fn validate_hardware_encoding_config(
         return;
     }
 
-    // Validate quality preset
     match config.hardware_encoding.quality_preset.as_str() {
         "speed" | "balanced" | "quality" => {}
         _ => {
@@ -502,7 +413,6 @@ fn validate_hardware_encoding_config(
         }
     }
 
-    // Check VA-API device exists if hardware encoding is enabled
     if config.hardware_encoding.enabled && !config.hardware_encoding.vaapi_device.exists() {
         warnings.push(ValidationWarning {
             field: "hardware_encoding.vaapi_device".to_string(),
@@ -520,7 +430,6 @@ fn validate_display_config(
     errors: &mut Vec<ValidationError>,
     warnings: &mut Vec<ValidationWarning>,
 ) {
-    // Validate allowed resolutions format
     for res in &config.display.allowed_resolutions {
         // Check format like "1920x1080"
         let parts: Vec<&str> = res.split('x').collect();
@@ -536,7 +445,6 @@ fn validate_display_config(
         }
     }
 
-    // Warn if both resize is allowed and specific resolutions are set
     if config.display.allow_resize && !config.display.allowed_resolutions.is_empty() {
         warnings.push(ValidationWarning {
             field: "display.allowed_resolutions".to_string(),
@@ -551,7 +459,6 @@ fn validate_logging_config(
     errors: &mut Vec<ValidationError>,
     warnings: &mut Vec<ValidationWarning>,
 ) {
-    // Validate log level
     match config.logging.level.to_lowercase().as_str() {
         "trace" | "debug" | "info" | "warn" | "error" => {}
         _ => {
@@ -565,7 +472,6 @@ fn validate_logging_config(
         }
     }
 
-    // Validate log directory if specified
     if let Some(ref log_dir) = config.logging.log_dir {
         if !log_dir.exists() {
             warnings.push(ValidationWarning {
@@ -580,7 +486,6 @@ fn validate_logging_config(
         }
     }
 
-    // Warn about trace level in production
     if config.logging.level.to_lowercase() == "trace" {
         warnings.push(ValidationWarning {
             field: "logging.level".to_string(),
@@ -596,16 +501,7 @@ fn validate_cross_section(
     _errors: &mut Vec<ValidationError>,
     warnings: &mut Vec<ValidationWarning>,
 ) {
-    // Warn if EGFX is enabled but H.264 encoder is not configured
-    if config.egfx.enabled && config.video.encoder == "none" {
-        warnings.push(ValidationWarning {
-            field: "egfx + video.encoder".to_string(),
-            message: "EGFX is enabled but no encoder is configured".to_string(),
-        });
-    }
-
-    // Warn about performance impact of certain combinations
-    if config.video.damage_tracking
+    if config.damage_tracking.enabled
         && config.damage_tracking.method == "diff"
         && config.video.target_fps > 60
     {

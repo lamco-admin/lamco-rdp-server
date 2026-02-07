@@ -13,65 +13,32 @@ use super::{
     wayland_features::{DamageMethod, DrmFormat, WaylandFeature},
 };
 
-/// Translate compositor capabilities into a list of advertised services
 pub fn translate_capabilities(caps: &CompositorCapabilities) -> Vec<AdvertisedService> {
     let mut services = Vec::new();
 
-    // Damage Tracking
     services.push(translate_damage_tracking(caps));
-
-    // DMA-BUF Zero-Copy
     services.push(translate_dmabuf(caps));
-
-    // Explicit Sync
     services.push(translate_explicit_sync(caps));
-
-    // Fractional Scaling
     services.push(translate_fractional_scaling(caps));
-
-    // Metadata Cursor
     services.push(translate_metadata_cursor(caps));
-
-    // Multi-Monitor
     services.push(translate_multi_monitor(caps));
-
-    // Window Capture
     services.push(translate_window_capture(caps));
-
-    // HDR Color Space (future - currently unavailable)
     services.push(AdvertisedService::unavailable(ServiceId::HdrColorSpace));
-
-    // Clipboard
     services.push(translate_clipboard(caps));
-
-    // Remote Input
+    services.push(translate_clipboard_manager(caps));
     services.push(translate_remote_input(caps));
-
-    // Video Capture (PipeWire)
     services.push(translate_video_capture(caps));
 
-    // === Phase 2: Session Persistence Services ===
-
-    // Session Persistence (portal restore tokens)
     services.push(translate_session_persistence(caps));
-
-    // Direct Compositor API (GNOME Mutter)
     services.push(translate_direct_compositor_api(caps));
-
-    // Credential Storage
     services.push(translate_credential_storage(caps));
-
-    // wlr-screencopy (wlroots bypass)
     services.push(translate_wlr_screencopy(caps));
-
-    // wlr-direct input (wlroots virtual keyboard/pointer)
     services.push(translate_wlr_direct_input(caps));
-
-    // libei/EIS input (Portal RemoteDesktop + EIS)
     services.push(translate_libei_input(caps));
-
-    // Unattended Access (aggregate capability)
     services.push(translate_unattended_access(caps));
+
+    services.push(translate_pam_authentication(caps));
+    services.push(translate_no_authentication(caps));
 
     services
 }
@@ -104,7 +71,6 @@ fn translate_damage_tracking(caps: &CompositorCapabilities) -> AdvertisedService
         AdvertisedService::best_effort(ServiceId::DamageTracking, feature)
     };
 
-    // Set performance hints based on method
     let mut perf = PerformanceHints::default();
     match method {
         DamageMethod::NativeScreencopy => {
@@ -128,7 +94,6 @@ fn translate_damage_tracking(caps: &CompositorCapabilities) -> AdvertisedService
 fn translate_dmabuf(caps: &CompositorCapabilities) -> AdvertisedService {
     let profile = &caps.profile;
 
-    // Check for DMA-BUF quirk
     if profile.has_quirk(&Quirk::PoorDmaBufSupport) {
         return AdvertisedService::unavailable(ServiceId::DmaBufZeroCopy)
             .with_note("Compositor has unreliable DMA-BUF support");
@@ -189,12 +154,10 @@ fn translate_metadata_cursor(caps: &CompositorCapabilities) -> AdvertisedService
     let portal = &caps.portal;
     let profile = &caps.profile;
 
-    // Check if metadata cursor mode is available
     let has_metadata = portal
         .available_cursor_modes
         .contains(&CursorMode::Metadata);
 
-    // Check for cursor quirks
     let needs_composite = profile.has_quirk(&Quirk::NeedsExplicitCursorComposite);
 
     if has_metadata && !needs_composite {
@@ -235,7 +198,6 @@ fn translate_multi_monitor(caps: &CompositorCapabilities) -> AdvertisedService {
         return AdvertisedService::unavailable(ServiceId::MultiMonitor);
     }
 
-    // Check for multi-monitor quirks
     let has_position_quirk = profile.has_quirk(&Quirk::MultiMonitorPositionQuirk);
     let restart_on_resize = profile.has_quirk(&Quirk::RestartCaptureOnResize);
 
@@ -292,6 +254,14 @@ fn translate_window_capture(caps: &CompositorCapabilities) -> AdvertisedService 
 fn translate_clipboard(caps: &CompositorCapabilities) -> AdvertisedService {
     let portal = &caps.portal;
 
+    // When this quirk is present, clipboard operations crash xdg-desktop-portal-kde.
+    // Clipboard is disabled until Klipper cooperation mode is implemented (v1.3.0).
+    if caps.profile.has_quirk(&Quirk::KdePortalClipboardUnstable) {
+        return AdvertisedService::unavailable(ServiceId::Clipboard).with_note(
+            "Disabled: Portal clipboard crashes on KDE (Klipper cooperation mode pending)",
+        );
+    }
+
     if portal.supports_clipboard {
         let feature = WaylandFeature::Clipboard {
             portal_version: portal.version,
@@ -312,6 +282,88 @@ fn translate_clipboard(caps: &CompositorCapabilities) -> AdvertisedService {
         }
     } else {
         AdvertisedService::unavailable(ServiceId::Clipboard)
+    }
+}
+
+fn translate_clipboard_manager(caps: &CompositorCapabilities) -> AdvertisedService {
+    use crate::services::SystemClipboardManagerKind;
+
+    if let Some(ref info) = caps.clipboard_manager {
+        match &info.manager_type {
+            SystemClipboardManagerKind::Klipper { plasma_version, .. } => {
+                let feature = WaylandFeature::ClipboardManager {
+                    manager_type: "klipper".to_string(),
+                    version: plasma_version.clone(),
+                };
+
+                let notes = format!(
+                    "Klipper detected (Plasma {}) - mitigation strategies enabled",
+                    plasma_version
+                );
+
+                AdvertisedService::best_effort(ServiceId::ClipboardManager, feature)
+                    .with_note(&notes)
+            }
+
+            SystemClipboardManagerKind::CopyQ { version } => {
+                let feature = WaylandFeature::ClipboardManager {
+                    manager_type: "copyq".to_string(),
+                    version: version.clone(),
+                };
+
+                AdvertisedService::best_effort(ServiceId::ClipboardManager, feature)
+                    .with_note("CopyQ clipboard manager detected")
+            }
+
+            SystemClipboardManagerKind::Diodon => {
+                let feature = WaylandFeature::ClipboardManager {
+                    manager_type: "diodon".to_string(),
+                    version: "unknown".to_string(),
+                };
+
+                AdvertisedService::best_effort(ServiceId::ClipboardManager, feature)
+                    .with_note("Diodon clipboard manager detected")
+            }
+
+            SystemClipboardManagerKind::GnomeShell => {
+                let feature = WaylandFeature::ClipboardManager {
+                    manager_type: "gnome-shell".to_string(),
+                    version: "built-in".to_string(),
+                };
+
+                AdvertisedService::best_effort(ServiceId::ClipboardManager, feature)
+                    .with_note("GNOME Shell built-in clipboard")
+            }
+
+            SystemClipboardManagerKind::WlClipboard => {
+                let feature = WaylandFeature::ClipboardManager {
+                    manager_type: "wl-clipboard".to_string(),
+                    version: "cli-tools".to_string(),
+                };
+
+                AdvertisedService::best_effort(ServiceId::ClipboardManager, feature)
+                    .with_note("wl-clipboard command-line tools")
+            }
+
+            SystemClipboardManagerKind::None => {
+                AdvertisedService::unavailable(ServiceId::ClipboardManager)
+            }
+
+            SystemClipboardManagerKind::Unknown => {
+                let feature = WaylandFeature::ClipboardManager {
+                    manager_type: "unknown".to_string(),
+                    version: "unknown".to_string(),
+                };
+
+                AdvertisedService::degraded(
+                    ServiceId::ClipboardManager,
+                    feature,
+                    "Unknown clipboard manager detected",
+                )
+            }
+        }
+    } else {
+        AdvertisedService::unavailable(ServiceId::ClipboardManager)
     }
 }
 
@@ -401,7 +453,6 @@ fn translate_session_persistence(caps: &CompositorCapabilities) -> AdvertisedSer
         (false, _, _) => ServiceLevel::Unavailable,
     };
 
-    // Create service with appropriate constructor
     let service = match level {
         ServiceLevel::Guaranteed => {
             AdvertisedService::guaranteed(ServiceId::SessionPersistence, feature)
@@ -499,7 +550,6 @@ fn translate_credential_storage(caps: &CompositorCapabilities) -> AdvertisedServ
         _ => None,
     };
 
-    // Create service with appropriate constructor
     let service = match level {
         ServiceLevel::Guaranteed => {
             let mut s = AdvertisedService::guaranteed(ServiceId::CredentialStorage, feature);
@@ -540,7 +590,6 @@ fn translate_wlr_screencopy(caps: &CompositorCapabilities) -> AdvertisedService 
             .with_note("Only available on wlroots-based compositors");
     }
 
-    // Check for wlr-screencopy-unstable-v1 protocol
     if let Some(version) = caps.get_protocol_version("zwlr_screencopy_manager_v1") {
         let feature = WaylandFeature::WlrScreencopy {
             version,
@@ -570,9 +619,7 @@ fn translate_wlr_direct_input(caps: &CompositorCapabilities) -> AdvertisedServic
             .with_note("Only available on wlroots-based compositors");
     }
 
-    // Check for required input protocols
-    // zwp_virtual_keyboard_v1 (standard, should be available on most Wayland compositors)
-    // zwlr_virtual_pointer_v1 (wlroots-specific, requires wlroots 0.12+)
+    // zwp_virtual_keyboard_v1 is standard; zwlr_virtual_pointer_v1 is wlroots-specific (0.12+)
     let has_keyboard = caps.has_protocol("zwp_virtual_keyboard_manager_v1", 1);
     let has_pointer = caps.has_protocol("zwlr_virtual_pointer_manager_v1", 1);
 
@@ -653,8 +700,73 @@ fn translate_libei_input(caps: &CompositorCapabilities) -> AdvertisedService {
         .with_note("EIS protocol via Portal RemoteDesktop (Flatpak-compatible)")
 }
 
+// ============================================================================
+// PHASE 3: Authentication Services Translation
+// ============================================================================
+
+fn translate_pam_authentication(caps: &CompositorCapabilities) -> AdvertisedService {
+    use crate::session::DeploymentContext;
+
+    // PAM is NOT available in Flatpak - the sandbox blocks access to /etc/pam.d/
+    // and the PAM libraries/authentication stack
+    if matches!(caps.deployment, DeploymentContext::Flatpak) {
+        return AdvertisedService::unavailable(ServiceId::PamAuthentication)
+            .with_note("PAM authentication blocked by Flatpak sandbox - use 'none' auth instead");
+    }
+
+    // PAM is also not available in systemd system services without special setup
+    // (would need to run as root or have polkit integration)
+    if matches!(caps.deployment, DeploymentContext::SystemdSystem) {
+        // PAM available but requires proper configuration
+        let feature = WaylandFeature::Authentication {
+            method: "pam".to_string(),
+            supports_nla: true,
+        };
+        return AdvertisedService::best_effort(ServiceId::PamAuthentication, feature)
+            .with_note("PAM available - requires PAM service configuration");
+    }
+
+    // Native and systemd user services have full PAM access
+    let feature = WaylandFeature::Authentication {
+        method: "pam".to_string(),
+        supports_nla: true,
+    };
+
+    AdvertisedService::guaranteed(ServiceId::PamAuthentication, feature)
+        .with_note("PAM authentication available for native install")
+}
+
+fn translate_no_authentication(caps: &CompositorCapabilities) -> AdvertisedService {
+    // No-auth mode is ALWAYS available - it's a fallback for environments
+    // where PAM is not accessible (Flatpak) or for testing purposes
+    let feature = WaylandFeature::Authentication {
+        method: "none".to_string(),
+        supports_nla: false,
+    };
+
+    // In Flatpak, this is the only option, so it's Guaranteed
+    // In native installs, it's available but PAM is preferred
+    let level = if matches!(caps.deployment, crate::session::DeploymentContext::Flatpak) {
+        ServiceLevel::Guaranteed
+    } else {
+        ServiceLevel::BestEffort
+    };
+
+    let note = if matches!(caps.deployment, crate::session::DeploymentContext::Flatpak) {
+        "No authentication - Flatpak mode (PAM unavailable)"
+    } else {
+        "No authentication - available for testing (PAM recommended for production)"
+    };
+
+    match level {
+        ServiceLevel::Guaranteed => {
+            AdvertisedService::guaranteed(ServiceId::NoAuthentication, feature).with_note(note)
+        }
+        _ => AdvertisedService::best_effort(ServiceId::NoAuthentication, feature).with_note(note),
+    }
+}
+
 fn translate_unattended_access(caps: &CompositorCapabilities) -> AdvertisedService {
-    // Get dependent service levels
     let session_persist_level = translate_session_persistence(caps).level;
     let direct_api_level = translate_direct_compositor_api(caps).level;
     let wlr_screencopy_level = translate_wlr_screencopy(caps).level;
@@ -693,7 +805,6 @@ fn translate_unattended_access(caps: &CompositorCapabilities) -> AdvertisedServi
         ),
     };
 
-    // Create service with appropriate constructor
     match level {
         ServiceLevel::Guaranteed => {
             AdvertisedService::guaranteed(ServiceId::UnattendedAccess, feature).with_note(note)
@@ -710,10 +821,7 @@ fn translate_unattended_access(caps: &CompositorCapabilities) -> AdvertisedServi
     }
 }
 
-// Helper functions for translation
-
 fn check_dbus_interface_sync(interface: &str) -> bool {
-    // Check if D-Bus interface exists synchronously
     // Uses blocking to avoid nested runtime issues when called from async context
 
     // Use std::thread to avoid tokio runtime nesting issues
@@ -721,7 +829,6 @@ fn check_dbus_interface_sync(interface: &str) -> bool {
 
     std::thread::scope(|s| {
         let handle = s.spawn(move || {
-            // Create a new tokio runtime for this thread
             let rt = tokio::runtime::Runtime::new().ok()?;
             rt.block_on(async {
                 let conn = zbus::Connection::session().await.ok()?;
@@ -774,17 +881,14 @@ mod tests {
         let caps = make_gnome_caps();
         let services = translate_capabilities(&caps);
 
-        // Check damage tracking
         let damage = services.iter().find(|s| s.id == ServiceId::DamageTracking);
         assert!(damage.is_some());
         assert!(damage.unwrap().level.is_reliable());
 
-        // Check metadata cursor
         let cursor = services.iter().find(|s| s.id == ServiceId::MetadataCursor);
         assert!(cursor.is_some());
         assert_eq!(cursor.unwrap().level, ServiceLevel::Guaranteed);
 
-        // Check clipboard
         let clipboard = services.iter().find(|s| s.id == ServiceId::Clipboard);
         assert!(clipboard.is_some());
         assert!(clipboard.unwrap().level.is_usable());

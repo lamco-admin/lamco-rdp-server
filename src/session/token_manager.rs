@@ -1,4 +1,9 @@
-//! Token Manager for Session Persistence
+//! Session Token Persistence
+//!
+//! **Execution Path:** Multiple backends (Secret Service, TPM, Flatpak Secret, Encrypted File)
+//! **Status:** Active (v1.0.0+)
+//! **Platform:** Universal (adapts to deployment)
+//! **Role:** Secure storage and retrieval of Portal restore tokens
 //!
 //! Handles secure storage and retrieval of portal restore tokens across
 //! different credential storage backends with COMPLETE implementations.
@@ -13,7 +18,7 @@ use tracing::{debug, info, warn};
 use zeroize::Zeroizing;
 
 use super::credentials::{detect_deployment_context, CredentialStorageMethod};
-use super::flatpak_secret::FlatpakSecretManager;
+use super::flatpak_secret::FlatpakSecrets;
 use super::secret_service::AsyncSecretServiceClient;
 use super::tpm_store::AsyncTpmCredentialStore;
 
@@ -37,30 +42,19 @@ pub struct TokenMetadata {
 /// - TPM 2.0 via systemd-creds (hardware-bound)
 /// - Secret Service (GNOME Keyring, KWallet, KeePassXC)
 /// - Encrypted File (machine-bound AES-256-GCM)
-pub struct TokenManager {
+pub struct Tokens {
     storage_method: CredentialStorageMethod,
     storage_path: PathBuf,
     secret_service: Option<AsyncSecretServiceClient>,
-    flatpak_manager: Option<FlatpakSecretManager>,
+    flatpak_manager: Option<FlatpakSecrets>,
     tpm_store: Option<AsyncTpmCredentialStore>,
 }
 
-impl TokenManager {
-    /// Create a new TokenManager
-    ///
-    /// # Arguments
-    ///
-    /// * `method` - Credential storage method to use
-    ///
-    /// # Returns
-    ///
-    /// Configured TokenManager with backend fully initialized
+impl Tokens {
     pub async fn new(method: CredentialStorageMethod) -> Result<Self> {
-        info!("Initializing TokenManager with method: {}", method);
+        info!("Initializing Tokens with method: {}", method);
 
-        // Determine storage path based on deployment
         let storage_path = if Path::new("/.flatpak-info").exists() {
-            // Flatpak: Use app data directory
             let home = std::env::var("HOME").context("HOME not set")?;
             let xdg_data =
                 std::env::var("XDG_DATA_HOME").unwrap_or_else(|_| format!("{}/.local/share", home));
@@ -69,7 +63,6 @@ impl TokenManager {
                 .join("lamco-rdp-server")
                 .join("sessions")
         } else {
-            // Native: Use standard data directory
             dirs::data_local_dir()
                 .unwrap_or_else(|| {
                     PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".to_string()))
@@ -79,12 +72,10 @@ impl TokenManager {
                 .join("sessions")
         };
 
-        // Create storage directory
         fs::create_dir_all(&storage_path).context("Failed to create session storage directory")?;
 
         debug!("Token storage path: {:?}", storage_path);
 
-        // Initialize backend-specific clients
         let secret_service = match method {
             CredentialStorageMethod::GnomeKeyring
             | CredentialStorageMethod::KWallet
@@ -105,19 +96,17 @@ impl TokenManager {
         };
 
         let flatpak_manager = match method {
-            CredentialStorageMethod::FlatpakSecretPortal => {
-                match FlatpakSecretManager::new().await {
-                    Ok(manager) => {
-                        info!("Flatpak secret manager initialized");
-                        Some(manager)
-                    }
-                    Err(e) => {
-                        warn!("Failed to initialize Flatpak secret manager: {}", e);
-                        warn!("Falling back to encrypted file storage");
-                        None
-                    }
+            CredentialStorageMethod::FlatpakSecretPortal => match FlatpakSecrets::new().await {
+                Ok(manager) => {
+                    info!("Flatpak secret manager initialized");
+                    Some(manager)
                 }
-            }
+                Err(e) => {
+                    warn!("Failed to initialize Flatpak secret manager: {}", e);
+                    warn!("Falling back to encrypted file storage");
+                    None
+                }
+            },
             _ => None,
         };
 
@@ -145,16 +134,6 @@ impl TokenManager {
         })
     }
 
-    /// Save a restore token
-    ///
-    /// # Arguments
-    ///
-    /// * `session_id` - Unique session identifier
-    /// * `token` - Restore token from portal (will be zeroized after use)
-    ///
-    /// # Returns
-    ///
-    /// Ok(()) if token was successfully stored
     pub async fn save_token(&self, session_id: &str, token: &str) -> Result<()> {
         info!(
             "Saving restore token for session: {} (method: {})",
@@ -169,7 +148,6 @@ impl TokenManager {
             | CredentialStorageMethod::KWallet
             | CredentialStorageMethod::KeePassXC => {
                 if let Some(ref client) = self.secret_service {
-                    // Use Secret Service
                     let attrs = vec![
                         ("application".to_string(), "lamco-rdp-server".to_string()),
                         ("session_id".to_string(), session_id.to_string()),
@@ -191,7 +169,6 @@ impl TokenManager {
 
             CredentialStorageMethod::FlatpakSecretPortal => {
                 if let Some(ref manager) = self.flatpak_manager {
-                    // Try Flatpak manager
                     let stored = manager
                         .store_secret(
                             &key,
@@ -216,7 +193,6 @@ impl TokenManager {
 
             CredentialStorageMethod::Tpm2 => {
                 if let Some(ref store) = self.tpm_store {
-                    // Use TPM 2.0 storage
                     store
                         .store(key, token_zeroized.as_bytes().to_vec())
                         .await
@@ -239,22 +215,12 @@ impl TokenManager {
             }
         }
 
-        // Save metadata
         self.save_token_metadata(session_id).await?;
 
         info!("Restore token saved successfully");
         Ok(())
     }
 
-    /// Load a restore token
-    ///
-    /// # Arguments
-    ///
-    /// * `session_id` - Unique session identifier
-    ///
-    /// # Returns
-    ///
-    /// Some(token) if found, None if not found
     pub async fn load_token(&self, session_id: &str) -> Result<Option<String>> {
         debug!(
             "Loading restore token for session: {} (method: {})",
@@ -268,7 +234,6 @@ impl TokenManager {
             | CredentialStorageMethod::KWallet
             | CredentialStorageMethod::KeePassXC => {
                 if let Some(ref client) = self.secret_service {
-                    // Try Secret Service
                     match client.lookup_secret(key).await {
                         Ok(token) => {
                             info!("Token loaded from {} successfully", self.storage_method);
@@ -349,15 +314,6 @@ impl TokenManager {
         Ok(token)
     }
 
-    /// Delete a stored token
-    ///
-    /// # Arguments
-    ///
-    /// * `session_id` - Session identifier
-    ///
-    /// # Returns
-    ///
-    /// Ok(()) if token was deleted or didn't exist
     pub async fn delete_token(&self, session_id: &str) -> Result<()> {
         info!("Deleting restore token for session: {}", session_id);
 
@@ -412,7 +368,6 @@ impl TokenManager {
         Ok(())
     }
 
-    /// Save token to encrypted file (fallback or primary storage)
     async fn save_token_to_file(&self, session_id: &str, token: &str) -> Result<()> {
         let encrypted = self.encrypt_token(token)?;
         let path = self.storage_path.join(format!("{}.token", session_id));
@@ -431,7 +386,6 @@ impl TokenManager {
         Ok(())
     }
 
-    /// Load token from encrypted file
     async fn load_token_from_file(&self, session_id: &str) -> Result<Option<String>> {
         let path = self.storage_path.join(format!("{}.token", session_id));
 
@@ -447,7 +401,6 @@ impl TokenManager {
         Ok(Some(token))
     }
 
-    /// Delete token file
     fn delete_token_file(&self, session_id: &str) -> Result<()> {
         let path = self.storage_path.join(format!("{}.token", session_id));
         if path.exists() {
@@ -462,7 +415,6 @@ impl TokenManager {
         Ok(())
     }
 
-    /// Encrypt a token using machine-bound key
     fn encrypt_token(&self, token: &str) -> Result<Vec<u8>> {
         use aes_gcm::aead::{Aead, KeyInit, OsRng};
         use aes_gcm::{Aes256Gcm, Key, Nonce};
@@ -470,13 +422,11 @@ impl TokenManager {
         let key_bytes = derive_machine_key()?;
         let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key_bytes));
 
-        // Generate random nonce
         let mut nonce_bytes = [0u8; 12];
         use aes_gcm::aead::rand_core::RngCore;
         OsRng.fill_bytes(&mut nonce_bytes);
         let nonce = Nonce::from_slice(&nonce_bytes);
 
-        // Encrypt
         let ciphertext = cipher
             .encrypt(nonce, token.as_bytes())
             .map_err(|e| anyhow!("Encryption failed: {}", e))?;
@@ -489,7 +439,6 @@ impl TokenManager {
         Ok(result)
     }
 
-    /// Decrypt a token
     fn decrypt_token(&self, data: &[u8]) -> Result<String> {
         if data.len() < 12 {
             return Err(anyhow!("Invalid encrypted data (too short)"));
@@ -511,7 +460,6 @@ impl TokenManager {
         String::from_utf8(plaintext).context("Token contains invalid UTF-8")
     }
 
-    /// Save token metadata for debugging
     async fn save_token_metadata(&self, session_id: &str) -> Result<()> {
         let metadata = TokenMetadata {
             stored_at: chrono::Utc::now().to_rfc3339(),
@@ -539,7 +487,6 @@ impl TokenManager {
         Ok(())
     }
 
-    /// Check if error indicates "not found"
     fn is_not_found_error(error: &anyhow::Error) -> bool {
         let error_str = error.to_string().to_lowercase();
         error_str.contains("not found")
@@ -598,9 +545,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_token_manager_creation() {
-        let manager = TokenManager::new(CredentialStorageMethod::EncryptedFile)
+        let manager = Tokens::new(CredentialStorageMethod::EncryptedFile)
             .await
-            .expect("TokenManager creation failed");
+            .expect("Tokens creation failed");
 
         assert_eq!(
             manager.storage_method,
@@ -611,9 +558,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_token_save_load_roundtrip() {
-        let manager = TokenManager::new(CredentialStorageMethod::EncryptedFile)
+        let manager = Tokens::new(CredentialStorageMethod::EncryptedFile)
             .await
-            .expect("TokenManager creation failed");
+            .expect("Tokens creation failed");
 
         let test_token = "test-restore-token-12345-abcdef";
         let session_id = "test-session";
@@ -638,9 +585,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_token_not_found() {
-        let manager = TokenManager::new(CredentialStorageMethod::EncryptedFile)
+        let manager = Tokens::new(CredentialStorageMethod::EncryptedFile)
             .await
-            .expect("TokenManager creation failed");
+            .expect("Tokens creation failed");
 
         let loaded = manager
             .load_token("nonexistent-session")
@@ -652,7 +599,7 @@ mod tests {
 
     #[test]
     fn test_encryption_roundtrip() {
-        let manager = TokenManager {
+        let manager = Tokens {
             storage_method: CredentialStorageMethod::EncryptedFile,
             storage_path: PathBuf::from("/tmp"),
             secret_service: None,
@@ -683,7 +630,7 @@ mod tests {
     #[tokio::test]
     #[ignore] // Requires Secret Service running
     async fn test_secret_service_backend() {
-        let manager = TokenManager::new(CredentialStorageMethod::GnomeKeyring)
+        let manager = Tokens::new(CredentialStorageMethod::GnomeKeyring)
             .await
             .expect("Failed to create manager");
 
@@ -710,7 +657,7 @@ mod tests {
     #[tokio::test]
     #[ignore] // Requires TPM 2.0 hardware
     async fn test_tpm_backend() {
-        let manager = TokenManager::new(CredentialStorageMethod::Tpm2)
+        let manager = Tokens::new(CredentialStorageMethod::Tpm2)
             .await
             .expect("Failed to create manager");
 

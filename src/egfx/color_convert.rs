@@ -139,7 +139,6 @@ pub struct Yuv444Frame {
 }
 
 impl Yuv444Frame {
-    /// Create a new YUV444 frame with allocated buffers
     pub fn new(width: usize, height: usize) -> Self {
         let size = width * height;
         Self {
@@ -151,29 +150,12 @@ impl Yuv444Frame {
         }
     }
 
-    /// Get the pixel count
     #[inline]
     pub fn pixel_count(&self) -> usize {
         self.width * self.height
     }
 }
 
-/// Convert BGRA to YUV444
-///
-/// # Arguments
-///
-/// * `bgra` - BGRA pixel data (4 bytes per pixel, row-major: B, G, R, A)
-/// * `width` - Frame width in pixels
-/// * `height` - Frame height in pixels
-/// * `matrix` - Color matrix standard (BT.601 or BT.709)
-///
-/// # Returns
-///
-/// YUV444 frame with full chroma resolution
-///
-/// # Panics
-///
-/// Panics if `bgra.len() != width * height * 4`
 pub fn bgra_to_yuv444(
     bgra: &[u8],
     width: usize,
@@ -641,23 +623,6 @@ fn bgra_to_yuv444_neon(bgra: &[u8], frame: &mut Yuv444Frame, matrix: ColorMatrix
     }
 }
 
-/// Subsample chroma plane from 4:4:4 to 4:2:0 using 2x2 box filter
-///
-/// This implements proper bilinear filtering for chroma subsampling.
-///
-/// # Arguments
-///
-/// * `chroma_444` - Full resolution chroma plane (width x height)
-/// * `width` - Original width (must be even)
-/// * `height` - Original height (must be even)
-///
-/// # Returns
-///
-/// Subsampled chroma plane (width/2 x height/2)
-///
-/// # Panics
-///
-/// Panics if width or height is not even
 pub fn subsample_chroma_420(chroma_444: &[u8], width: usize, height: usize) -> Vec<u8> {
     assert!(width % 2 == 0, "Width must be even for 4:2:0 subsampling");
     assert!(height % 2 == 0, "Height must be even for 4:2:0 subsampling");

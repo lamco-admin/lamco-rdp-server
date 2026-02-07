@@ -32,10 +32,8 @@ impl CertificateGenerator {
             .context("Failed to generate key pair")?;
         params.key_pair = Some(key_pair);
 
-        // Generate certificate
         let cert = Certificate::from_params(params).context("Failed to generate certificate")?;
 
-        // Serialize to PEM
         let cert_pem = cert
             .serialize_pem()
             .context("Failed to serialize certificate")?;
@@ -59,7 +57,6 @@ impl CertificateGenerator {
             warn!("Certificate or key file already exists, will overwrite");
         }
 
-        // Generate certificate
         let (cert_pem, key_pem) = Self::generate_self_signed(common_name, validity_days)?;
 
         if let Some(parent) = cert_path.parent() {
@@ -69,10 +66,7 @@ impl CertificateGenerator {
             fs::create_dir_all(parent).context("Failed to create key directory")?;
         }
 
-        // Write certificate
         fs::write(cert_path, cert_pem.as_bytes()).context("Failed to write certificate")?;
-
-        // Write private key (with restricted permissions)
         fs::write(key_path, key_pem.as_bytes()).context("Failed to write private key")?;
 
         // Unix: Restrict key to owner-only (mode 600)

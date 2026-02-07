@@ -65,6 +65,11 @@ pub async fn probe_capabilities() -> Result<CompositorCapabilities> {
         storage_method, encryption, accessible
     );
 
+    // Step 6: Detect clipboard manager (Klipper, CopyQ, etc.)
+    let clipboard_manager =
+        crate::services::DetectedSystemClipboardManager::detect(&capabilities.compositor).await;
+    capabilities.clipboard_manager = Some(clipboard_manager);
+
     // Log summary
     capabilities.log_summary();
 

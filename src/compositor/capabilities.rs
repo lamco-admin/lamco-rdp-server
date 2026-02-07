@@ -191,6 +191,9 @@ pub struct CompositorCapabilities {
 
     /// Encryption type for credential storage
     pub credential_encryption: crate::session::EncryptionType,
+
+    /// Clipboard manager detection (Klipper, CopyQ, etc.)
+    pub clipboard_manager: Option<crate::services::DetectedSystemClipboardManager>,
 }
 
 impl CompositorCapabilities {
@@ -226,6 +229,7 @@ impl CompositorCapabilities {
             credential_storage_method,
             credential_storage_accessible,
             credential_encryption,
+            clipboard_manager: None, // Will be set by async probing
         }
     }
 
@@ -344,6 +348,7 @@ mod tests {
             credential_storage_method: crate::session::CredentialStorageMethod::EncryptedFile,
             credential_storage_accessible: true,
             credential_encryption: crate::session::EncryptionType::Aes256Gcm,
+            clipboard_manager: None,
         };
 
         assert!(caps.has_protocol("wl_compositor", 1));

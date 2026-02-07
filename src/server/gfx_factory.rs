@@ -32,6 +32,7 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::RwLock;
 
 use ironrdp_egfx::server::{GraphicsPipelineHandler, GraphicsPipelineServer};
+use ironrdp_graphics::zgfx::CompressionMode;
 use ironrdp_server::{GfxDvcBridge, GfxServerFactory, GfxServerHandle};
 
 use crate::egfx::LamcoGraphicsHandler;
@@ -81,6 +82,12 @@ pub struct LamcoGfxFactory {
 
     /// Force AVC420-only mode due to platform quirks (e.g., RHEL 9)
     force_avc420_only: bool,
+
+    /// Maximum frames in flight before backpressure
+    max_frames_in_flight: u32,
+
+    /// ZGFX compression mode for EGFX data
+    compression_mode: CompressionMode,
 }
 
 /// Shared handler state accessible from display handler
@@ -106,12 +113,6 @@ pub struct HandlerState {
 pub type SharedHandlerState = Arc<RwLock<Option<HandlerState>>>;
 
 impl LamcoGfxFactory {
-    /// Create a new GFX factory
-    ///
-    /// # Arguments
-    ///
-    /// * `width` - Initial desktop width
-    /// * `height` - Initial desktop height
     pub fn new(width: u16, height: u16) -> Self {
         Self {
             width,
@@ -119,17 +120,11 @@ impl LamcoGfxFactory {
             handler_state: Arc::new(RwLock::new(None)),
             server_handle: Arc::new(RwLock::new(None)),
             force_avc420_only: false,
+            max_frames_in_flight: 3,
+            compression_mode: CompressionMode::Never, // Default: no compression
         }
     }
 
-    /// Create a new GFX factory with platform quirk awareness
-    ///
-    /// # Arguments
-    ///
-    /// * `width` - Initial desktop width
-    /// * `height` - Initial desktop height
-    /// * `force_avc420_only` - If true, disable AVC444 even if client supports it
-    ///
     /// Use this constructor when platform detection has identified quirks
     /// that affect codec selection (e.g., RHEL 9 AVC444 blur issue).
     pub fn with_quirks(width: u16, height: u16, force_avc420_only: bool) -> Self {
@@ -139,6 +134,26 @@ impl LamcoGfxFactory {
             handler_state: Arc::new(RwLock::new(None)),
             server_handle: Arc::new(RwLock::new(None)),
             force_avc420_only,
+            max_frames_in_flight: 3,
+            compression_mode: CompressionMode::Never,
+        }
+    }
+
+    pub fn with_config(
+        width: u16,
+        height: u16,
+        force_avc420_only: bool,
+        max_frames_in_flight: u32,
+        compression_mode: CompressionMode,
+    ) -> Self {
+        Self {
+            width,
+            height,
+            handler_state: Arc::new(RwLock::new(None)),
+            server_handle: Arc::new(RwLock::new(None)),
+            force_avc420_only,
+            max_frames_in_flight,
+            compression_mode,
         }
     }
 
@@ -164,36 +179,34 @@ impl LamcoGfxFactory {
 
 impl GfxServerFactory for LamcoGfxFactory {
     fn build_gfx_handler(&self) -> Box<dyn GraphicsPipelineHandler> {
-        // Basic mode: just return the handler without shared access
-        // Note: This method is called when build_server_with_handle() returns None
         let handler =
             LamcoGraphicsHandler::with_quirks(self.width, self.height, self.force_avc420_only);
         Box::new(handler)
     }
 
     fn build_server_with_handle(&self) -> Option<(GfxDvcBridge, GfxServerHandle)> {
-        // Create the handler WITH shared state synchronization AND platform quirks
-        // The handler will update handler_state when callbacks are invoked,
+        // Handler updates handler_state when callbacks are invoked,
         // allowing EgfxFrameSender to check EGFX readiness
-        let handler = LamcoGraphicsHandler::with_shared_state_and_quirks(
+        let handler = LamcoGraphicsHandler::with_config(
             self.width,
             self.height,
             Arc::clone(&self.handler_state),
             self.force_avc420_only,
+            self.max_frames_in_flight,
         );
 
-        // Create the GraphicsPipelineServer wrapped in Arc<std::sync::Mutex<>>
-        // Note: Using std::sync::Mutex (not tokio) because DvcProcessor trait
+        // std::sync::Mutex (not tokio) because DvcProcessor trait
         // has synchronous methods that cannot use async locks
-        let server = Arc::new(Mutex::new(GraphicsPipelineServer::new(Box::new(handler))));
+        let server = Arc::new(Mutex::new(GraphicsPipelineServer::with_compression(
+            Box::new(handler),
+            self.compression_mode,
+        )));
 
-        // Store handle for later access by display handler
-        // Note: We use try_write here because this is called during sync channel setup
+        // try_write because this is called during sync channel setup
         if let Ok(mut handle_guard) = self.server_handle.try_write() {
             *handle_guard = Some(Arc::clone(&server));
         }
 
-        // Create bridge for DVC infrastructure
         let bridge = GfxDvcBridge::new(Arc::clone(&server));
 
         Some((bridge, server))

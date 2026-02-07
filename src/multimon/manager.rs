@@ -1,4 +1,9 @@
-//! Monitor Manager
+//! Multi-Monitor Tracking
+//!
+//! **Execution Path:** Portal ScreenCast streams
+//! **Status:** Active (v1.0.0+)
+//! **Platform:** Universal
+//! **Role:** Monitor discovery, layout calculation, and state tracking
 //!
 //! Manages monitor discovery, tracking, and lifecycle with Portal integration.
 
@@ -11,42 +16,18 @@ use crate::multimon::layout::{Layout, LayoutCalculator, LayoutStrategy};
 use crate::multimon::Result;
 use crate::portal::StreamInfo;
 
-/// Monitor information
 #[derive(Debug, Clone)]
 pub struct MonitorInfo {
-    /// Monitor ID (PipeWire node ID)
     pub id: u32,
-
-    /// Monitor name
     pub name: String,
-
-    /// Position in virtual desktop
     pub position: (i32, i32),
-
-    /// Size in pixels
     pub size: (u32, u32),
-
-    /// Refresh rate in Hz
     pub refresh_rate: u32,
-
-    /// Scale factor for HiDPI
     pub scale_factor: f64,
-
-    /// Is this the primary monitor
     pub is_primary: bool,
 }
 
 impl MonitorInfo {
-    /// Create from Portal StreamInfo
-    ///
-    /// # Arguments
-    ///
-    /// * `stream` - Portal stream information
-    /// * `is_primary` - Whether this is the primary monitor
-    ///
-    /// # Returns
-    ///
-    /// A new MonitorInfo instance
     pub fn from_stream_info(stream: &StreamInfo, is_primary: bool) -> Self {
         Self {
             id: stream.node_id,
@@ -60,35 +41,19 @@ impl MonitorInfo {
     }
 }
 
-/// Monitor event types
 #[derive(Debug, Clone)]
 pub enum MonitorEvent {
-    /// Monitor added
     Added(MonitorInfo),
-
-    /// Monitor removed
     Removed(u32),
-
-    /// Monitor configuration changed
     Changed(MonitorInfo),
-
-    /// Layout recalculated
     LayoutChanged(Layout),
 }
 
-/// Multi-monitor configuration
 #[derive(Debug, Clone)]
 pub struct MultiMonitorConfig {
-    /// Maximum number of monitors to support
     pub max_monitors: usize,
-
-    /// Layout strategy
     pub layout_strategy: LayoutStrategy,
-
-    /// Enable dynamic reconfiguration
     pub enable_dynamic_reconfiguration: bool,
-
-    /// Enable hotplug detection
     pub enable_hotplug: bool,
 }
 
@@ -103,31 +68,14 @@ impl Default for MultiMonitorConfig {
     }
 }
 
-/// Monitor manager coordinates multi-monitor setup
-pub struct MonitorManager {
-    /// Configuration
+pub struct Monitors {
     config: MultiMonitorConfig,
-
-    /// Current monitors
     monitors: Arc<RwLock<HashMap<u32, MonitorInfo>>>,
-
-    /// Layout calculator
     layout_calculator: LayoutCalculator,
-
-    /// Current layout
     current_layout: Arc<RwLock<Option<Layout>>>,
 }
 
-impl MonitorManager {
-    /// Create a new monitor manager
-    ///
-    /// # Arguments
-    ///
-    /// * `config` - Multi-monitor configuration
-    ///
-    /// # Returns
-    ///
-    /// A new MonitorManager instance
+impl Monitors {
     pub fn new(config: MultiMonitorConfig) -> Self {
         let layout_calculator = LayoutCalculator::new(config.layout_strategy);
 
@@ -139,23 +87,9 @@ impl MonitorManager {
         }
     }
 
-    /// Initialize from Portal streams
-    ///
-    /// # Arguments
-    ///
-    /// * `streams` - Stream information from Portal
-    ///
-    /// # Returns
-    ///
-    /// Ok(()) on success
-    ///
-    /// # Errors
-    ///
-    /// Returns error if layout calculation fails
     pub async fn initialize_from_streams(&self, streams: &[StreamInfo]) -> Result<()> {
         info!("Initializing monitors from {} streams", streams.len());
 
-        // Create monitor info for each stream
         let mut monitors_map = HashMap::new();
 
         for (idx, stream) in streams.iter().enumerate() {
@@ -167,29 +101,13 @@ impl MonitorManager {
             monitors_map.insert(monitor.id, monitor);
         }
 
-        // Store monitors
         *self.monitors.write().await = monitors_map;
-
-        // Calculate layout
         self.recalculate_layout(streams).await?;
 
         info!("Multi-monitor initialization complete");
         Ok(())
     }
 
-    /// Recalculate layout
-    ///
-    /// # Arguments
-    ///
-    /// * `streams` - Current stream information
-    ///
-    /// # Returns
-    ///
-    /// Ok(()) on success
-    ///
-    /// # Errors
-    ///
-    /// Returns error if layout calculation fails
     pub async fn recalculate_layout(&self, streams: &[StreamInfo]) -> Result<()> {
         let virtual_desktop = self.layout_calculator.calculate_layout(streams)?;
 
@@ -205,42 +123,18 @@ impl MonitorManager {
         Ok(())
     }
 
-    /// Get current layout
-    ///
-    /// # Returns
-    ///
-    /// The current layout if available
     pub async fn get_layout(&self) -> Option<Layout> {
         self.current_layout.read().await.clone()
     }
 
-    /// Get monitor count
-    ///
-    /// # Returns
-    ///
-    /// Number of active monitors
     pub async fn monitor_count(&self) -> usize {
         self.monitors.read().await.len()
     }
 
-    /// Get monitor by ID
-    ///
-    /// # Arguments
-    ///
-    /// * `id` - Monitor ID
-    ///
-    /// # Returns
-    ///
-    /// MonitorInfo if found
     pub async fn get_monitor(&self, id: u32) -> Option<MonitorInfo> {
         self.monitors.read().await.get(&id).cloned()
     }
 
-    /// Get all monitors
-    ///
-    /// # Returns
-    ///
-    /// Vector of all monitorsINFO
     pub async fn get_all_monitors(&self) -> Vec<MonitorInfo> {
         self.monitors.read().await.values().cloned().collect()
     }
@@ -259,8 +153,6 @@ mod tests {
             source_type: SourceType::Monitor,
         }
     }
-
-    // ============ MultiMonitorConfig Tests ============
 
     #[test]
     fn test_config_default() {
@@ -297,13 +189,10 @@ mod tests {
         assert!(debug_str.contains("max_monitors"));
     }
 
-    // ============ MonitorInfo Tests ============
-
     #[tokio::test]
     async fn test_monitor_manager_creation() {
         let config = MultiMonitorConfig::default();
-        let _manager = MonitorManager::new(config);
-        // Manager created successfully
+        let _manager = Monitors::new(config);
     }
 
     #[tokio::test]
@@ -361,8 +250,6 @@ mod tests {
         assert!(debug_str.contains("id: 1"));
     }
 
-    // ============ MonitorEvent Tests ============
-
     #[test]
     fn test_monitor_event_added() {
         let stream = mock_stream(1, 0, 0, 1920, 1080);
@@ -413,12 +300,10 @@ mod tests {
         assert!(debug_str.contains("42"));
     }
 
-    // ============ MonitorManager Integration Tests ============
-
     #[tokio::test]
     async fn test_initialize_from_streams_single() {
         let config = MultiMonitorConfig::default();
-        let manager = MonitorManager::new(config);
+        let manager = Monitors::new(config);
 
         let streams = vec![mock_stream(1, 0, 0, 1920, 1080)];
         manager.initialize_from_streams(&streams).await.unwrap();
@@ -433,7 +318,7 @@ mod tests {
     #[tokio::test]
     async fn test_initialize_from_streams_dual() {
         let config = MultiMonitorConfig::default();
-        let manager = MonitorManager::new(config);
+        let manager = Monitors::new(config);
 
         let streams = vec![
             mock_stream(1, 0, 0, 1920, 1080),
@@ -453,7 +338,7 @@ mod tests {
     #[tokio::test]
     async fn test_initialize_from_streams_multiple() {
         let config = MultiMonitorConfig::default();
-        let manager = MonitorManager::new(config);
+        let manager = Monitors::new(config);
 
         let streams = vec![
             mock_stream(1, 0, 0, 1920, 1080),
@@ -469,7 +354,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_all_monitors() {
         let config = MultiMonitorConfig::default();
-        let manager = MonitorManager::new(config);
+        let manager = Monitors::new(config);
 
         let streams = vec![
             mock_stream(10, 0, 0, 1920, 1080),
@@ -488,7 +373,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_monitor_not_found() {
         let config = MultiMonitorConfig::default();
-        let manager = MonitorManager::new(config);
+        let manager = Monitors::new(config);
 
         let streams = vec![mock_stream(1, 0, 0, 1920, 1080)];
         manager.initialize_from_streams(&streams).await.unwrap();
@@ -500,9 +385,8 @@ mod tests {
     #[tokio::test]
     async fn test_get_layout() {
         let config = MultiMonitorConfig::default();
-        let manager = MonitorManager::new(config);
+        let manager = Monitors::new(config);
 
-        // No layout before initialization
         assert!(manager.get_layout().await.is_none());
 
         let streams = vec![
@@ -512,7 +396,6 @@ mod tests {
         manager.initialize_from_streams(&streams).await.unwrap();
 
         let layout = manager.get_layout().await.unwrap();
-        // Virtual desktop should span both monitors
         assert_eq!(layout.virtual_desktop.width, 3840);
         assert_eq!(layout.virtual_desktop.height, 1080);
     }
@@ -520,7 +403,7 @@ mod tests {
     #[tokio::test]
     async fn test_recalculate_layout() {
         let config = MultiMonitorConfig::default();
-        let manager = MonitorManager::new(config);
+        let manager = Monitors::new(config);
 
         let streams = vec![mock_stream(1, 0, 0, 1920, 1080)];
         manager.initialize_from_streams(&streams).await.unwrap();
@@ -528,7 +411,6 @@ mod tests {
         let layout1 = manager.get_layout().await.unwrap();
         assert_eq!(layout1.virtual_desktop.width, 1920);
 
-        // Recalculate with new streams
         let new_streams = vec![
             mock_stream(1, 0, 0, 1920, 1080),
             mock_stream(2, 1920, 0, 2560, 1440),
@@ -546,9 +428,8 @@ mod tests {
             layout_strategy: LayoutStrategy::Horizontal,
             ..Default::default()
         };
-        let manager = MonitorManager::new(config);
+        let manager = Monitors::new(config);
 
-        // Both monitors at (0,0) - horizontal strategy will arrange them
         let streams = vec![
             mock_stream(1, 0, 0, 1920, 1080),
             mock_stream(2, 0, 0, 1920, 1080),
@@ -556,7 +437,6 @@ mod tests {
         manager.initialize_from_streams(&streams).await.unwrap();
 
         let layout = manager.get_layout().await.unwrap();
-        // Horizontal layout should place them side by side
         assert_eq!(layout.virtual_desktop.width, 3840);
         assert_eq!(layout.virtual_desktop.height, 1080);
     }
@@ -567,7 +447,7 @@ mod tests {
             layout_strategy: LayoutStrategy::Vertical,
             ..Default::default()
         };
-        let manager = MonitorManager::new(config);
+        let manager = Monitors::new(config);
 
         let streams = vec![
             mock_stream(1, 0, 0, 1920, 1080),
@@ -576,7 +456,6 @@ mod tests {
         manager.initialize_from_streams(&streams).await.unwrap();
 
         let layout = manager.get_layout().await.unwrap();
-        // Vertical layout should stack them
         assert_eq!(layout.virtual_desktop.width, 1920);
         assert_eq!(layout.virtual_desktop.height, 2160);
     }
@@ -584,7 +463,7 @@ mod tests {
     #[tokio::test]
     async fn test_empty_monitor_count() {
         let config = MultiMonitorConfig::default();
-        let manager = MonitorManager::new(config);
+        let manager = Monitors::new(config);
 
         assert_eq!(manager.monitor_count().await, 0);
     }
@@ -592,7 +471,7 @@ mod tests {
     #[tokio::test]
     async fn test_mixed_resolution_monitors() {
         let config = MultiMonitorConfig::default();
-        let manager = MonitorManager::new(config);
+        let manager = Monitors::new(config);
 
         // Simulate a 4K primary with a 1080p secondary
         let streams = vec![
@@ -609,9 +488,8 @@ mod tests {
     #[tokio::test]
     async fn test_negative_position_monitors() {
         let config = MultiMonitorConfig::default();
-        let manager = MonitorManager::new(config);
+        let manager = Monitors::new(config);
 
-        // Monitor to the left has negative X
         let streams = vec![
             mock_stream(1, 0, 0, 1920, 1080),
             mock_stream(2, -1920, 0, 1920, 1080),
@@ -620,7 +498,6 @@ mod tests {
 
         let layout = manager.get_layout().await.unwrap();
         assert_eq!(layout.virtual_desktop.width, 3840);
-        // Offset stores the minimum x coordinate
         assert_eq!(layout.virtual_desktop.offset_x, -1920);
     }
 }

@@ -10,7 +10,44 @@ use crate::gui::state::AppState;
 use crate::gui::theme;
 use crate::gui::widgets;
 
-const AUTH_METHODS: &[&str] = &["pam", "none"];
+/// Default authentication methods (used when capabilities not yet detected)
+/// "none" is first as it's the default and always available
+const DEFAULT_AUTH_METHODS: &[&str] = &["none", "pam"];
+
+/// Get available authentication methods based on detected capabilities
+///
+/// Returns the list from service registry if capabilities detected,
+/// otherwise falls back to the default list.
+fn get_auth_methods(state: &AppState) -> Vec<&str> {
+    if let Some(ref caps) = state.detected_capabilities {
+        // Use dynamic list from service registry
+        caps.available_auth_methods
+            .iter()
+            .map(|s| s.as_str())
+            .collect()
+    } else {
+        // Fall back to defaults until capabilities detected
+        DEFAULT_AUTH_METHODS.to_vec()
+    }
+}
+
+/// Get context-sensitive help text for authentication method
+///
+/// Provides different help based on whether PAM is available
+/// (detected via service registry).
+fn auth_method_help_text(state: &AppState) -> &'static str {
+    if let Some(ref caps) = state.detected_capabilities {
+        if caps.available_auth_methods.contains(&"pam".to_string()) {
+            "PAM = system authentication, None = no password required"
+        } else {
+            // PAM unavailable (likely Flatpak)
+            "PAM unavailable in this deployment. None = no password required"
+        }
+    } else {
+        // Capabilities not yet detected
+        "PAM = system authentication, None = no password required"
+    }
+}
 
 pub fn view_security_tab(state: &AppState) -> Element<'_, Message> {
     let main_content = column![
@@ -44,11 +81,11 @@ pub fn view_security_tab(state: &AppState) -> Element<'_, Message> {
         ),
         space().height(20.0),
         // Enable NLA
-        widgets::toggle_with_help(
+        widgets::toggle_pending_with_note(
             "Enable Network Level Authentication (NLA)",
             state.config.security.enable_nla,
-            "Requires client to authenticate before connection is established",
             Message::SecurityEnableNlaToggled,
+            "IronRDP lacks CredSSP/NLA support",
         ),
         space().height(16.0),
         // Authentication Method
@@ -56,13 +93,13 @@ pub fn view_security_tab(state: &AppState) -> Element<'_, Message> {
             "Authentication Method:",
             150.0,
             pick_list(
-                AUTH_METHODS.to_vec(),
+                get_auth_methods(state),
                 Some(state.config.security.auth_method.as_str()),
                 |s| Message::SecurityAuthMethodChanged(s.to_string()),
             )
             .width(Length::Fixed(150.0))
             .into(),
-            "PAM = system authentication, None = no password required",
+            auth_method_help_text(state),
         ),
         space().height(16.0),
         // Require TLS 1.3

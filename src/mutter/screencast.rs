@@ -259,17 +259,13 @@ impl StreamParameters {
         use zbus::zvariant::Structure;
 
         dict.get(key).and_then(|value| {
-            // Attempt to downcast to Structure
             match value.downcast_ref::<Structure>() {
                 Ok(structure) => {
-                    // Get fields from structure
                     let fields = structure.fields();
 
-                    // Extract the field at the requested index
                     fields
                         .get(index)
                         .and_then(|field: &zbus::zvariant::Value<'_>| {
-                            // Try to extract as i32
                             match field.downcast_ref::<i32>() {
                                 Ok(val) => Some(val),
                                 Err(_) => {

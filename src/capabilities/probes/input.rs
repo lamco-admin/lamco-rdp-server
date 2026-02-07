@@ -51,7 +51,6 @@ pub enum InputStrategyType {
 }
 
 impl InputStrategyType {
-    /// Get human-readable name
     pub fn name(&self) -> &str {
         match self {
             Self::MutterApi => "Mutter D-Bus API",
@@ -84,7 +83,6 @@ pub enum DeploymentType {
 pub struct InputProbe;
 
 impl InputProbe {
-    /// Probe input capabilities
     pub async fn probe() -> InputCapabilities {
         info!("Probing input capabilities...");
 
@@ -94,10 +92,8 @@ impl InputProbe {
         let mut strategies = Vec::new();
         let mut fallback_chain = Vec::new();
 
-        // Check each strategy based on deployment
         match deployment {
             DeploymentType::Flatpak => {
-                // Flatpak can only use libei or Portal
                 let libei_available = Self::check_libei();
                 if libei_available {
                     strategies.push(InputStrategy {
@@ -121,11 +117,9 @@ impl InputProbe {
                 fallback_chain.push(AttemptResult::success("Portal", std::time::Duration::ZERO));
             }
             DeploymentType::Native | DeploymentType::SystemdUser => {
-                // Native can use Mutter API or wlr-direct
                 let compositor = Self::detect_compositor_type();
 
                 if compositor == "mutter" {
-                    // Try Mutter D-Bus API
                     strategies.push(InputStrategy {
                         strategy_type: InputStrategyType::MutterApi,
                         service_level: ServiceLevel::Full,
@@ -135,7 +129,6 @@ impl InputProbe {
                         std::time::Duration::ZERO,
                     ));
                 } else if compositor == "wlroots" {
-                    // Try wlr-direct
                     strategies.push(InputStrategy {
                         strategy_type: InputStrategyType::WlrDirect,
                         service_level: ServiceLevel::Full,
@@ -146,7 +139,6 @@ impl InputProbe {
                     ));
                 }
 
-                // libei as fallback
                 if Self::check_libei() {
                     strategies.push(InputStrategy {
                         strategy_type: InputStrategyType::LibEi,
@@ -155,7 +147,6 @@ impl InputProbe {
                     fallback_chain.push(AttemptResult::success("libei", std::time::Duration::ZERO));
                 }
 
-                // Portal as last resort
                 strategies.push(InputStrategy {
                     strategy_type: InputStrategyType::Portal,
                     service_level: ServiceLevel::Fallback,
@@ -163,7 +154,6 @@ impl InputProbe {
                 fallback_chain.push(AttemptResult::success("Portal", std::time::Duration::ZERO));
             }
             _ => {
-                // Unknown deployment - just use Portal
                 strategies.push(InputStrategy {
                     strategy_type: InputStrategyType::Portal,
                     service_level: ServiceLevel::Fallback,
@@ -172,7 +162,6 @@ impl InputProbe {
             }
         }
 
-        // Select best available
         let selected = strategies.first().cloned();
         let service_level = selected
             .as_ref()
@@ -201,12 +190,10 @@ impl InputProbe {
     }
 
     fn detect_deployment() -> DeploymentType {
-        // Check for Flatpak
         if std::env::var("FLATPAK_ID").is_ok() {
             return DeploymentType::Flatpak;
         }
 
-        // Check for container
         if Path::new("/.dockerenv").exists() {
             return DeploymentType::Container;
         }
@@ -219,9 +206,8 @@ impl InputProbe {
             }
         }
 
-        // Check if running as systemd service
+        // INVOCATION_ID is set by systemd for service units
         if std::env::var("INVOCATION_ID").is_ok() {
-            // systemd sets this
             if std::env::var("USER").map(|u| u == "root").unwrap_or(false) {
                 return DeploymentType::SystemdSystem;
             }
@@ -251,7 +237,6 @@ impl InputProbe {
     }
 
     fn check_libei() -> bool {
-        // Check if libei feature is compiled in
         #[cfg(feature = "libei")]
         {
             true

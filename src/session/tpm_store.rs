@@ -14,23 +14,15 @@ pub struct TpmCredentialStore {
 }
 
 impl TpmCredentialStore {
-    /// Create a new TPM credential store
-    ///
-    /// # Returns
-    ///
-    /// Configured store if TPM 2.0 is available via systemd-creds
     pub fn new() -> Result<Self> {
         info!("Initializing TPM 2.0 credential store");
 
-        // Verify systemd-creds is available
         Self::check_systemd_creds_available().context("systemd-creds not available")?;
 
-        // Verify TPM 2.0 is available
         if !Self::has_tpm2()? {
             return Err(anyhow!("TPM 2.0 not available"));
         }
 
-        // Use systemd credential storage directory
         let storage_path = PathBuf::from("/var/lib/systemd/credentials");
 
         info!("TPM 2.0 credential store initialized");
@@ -38,28 +30,14 @@ impl TpmCredentialStore {
         Ok(Self { storage_path })
     }
 
-    /// Store a credential in TPM-bound storage
-    ///
-    /// # Arguments
-    ///
-    /// * `name` - Credential name (unique identifier)
-    /// * `data` - Data to store (will be TPM-encrypted)
-    ///
-    /// # Returns
-    ///
-    /// Ok(()) if credential was stored successfully
     pub fn store(&self, name: &str, data: &[u8]) -> Result<()> {
         info!("Storing credential in TPM: {}", name);
 
-        // Create a temporary file for the credential data
         let temp_dir = std::env::temp_dir();
         let temp_file = temp_dir.join(format!("lamco-cred-{}", name));
 
-        // Write data to temp file
         std::fs::write(&temp_file, data).context("Failed to write temporary credential file")?;
 
-        // Use systemd-creds to encrypt and store
-        // Format: systemd-creds encrypt <input-file> <output-file> --with-key=tpm2 --name=<name>
         let output_file = self.storage_path.join(format!("{}.cred", name));
 
         let status = Command::new("systemd-creds")
@@ -71,7 +49,6 @@ impl TpmCredentialStore {
             .status()
             .context("Failed to execute systemd-creds encrypt")?;
 
-        // Clean up temp file
         std::fs::remove_file(&temp_file).ok();
 
         if !status.success() {
@@ -86,15 +63,6 @@ impl TpmCredentialStore {
         Ok(())
     }
 
-    /// Load a credential from TPM-bound storage
-    ///
-    /// # Arguments
-    ///
-    /// * `name` - Credential name
-    ///
-    /// # Returns
-    ///
-    /// Credential data if found
     pub fn load(&self, name: &str) -> Result<Vec<u8>> {
         debug!("Loading credential from TPM: {}", name);
 
@@ -104,12 +72,9 @@ impl TpmCredentialStore {
             return Err(anyhow!("Credential not found: {}", name));
         }
 
-        // Create temp file for decrypted output
         let temp_dir = std::env::temp_dir();
         let temp_file = temp_dir.join(format!("lamco-cred-decrypt-{}", name));
 
-        // Use systemd-creds to decrypt
-        // Format: systemd-creds decrypt <input-file> <output-file>
         let status = Command::new("systemd-creds")
             .arg("decrypt")
             .arg(&input_file)
@@ -126,10 +91,8 @@ impl TpmCredentialStore {
             ));
         }
 
-        // Read decrypted data
         let data = std::fs::read(&temp_file).context("Failed to read decrypted credential")?;
 
-        // Clean up temp file
         std::fs::remove_file(&temp_file).context("Failed to remove temporary file")?;
 
         debug!("Credential loaded successfully ({} bytes)", data.len());
@@ -137,15 +100,6 @@ impl TpmCredentialStore {
         Ok(data)
     }
 
-    /// Delete a TPM-bound credential
-    ///
-    /// # Arguments
-    ///
-    /// * `name` - Credential name
-    ///
-    /// # Returns
-    ///
-    /// Ok(()) if credential was deleted or didn't exist
     pub fn delete(&self, name: &str) -> Result<()> {
         info!("Deleting TPM credential: {}", name);
 
@@ -161,7 +115,6 @@ impl TpmCredentialStore {
         Ok(())
     }
 
-    /// Check if systemd-creds command is available
     fn check_systemd_creds_available() -> Result<()> {
         let output = Command::new("systemd-creds")
             .arg("--version")
@@ -180,7 +133,6 @@ impl TpmCredentialStore {
         Ok(())
     }
 
-    /// Check if TPM 2.0 is available
     fn has_tpm2() -> Result<bool> {
         debug!("Checking for TPM 2.0...");
 
@@ -204,7 +156,6 @@ pub struct AsyncTpmCredentialStore {
 }
 
 impl AsyncTpmCredentialStore {
-    /// Create new TPM store (async)
     pub async fn new() -> Result<Self> {
         let inner = tokio::task::spawn_blocking(|| TpmCredentialStore::new())
             .await
@@ -214,7 +165,6 @@ impl AsyncTpmCredentialStore {
         Ok(Self { inner })
     }
 
-    /// Store credential (async)
     pub async fn store(&self, name: String, data: Vec<u8>) -> Result<()> {
         let storage_path = self.inner.storage_path.clone();
 
@@ -227,7 +177,6 @@ impl AsyncTpmCredentialStore {
         .context("Failed to store TPM credential")
     }
 
-    /// Load credential (async)
     pub async fn load(&self, name: String) -> Result<Vec<u8>> {
         let storage_path = self.inner.storage_path.clone();
 
@@ -240,7 +189,6 @@ impl AsyncTpmCredentialStore {
         .context("Failed to load TPM credential")
     }
 
-    /// Delete credential (async)
     pub async fn delete(&self, name: String) -> Result<()> {
         let storage_path = self.inner.storage_path.clone();
 

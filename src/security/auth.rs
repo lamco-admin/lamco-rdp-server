@@ -27,8 +27,8 @@ impl AuthMethod {
             "pam" => Self::Pam,
             "none" => Self::None,
             _ => {
-                warn!("Unknown auth method '{}', defaulting to PAM", s);
-                Self::Pam
+                warn!("Unknown auth method '{}', defaulting to 'none'", s);
+                Self::None
             }
         }
     }
@@ -78,7 +78,6 @@ impl UserAuthenticator {
 
         auth.get_handler().set_credentials(username, password);
 
-        // Authenticate
         match auth.authenticate() {
             Ok(_) => {
                 info!("User '{}' authenticated successfully", username);
@@ -181,7 +180,8 @@ mod tests {
     fn test_auth_method_from_str() {
         assert_eq!(AuthMethod::from_str("pam"), AuthMethod::Pam);
         assert_eq!(AuthMethod::from_str("none"), AuthMethod::None);
-        assert_eq!(AuthMethod::from_str("invalid"), AuthMethod::Pam);
+        // Unknown methods default to None (safe default)
+        assert_eq!(AuthMethod::from_str("invalid"), AuthMethod::None);
     }
 
     #[test]

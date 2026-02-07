@@ -1,6 +1,6 @@
 [package]
 name = "lamco-rdp-server"
-version = "1.2.2"
+version = "1.3.0"
 edition = "2021"
 rust-version = "1.85"
 authors = ["Greg Lamberson <greg@lamco.io>"]
@@ -38,9 +38,9 @@ path = "src/lib.rs"
 # implement CliprdrBackend trait from ironrdp-cliprdr. Since we patch
 # ironrdp-cliprdr to our fork (for file transfer methods), clipboard crates
 # must compile against the same patched version to avoid trait conflicts.
-lamco-wayland = "0.2.3"
+lamco-wayland = "0.2.5"
 lamco-rdp = "0.5.0"
-lamco-portal = { version = "0.3.0", features = ["dbus-clipboard"] }
+lamco-portal = { version = "0.3.1", features = ["dbus-clipboard"] }
 lamco-pipewire = "0.1.4"
 lamco-video = "0.1.2"
 lamco-rdp-input = "0.1.1"
@@ -101,6 +101,7 @@ ironrdp-core = { git = "https://github.com/lamco-admin/IronRDP", branch = "maste
 ironrdp-dvc = { git = "https://github.com/lamco-admin/IronRDP", branch = "master" }
 ironrdp-svc = { git = "https://github.com/lamco-admin/IronRDP", branch = "master" }
 ironrdp-egfx = { git = "https://github.com/lamco-admin/IronRDP", branch = "master" }
+ironrdp-graphics = { git = "https://github.com/lamco-admin/IronRDP", branch = "master" }
 ironrdp-rdpsnd = { git = "https://github.com/lamco-admin/IronRDP", branch = "master" }
 
 # -----------------------------------------------------------------------------
@@ -212,7 +213,7 @@ pam = { version = "0.7", optional = true }
 # -----------------------------------------------------------------------------
 # GUI (optional - for configuration GUI)
 # -----------------------------------------------------------------------------
-iced = { version = "0.14", optional = true, features = ["tokio", "advanced", "canvas", "lazy", "svg"] }
+iced = { version = "0.14", optional = true, features = ["tokio", "advanced", "canvas", "lazy", "svg", "image"] }
 rfd = { version = "0.15", optional = true, default-features = false, features = ["xdg-portal", "tokio"] }
 
 # =============================================================================

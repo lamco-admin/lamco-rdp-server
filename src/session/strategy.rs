@@ -45,54 +45,24 @@ pub struct ClipboardComponents {
 /// Abstracts over different session implementations (Portal, Mutter, wlr)
 #[async_trait]
 pub trait SessionHandle: Send + Sync {
-    /// Get PipeWire node ID or file descriptor for video capture
     fn pipewire_access(&self) -> PipeWireAccess;
 
-    /// Get stream information
     fn streams(&self) -> Vec<StreamInfo>;
 
-    /// Session type identifier
     fn session_type(&self) -> SessionType;
 
     // === Input Injection Methods ===
 
-    /// Inject keyboard keycode event
-    ///
-    /// # Arguments
-    ///
-    /// * `keycode` - Linux keycode (evdev)
-    /// * `pressed` - true for press, false for release
     async fn notify_keyboard_keycode(&self, keycode: i32, pressed: bool) -> Result<()>;
 
-    /// Inject absolute pointer motion
-    ///
-    /// # Arguments
-    ///
-    /// * `stream_id` - PipeWire stream node ID
-    /// * `x` - Absolute X coordinate (stream-relative)
-    /// * `y` - Absolute Y coordinate (stream-relative)
     async fn notify_pointer_motion_absolute(&self, stream_id: u32, x: f64, y: f64) -> Result<()>;
 
-    /// Inject pointer button event
-    ///
-    /// # Arguments
-    ///
-    /// * `button` - Button code (evdev: 272=left, 273=right, 274=middle)
-    /// * `pressed` - true for press, false for release
     async fn notify_pointer_button(&self, button: i32, pressed: bool) -> Result<()>;
 
-    /// Inject pointer axis (scroll) event
-    ///
-    /// # Arguments
-    ///
-    /// * `dx` - Horizontal scroll delta
-    /// * `dy` - Vertical scroll delta
     async fn notify_pointer_axis(&self, dx: f64, dy: f64) -> Result<()>;
 
     // === Clipboard Support ===
 
-    /// Get Portal clipboard components (if available)
-    ///
     /// Returns Some for Portal strategy (shares session), None for Mutter (no clipboard API).
     /// When None, caller must create a separate Portal session for clipboard operations.
     fn portal_clipboard(&self) -> Option<ClipboardComponents>;
@@ -146,21 +116,14 @@ impl std::fmt::Display for SessionType {
 /// Different implementations for Portal, Mutter, wlr-screencopy
 #[async_trait]
 pub trait SessionStrategy: Send + Sync {
-    /// Human-readable strategy name
     fn name(&self) -> &'static str;
 
-    /// Does this strategy require initial user interaction?
     fn requires_initial_setup(&self) -> bool;
 
-    /// Can this strategy restore sessions without user interaction?
     fn supports_unattended_restore(&self) -> bool;
 
-    /// Create a new capture session
-    ///
-    /// Returns a session handle that can be used for video capture and input injection
     async fn create_session(&self) -> Result<Arc<dyn SessionHandle>>;
 
-    /// Clean up session resources
     async fn cleanup(&self, session: &dyn SessionHandle) -> Result<()>;
 }
 

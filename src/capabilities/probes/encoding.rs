@@ -8,7 +8,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 use tracing::{debug, info, warn};
 
-use super::utils::run_command;
+use super::environment::run_command;
 use crate::capabilities::fallback::AttemptResult;
 use crate::capabilities::state::ServiceLevel;
 
@@ -65,7 +65,6 @@ pub enum EncoderBackendType {
 }
 
 impl EncoderBackendType {
-    /// Get human-readable name
     pub fn name(&self) -> &str {
         match self {
             Self::VaApi { .. } => "VA-API",
@@ -74,7 +73,6 @@ impl EncoderBackendType {
         }
     }
 
-    /// Check if this is a hardware encoder
     pub fn is_hardware(&self) -> bool {
         matches!(self, Self::VaApi { .. } | Self::Nvenc { .. })
     }
@@ -101,45 +99,38 @@ pub struct EncoderCapabilities {
 pub struct EncodingProbe;
 
 impl EncodingProbe {
-    /// Probe encoding capabilities
     pub async fn probe() -> EncodingCapabilities {
         info!("Probing encoding capabilities...");
 
         let mut backends = Vec::new();
         let mut fallback_chain = Vec::new();
 
-        // 1. Probe VA-API (highest priority for hardware)
         let (vaapi_result, vaapi_attempt) = Self::probe_vaapi();
         fallback_chain.push(vaapi_attempt);
         if let Some(vaapi) = vaapi_result {
             backends.push(vaapi);
         }
 
-        // 2. Probe NVENC
         let (nvenc_result, nvenc_attempt) = Self::probe_nvenc();
         fallback_chain.push(nvenc_attempt);
         if let Some(nvenc) = nvenc_result {
             backends.push(nvenc);
         }
 
-        // 3. Probe OpenH264 (software - always available if h264 feature enabled)
         let (openh264_result, openh264_attempt) = Self::probe_openh264();
         fallback_chain.push(openh264_attempt);
         if let Some(openh264) = openh264_result {
             backends.push(openh264);
         }
 
-        // Compute derived values
         let hardware_available = backends.iter().any(|b| b.backend_type.is_hardware());
 
         let software_available = backends
             .iter()
             .any(|b| matches!(b.backend_type, EncoderBackendType::OpenH264));
 
-        // Select best available (hardware first, then software)
         let selected = backends.first().cloned();
 
-        // Determine service level
         let service_level = if hardware_available {
             ServiceLevel::Full
         } else if software_available {
@@ -169,14 +160,12 @@ impl EncodingProbe {
     fn probe_vaapi() -> (Option<EncoderBackend>, AttemptResult) {
         let start = Instant::now();
 
-        // Enumerate render devices
         for i in 128..=135 {
             let device = format!("/dev/dri/renderD{}", i);
             if !Path::new(&device).exists() {
                 continue;
             }
 
-            // Try vainfo
             match run_command("vainfo", &["--display", "drm", "--device", &device]) {
                 Ok(output) => {
                     let driver = Self::parse_vaapi_driver(&output);
@@ -237,11 +226,10 @@ impl EncodingProbe {
 
         let output_lower = output.to_lowercase();
 
-        // Check for H.264 encoding support
         for line in output.lines() {
             let line_lower = line.to_lowercase();
 
-            // Look for encode entrypoints (not just decode)
+            // Only match encode entrypoints, not decode
             if (line_lower.contains("h264") || line_lower.contains("h.264"))
                 && (line_lower.contains("encslice") || line_lower.contains("enc"))
             {
@@ -286,7 +274,6 @@ impl EncodingProbe {
     fn probe_nvenc() -> (Option<EncoderBackend>, AttemptResult) {
         let start = Instant::now();
 
-        // Check for NVIDIA device
         if !Path::new("/dev/nvidia0").exists() {
             return (
                 None,
@@ -299,7 +286,6 @@ impl EncodingProbe {
             );
         }
 
-        // Query nvidia-smi
         match run_command(
             "nvidia-smi",
             &["--query-gpu=name,driver_version", "--format=csv,noheader"],
@@ -351,7 +337,6 @@ impl EncodingProbe {
     fn probe_openh264() -> (Option<EncoderBackend>, AttemptResult) {
         let start = Instant::now();
 
-        // OpenH264 is always available if the h264 feature is compiled in
         #[cfg(feature = "h264")]
         {
             debug!("OpenH264 software encoder available (h264 feature enabled)");

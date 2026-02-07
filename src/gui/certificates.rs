@@ -73,7 +73,6 @@ pub fn generate_self_signed_certificate(
     organization: Option<String>,
     valid_days: u32,
 ) -> Result<(), String> {
-    // Build params and SAN names
     let mut san_names = vec![common_name.clone()];
     if common_name != "localhost" {
         san_names.push("localhost".to_string());
@@ -106,13 +105,11 @@ fn generate_certificate_internal(params: &CertGenParams) -> Result<GeneratedCert
         .map_err(|e| format!("Failed to serialize certificate: {}", e))?;
     let private_key_pem = certificate.serialize_private_key_pem();
 
-    // Get DER for fingerprint calculation
     let der_bytes = certificate
         .serialize_der()
         .map_err(|e| format!("Failed to serialize certificate DER: {}", e))?;
     let fingerprint = calculate_sha256_fingerprint(&der_bytes);
 
-    // Calculate expiration date (default is 365 days from now)
     let now = OffsetDateTime::now_utc();
     let not_after = now + Duration::days(params.validity_days as i64);
     let expires = format_date(not_after);
@@ -133,7 +130,6 @@ fn calculate_sha256_fingerprint(der: &[u8]) -> String {
     hasher.update(der);
     let result = hasher.finalize();
 
-    // Format as colon-separated hex pairs
     result
         .iter()
         .map(|b| format!("{:02X}", b))
@@ -160,7 +156,6 @@ pub fn save_certificate_files(
     cert_path: &Path,
     key_path: &Path,
 ) -> Result<(), String> {
-    // Ensure parent directories exist
     if let Some(parent) = cert_path.parent() {
         fs::create_dir_all(parent)
             .map_err(|e| format!("Failed to create certificate directory: {}", e))?;
@@ -170,11 +165,9 @@ pub fn save_certificate_files(
         fs::create_dir_all(parent).map_err(|e| format!("Failed to create key directory: {}", e))?;
     }
 
-    // Write certificate file
     fs::write(cert_path, &cert.certificate_pem)
         .map_err(|e| format!("Failed to write certificate file: {}", e))?;
 
-    // Write private key file with restrictive permissions
     write_private_key(key_path, &cert.private_key_pem)?;
 
     Ok(())
@@ -209,7 +202,6 @@ pub fn validate_certificate_file(cert_path: &Path) -> Result<CertificateInfo, St
         return Err("File does not contain a valid PEM certificate".to_string());
     }
 
-    // Extract the certificate bytes
     let cert_start = pem_content
         .find("-----BEGIN CERTIFICATE-----")
         .ok_or("Invalid PEM format")?;
@@ -217,7 +209,6 @@ pub fn validate_certificate_file(cert_path: &Path) -> Result<CertificateInfo, St
         .find("-----END CERTIFICATE-----")
         .ok_or("Invalid PEM format")?;
 
-    // Decode base64 between markers
     let b64_content: String = pem_content[cert_start + 27..cert_end]
         .chars()
         .filter(|c| !c.is_whitespace())

@@ -10,7 +10,6 @@ use crate::gui::state::AppState;
 use crate::gui::theme;
 use crate::gui::widgets;
 
-const H264_LEVELS: &[&str] = &["auto", "3.0", "3.1", "4.0", "4.1", "5.0", "5.1", "5.2"];
 const ZGFX_OPTIONS: &[&str] = &["never", "auto", "always"];
 const CODEC_OPTIONS: &[&str] = &["auto", "avc420", "avc444"];
 const COLOR_MATRIX_OPTIONS: &[&str] = &["auto", "openh264", "bt709", "bt601", "srgb"];
@@ -23,13 +22,17 @@ pub fn view_egfx_tab(state: &AppState) -> Element<'_, Message> {
         // Section header
         widgets::section_header("EGFX (Graphics Pipeline) Configuration"),
         space().height(16.0),
-        // Enable EGFX toggle
-        widgets::toggle_with_help(
+        // Enable EGFX toggle - pending: requires RemoteFX fallback implementation
+        widgets::toggle_switch(
             "Enable EGFX Graphics Pipeline",
             egfx.enabled,
-            "Required for H.264 video and modern RDP clients",
             Message::EgfxEnabledToggled,
         ),
+        text("⚠ Disabling requires RemoteFX fallback (not yet implemented)")
+            .size(11)
+            .style(|_theme| text::Style {
+                color: Some(theme::colors::WARNING.scale_alpha(0.7)),
+            }),
         space().height(16.0),
         // Quality presets
         text("Quality Presets:").size(14),
@@ -180,17 +183,9 @@ fn view_egfx_expert_settings(state: &AppState) -> Element<'_, Message> {
         // Advanced EGFX
         widgets::subsection_header("Advanced EGFX"),
         space().height(12.0),
-        widgets::labeled_row(
-            "H.264 Level:",
-            150.0,
-            pick_list(H264_LEVELS.to_vec(), Some(egfx.h264_level.as_str()), |s| {
-                Message::EgfxH264LevelChanged(s.to_string())
-            },)
-            .width(Length::Fixed(120.0))
-            .into(),
-        ),
-        space().height(8.0),
-        widgets::labeled_row(
+        // Note: H.264 Level removed - OpenH264 auto-selects based on resolution,
+        // and codec selection (avc420/avc444) is handled by the Codec dropdown
+        widgets::labeled_row_with_help(
             "ZGFX Compression:",
             150.0,
             pick_list(
@@ -200,6 +195,7 @@ fn view_egfx_expert_settings(state: &AppState) -> Element<'_, Message> {
             )
             .width(Length::Fixed(120.0))
             .into(),
+            "RDP8 bulk compression for EGFX PDUs (never/auto/always)",
         ),
         space().height(8.0),
         widgets::labeled_row(
@@ -213,7 +209,7 @@ fn view_egfx_expert_settings(state: &AppState) -> Element<'_, Message> {
             ),
         ),
         space().height(8.0),
-        widgets::labeled_row(
+        widgets::labeled_row_pending_with_note(
             "Frame Ack Timeout:",
             150.0,
             row![
@@ -227,6 +223,7 @@ fn view_egfx_expert_settings(state: &AppState) -> Element<'_, Message> {
             ]
             .align_y(Alignment::Center)
             .into(),
+            "Needs frame tracking implementation",
         ),
         space().height(20.0),
         // AVC444 Configuration
@@ -239,7 +236,7 @@ fn view_egfx_expert_settings(state: &AppState) -> Element<'_, Message> {
             Message::EgfxAvc444EnabledToggled,
         ),
         space().height(12.0),
-        widgets::labeled_row(
+        widgets::labeled_row_pending_with_note(
             "Aux Bitrate Ratio:",
             150.0,
             row![
@@ -257,13 +254,8 @@ fn view_egfx_expert_settings(state: &AppState) -> Element<'_, Message> {
             ]
             .align_y(Alignment::Center)
             .into(),
+            "Single encoder per MS-RDPEGFX spec",
         ),
-        space().height(8.0),
-        text("Aux stream gets this percentage of main stream's bitrate")
-            .size(12)
-            .style(|_theme| text::Style {
-                color: Some(theme::colors::TEXT_MUTED),
-            }),
         space().height(12.0),
         widgets::labeled_row(
             "Color Matrix:",

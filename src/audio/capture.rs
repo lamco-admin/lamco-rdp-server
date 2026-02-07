@@ -39,17 +39,13 @@ use pw::spa::param::format::{MediaSubtype, MediaType};
 use pw::spa::param::format_utils;
 use pw::spa::pod::Pod;
 
-/// Audio sample format
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AudioFormat {
-    /// 32-bit floating point (-1.0 to 1.0)
     F32,
-    /// 16-bit signed integer
     I16,
 }
 
 impl AudioFormat {
-    /// Convert to SPA audio format
     fn to_spa_format(self) -> spa::param::audio::AudioFormat {
         match self {
             Self::F32 => spa::param::audio::AudioFormat::F32LE,
@@ -57,7 +53,6 @@ impl AudioFormat {
         }
     }
 
-    /// Get bytes per sample
     fn bytes_per_sample(self) -> usize {
         match self {
             Self::F32 => mem::size_of::<f32>(),
@@ -66,16 +61,11 @@ impl AudioFormat {
     }
 }
 
-/// Audio capture configuration
 #[derive(Debug, Clone)]
 pub struct CaptureConfig {
-    /// Sample rate in Hz (typically 48000)
     pub sample_rate: u32,
-    /// Number of channels (1 = mono, 2 = stereo)
     pub channels: u32,
-    /// Sample format
     pub format: AudioFormat,
-    /// Buffer size in frames (affects latency)
     pub buffer_frames: u32,
 }
 
@@ -90,17 +80,13 @@ impl Default for CaptureConfig {
     }
 }
 
-/// Audio samples from capture
 #[derive(Debug, Clone)]
 pub enum AudioSamples {
-    /// 32-bit float samples (interleaved if stereo)
     F32(Vec<f32>),
-    /// 16-bit integer samples (interleaved if stereo)
     I16(Vec<i16>),
 }
 
 impl AudioSamples {
-    /// Get the number of samples (total, including all channels)
     pub fn len(&self) -> usize {
         match self {
             Self::F32(s) => s.len(),
@@ -108,12 +94,10 @@ impl AudioSamples {
         }
     }
 
-    /// Check if empty
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
-    /// Convert to i16 samples
     pub fn to_i16(&self) -> Vec<i16> {
         match self {
             Self::F32(samples) => samples
@@ -124,7 +108,6 @@ impl AudioSamples {
         }
     }
 
-    /// Convert to f32 samples
     pub fn to_f32(&self) -> Vec<f32> {
         match self {
             Self::F32(samples) => samples.clone(),
@@ -133,39 +116,27 @@ impl AudioSamples {
     }
 }
 
-/// Audio capture handle for receiving samples
 pub struct AudioCaptureHandle {
-    /// Channel receiver for audio samples
     pub receiver: mpsc::Receiver<AudioSamples>,
-    /// Signal to stop capture
     stop_signal: Arc<AtomicBool>,
 }
 
 impl AudioCaptureHandle {
-    /// Stop the audio capture
     pub fn stop(&self) {
         self.stop_signal.store(true, Ordering::SeqCst);
     }
 
-    /// Check if capture is stopped
     pub fn is_stopped(&self) -> bool {
         self.stop_signal.load(Ordering::SeqCst)
     }
 }
 
-/// User data passed to PipeWire stream callbacks
 struct CaptureUserData {
-    /// Negotiated audio format from PipeWire
     format: spa::param::audio::AudioInfoRaw,
-    /// Desired output format
     output_format: AudioFormat,
-    /// Channel sender for audio samples
     sender: mpsc::Sender<AudioSamples>,
-    /// Stop signal
     stop_signal: Arc<AtomicBool>,
-    /// Statistics: total samples captured
     samples_captured: u64,
-    /// Statistics: samples dropped due to backpressure
     samples_dropped: u64,
 }
 
@@ -179,16 +150,6 @@ pub struct AudioCapture {
 }
 
 impl AudioCapture {
-    /// Create a new audio capture instance
-    ///
-    /// # Arguments
-    ///
-    /// * `config` - Capture configuration
-    /// * `channel_size` - Size of the sample channel buffer
-    ///
-    /// # Returns
-    ///
-    /// Tuple of (AudioCapture, AudioCaptureHandle)
     pub fn new(config: CaptureConfig, channel_size: usize) -> (Self, AudioCaptureHandle) {
         let (sender, receiver) = mpsc::channel(channel_size);
         let stop_signal = Arc::new(AtomicBool::new(false));
@@ -207,22 +168,13 @@ impl AudioCapture {
         (capture, handle)
     }
 
-    /// Start capturing audio from a PipeWire node
-    ///
-    /// # Arguments
-    ///
-    /// * `node_id` - Optional PipeWire node ID to capture from (from Portal session).
-    ///               If None, connects to any suitable audio source.
-    ///
-    /// This method blocks and runs the PipeWire main loop. It should be
-    /// called from a dedicated thread.
+    /// Blocks and runs the PipeWire main loop -- call from a dedicated thread.
     pub fn start_capture(&self, node_id: Option<u32>) -> Result<()> {
         info!(
             "Starting audio capture: {}Hz, {} channels, format={:?}, node_id={:?}",
             self.config.sample_rate, self.config.channels, self.config.format, node_id
         );
 
-        // Create PipeWire main loop and context
         let mainloop =
             pw::main_loop::MainLoop::new(None).context("Failed to create PipeWire MainLoop")?;
         let context =
@@ -231,7 +183,6 @@ impl AudioCapture {
             .connect(None)
             .context("Failed to connect to PipeWire daemon")?;
 
-        // Create stream properties
         let mut props = pw::properties::properties! {
             *pw::keys::MEDIA_TYPE => "Audio",
             *pw::keys::MEDIA_CATEGORY => "Capture",
@@ -240,19 +191,16 @@ impl AudioCapture {
             *pw::keys::APP_NAME => "lamco-rdp-server",
         };
 
-        // If we have a specific node ID from Portal, target it
-        // Note: Using raw key string as TARGET_OBJECT requires v0_3_44 feature
+        // Using raw key string as TARGET_OBJECT requires v0_3_44 feature
         if let Some(id) = node_id {
             props.insert("target.object", id.to_string());
         }
 
-        // Capture from sink monitor (desktop audio output)
         props.insert("stream.capture.sink", "true");
 
         let stream = pw::stream::Stream::new(&core, "rdp-audio-capture", props)
             .context("Failed to create PipeWire stream")?;
 
-        // Prepare user data for callbacks
         let user_data = CaptureUserData {
             format: spa::param::audio::AudioInfoRaw::default(),
             output_format: self.config.format,
@@ -262,10 +210,8 @@ impl AudioCapture {
             samples_dropped: 0,
         };
 
-        // Clone stop signal for state_changed callback
         let stop_signal_for_callback = Arc::clone(&self.stop_signal);
 
-        // Set up stream callbacks
         let _listener = stream
             .add_local_listener_with_user_data(user_data)
             .state_changed(move |_stream, _user_data, old, new| {
@@ -287,17 +233,14 @@ impl AudioCapture {
                 }
             })
             .param_changed(|_stream, user_data, id, param| {
-                // NULL means to clear the format
                 let Some(param) = param else {
                     return;
                 };
 
-                // Only process format changes
                 if id != spa::param::ParamType::Format.as_raw() {
                     return;
                 }
 
-                // Parse media type and subtype
                 let (media_type, media_subtype) = match format_utils::parse_format(param) {
                     Ok(v) => v,
                     Err(e) => {
@@ -306,7 +249,6 @@ impl AudioCapture {
                     }
                 };
 
-                // Only accept raw audio
                 if media_type != MediaType::Audio || media_subtype != MediaSubtype::Raw {
                     debug!(
                         "Ignoring non-raw audio format: {:?}/{:?}",
@@ -315,7 +257,6 @@ impl AudioCapture {
                     return;
                 }
 
-                // Parse the audio format details
                 if let Err(e) = user_data.format.parse(param) {
                     warn!("Failed to parse audio info: {:?}", e);
                     return;
@@ -329,12 +270,10 @@ impl AudioCapture {
                 );
             })
             .process(|stream, user_data| {
-                // Check stop signal
                 if user_data.stop_signal.load(Ordering::Relaxed) {
                     return;
                 }
 
-                // Dequeue buffer from PipeWire
                 let Some(mut buffer) = stream.dequeue_buffer() else {
                     trace!("No buffer available");
                     return;
@@ -357,13 +296,11 @@ impl AudioCapture {
                     return;
                 };
 
-                // Get actual format from negotiated params
                 let n_channels = user_data.format.channels() as usize;
                 if n_channels == 0 {
                     return;
                 }
 
-                // Convert raw bytes to samples based on negotiated format
                 let samples = match user_data.format.format() {
                     spa::param::audio::AudioFormat::F32LE
                     | spa::param::audio::AudioFormat::F32BE => {
@@ -387,7 +324,6 @@ impl AudioCapture {
                             }
                         }
 
-                        // Convert to output format if needed
                         match user_data.output_format {
                             AudioFormat::F32 => AudioSamples::F32(f32_samples),
                             AudioFormat::I16 => {
@@ -421,7 +357,6 @@ impl AudioCapture {
                             }
                         }
 
-                        // Convert to output format if needed
                         match user_data.output_format {
                             AudioFormat::I16 => AudioSamples::I16(i16_samples),
                             AudioFormat::F32 => {
@@ -439,7 +374,7 @@ impl AudioCapture {
 
                 let sample_count = samples.len();
 
-                // Try to send samples (non-blocking to maintain realtime)
+                // Non-blocking to maintain realtime
                 match user_data.sender.try_send(samples) {
                     Ok(()) => {
                         user_data.samples_captured += sample_count as u64;
@@ -451,7 +386,6 @@ impl AudioCapture {
                         trace!("Dropped {} samples (channel full)", sample_count);
                     }
                     Err(mpsc::error::TrySendError::Closed(_)) => {
-                        // Channel closed, signal stop
                         user_data.stop_signal.store(true, Ordering::SeqCst);
                         debug!("Audio sample channel closed");
                     }
@@ -460,9 +394,7 @@ impl AudioCapture {
             .register()
             .context("Failed to register stream listener")?;
 
-        // Build audio format parameters pod
-        // Request our preferred format, PipeWire may negotiate something different
-        // We leave channels and rate empty to accept the native graph rate/channels
+        // Leave channels and rate empty to accept the native graph rate/channels
         // as shown in the official PipeWire audio-capture example
         let mut audio_info = spa::param::audio::AudioInfoRaw::new();
         audio_info.set_format(self.config.format.to_spa_format());
@@ -471,7 +403,6 @@ impl AudioCapture {
         // audio_info.set_channels(self.config.channels);
         // Channel positions are left unset (UNPOSITIONED flag is default)
 
-        // Serialize format to pod
         let obj = spa::pod::Object {
             type_: spa::utils::SpaTypes::ObjectParamFormat.as_raw(),
             id: spa::param::ParamType::EnumFormat.as_raw(),
@@ -490,7 +421,6 @@ impl AudioCapture {
 
         let mut params = [pod];
 
-        // Connect the stream
         let flags = pw::stream::StreamFlags::AUTOCONNECT
             | pw::stream::StreamFlags::MAP_BUFFERS
             | pw::stream::StreamFlags::RT_PROCESS;
@@ -501,8 +431,6 @@ impl AudioCapture {
 
         info!("Audio capture stream connected, starting main loop");
 
-        // Run main loop until stopped using iterate() method
-        // This allows us to check the stop signal between iterations
         let loop_ref = mainloop.loop_();
         while !self.stop_signal.load(Ordering::Relaxed) {
             // Iterate with 100ms timeout
@@ -513,23 +441,11 @@ impl AudioCapture {
         Ok(())
     }
 
-    /// Stop the capture
     pub fn stop(&self) {
         self.stop_signal.store(true, Ordering::SeqCst);
     }
 }
 
-/// Spawn audio capture in a dedicated thread
-///
-/// # Arguments
-///
-/// * `config` - Capture configuration
-/// * `node_id` - Optional PipeWire node ID
-/// * `channel_size` - Sample channel buffer size
-///
-/// # Returns
-///
-/// Handle to receive audio samples and control capture
 pub fn spawn_audio_capture(
     config: CaptureConfig,
     node_id: Option<u32>,
@@ -537,11 +453,9 @@ pub fn spawn_audio_capture(
 ) -> Result<AudioCaptureHandle> {
     let (capture, handle) = AudioCapture::new(config, channel_size);
 
-    // Spawn capture thread
     std::thread::Builder::new()
         .name("pipewire-audio".into())
         .spawn(move || {
-            // Initialize PipeWire in this thread
             pw::init();
 
             if let Err(e) = capture.start_capture(node_id) {
@@ -553,10 +467,6 @@ pub fn spawn_audio_capture(
     Ok(handle)
 }
 
-/// Create an audio capture handle connected to test samples
-///
-/// This is useful for testing the audio pipeline without actual PipeWire.
-/// Generates a simple sine wave tone.
 #[cfg(test)]
 pub fn spawn_test_capture(
     config: CaptureConfig,
@@ -573,7 +483,6 @@ pub fn spawn_test_capture(
     let sample_rate = config.sample_rate;
     let channels = config.channels;
 
-    // Spawn a thread that generates test samples
     std::thread::Builder::new()
         .name("test-audio".into())
         .spawn(move || {

@@ -19,14 +19,10 @@
 use anyhow::{Context, Result};
 use tracing::debug;
 
-/// OPUS audio application mode
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OpusApplication {
-    /// Optimized for voice (VoIP, speech)
     Voip,
-    /// Optimized for non-voice audio (music, general audio)
     Audio,
-    /// Optimized for lowest latency
     LowDelay,
 }
 
@@ -40,19 +36,13 @@ impl From<OpusApplication> for opus2::Application {
     }
 }
 
-/// OPUS encoder configuration
 #[derive(Debug, Clone)]
 pub struct OpusEncoderConfig {
-    /// Sample rate (48000 Hz recommended)
     pub sample_rate: u32,
-    /// Number of channels (1 = mono, 2 = stereo)
     pub channels: usize,
-    /// Target bitrate in bits per second
     pub bitrate: u32,
-    /// Application mode
     pub application: OpusApplication,
-    /// Frame size in samples (at 48kHz: 120, 240, 480, 960, 1920, 2880)
-    /// 960 samples = 20ms at 48kHz (recommended)
+    /// At 48kHz: 120, 240, 480, 960, 1920, 2880. 960 = 20ms (recommended).
     pub frame_size: usize,
 }
 
@@ -69,7 +59,6 @@ impl Default for OpusEncoderConfig {
 }
 
 impl OpusEncoderConfig {
-    /// Create a new config with the specified sample rate and channels
     pub fn new(sample_rate: u32, channels: usize) -> Self {
         Self {
             sample_rate,
@@ -78,38 +67,29 @@ impl OpusEncoderConfig {
         }
     }
 
-    /// Set the bitrate
     pub fn with_bitrate(mut self, bitrate: u32) -> Self {
         self.bitrate = bitrate;
         self
     }
 
-    /// Set the application mode
     pub fn with_application(mut self, application: OpusApplication) -> Self {
         self.application = application;
         self
     }
 
-    /// Set the frame size
     pub fn with_frame_size(mut self, frame_size: usize) -> Self {
         self.frame_size = frame_size;
         self
     }
 
-    /// Get frame duration in milliseconds
     pub fn frame_duration_ms(&self) -> u32 {
         (self.frame_size as u32 * 1000) / self.sample_rate
     }
 }
 
-/// OPUS Encoder
-///
-/// Encodes PCM audio to OPUS format. Supports both mono and stereo at
-/// various sample rates (8000, 12000, 16000, 24000, 48000 Hz).
 pub struct OpusEncoder {
     encoder: opus2::Encoder,
     config: OpusEncoderConfig,
-    /// Temporary buffer for encoding output
     output_buffer: Vec<u8>,
 }
 
@@ -122,7 +102,6 @@ impl std::fmt::Debug for OpusEncoder {
 }
 
 impl OpusEncoder {
-    /// Create a new OPUS encoder with the given configuration
     pub fn new(config: OpusEncoderConfig) -> Result<Self> {
         let channels = match config.channels {
             1 => opus2::Channels::Mono,
@@ -134,12 +113,10 @@ impl OpusEncoder {
             opus2::Encoder::new(config.sample_rate, channels, config.application.into())
                 .context("Failed to create OPUS encoder")?;
 
-        // Set bitrate
         encoder
             .set_bitrate(opus2::Bitrate::Bits(config.bitrate as i32))
             .context("Failed to set OPUS bitrate")?;
 
-        // Allocate output buffer (OPUS frame is at most ~1275 bytes)
         let output_buffer = vec![0u8; 4096];
 
         debug!(
@@ -157,27 +134,22 @@ impl OpusEncoder {
         })
     }
 
-    /// Create a default stereo encoder at 48kHz
     pub fn new_default() -> Result<Self> {
         Self::new(OpusEncoderConfig::default())
     }
 
-    /// Get the encoder configuration
     pub fn config(&self) -> &OpusEncoderConfig {
         &self.config
     }
 
-    /// Get the expected input frame size in samples (per channel)
     pub fn frame_size(&self) -> usize {
         self.config.frame_size
     }
 
-    /// Get the expected input buffer size (samples * channels)
     pub fn input_frame_size(&self) -> usize {
         self.config.frame_size * self.config.channels
     }
 
-    /// Set the encoder bitrate dynamically
     pub fn set_bitrate(&mut self, bitrate: u32) -> Result<()> {
         self.encoder
             .set_bitrate(opus2::Bitrate::Bits(bitrate as i32))
@@ -186,16 +158,7 @@ impl OpusEncoder {
         Ok(())
     }
 
-    /// Encode a frame of PCM samples to OPUS
-    ///
-    /// # Arguments
-    ///
-    /// * `pcm` - Input PCM samples as i16 (interleaved if stereo)
-    ///           Must be exactly `frame_size * channels` samples
-    ///
-    /// # Returns
-    ///
-    /// Encoded OPUS packet
+    /// Input must be exactly `frame_size * channels` samples.
     pub fn encode(&mut self, pcm: &[i16]) -> Result<Vec<u8>> {
         let expected_samples = self.input_frame_size();
         if pcm.len() != expected_samples {
@@ -214,16 +177,7 @@ impl OpusEncoder {
         Ok(self.output_buffer[..encoded_len].to_vec())
     }
 
-    /// Encode a frame of PCM samples as f32 to OPUS
-    ///
-    /// # Arguments
-    ///
-    /// * `pcm` - Input PCM samples as f32 [-1.0, 1.0] (interleaved if stereo)
-    ///           Must be exactly `frame_size * channels` samples
-    ///
-    /// # Returns
-    ///
-    /// Encoded OPUS packet
+    /// Input must be exactly `frame_size * channels` samples.
     pub fn encode_float(&mut self, pcm: &[f32]) -> Result<Vec<u8>> {
         let expected_samples = self.input_frame_size();
         if pcm.len() != expected_samples {

@@ -1,20 +1,30 @@
 //! Advanced Configuration Tab
 //!
-//! Combines damage tracking, hardware encoding, display, advanced video, and cursor settings.
+//! Combines damage tracking, hardware encoding, display/multimon, video pipeline,
+//! logging, advanced video, and cursor settings.
 
-use iced::widget::{button, column, pick_list, row, space, text};
+use iced::widget::{button, column, container, pick_list, row, slider, space, text};
 use iced::{Alignment, Element, Length};
 
-use crate::gui::message::{DamageTrackingPreset, Message};
+use crate::gui::message::{DamageTrackingPreset, Message, MultimonPreset};
 use crate::gui::state::AppState;
 use crate::gui::theme;
 use crate::gui::widgets;
 
 const DAMAGE_METHODS: &[&str] = &["diff", "pipewire", "hybrid"];
 const HW_QUALITY_PRESETS: &[&str] = &["speed", "balanced", "quality"];
+const LOG_LEVELS: &[&str] = &["trace", "debug", "info", "warn", "error"];
 
 /// Superset of video.rs modes: adds "painted" and "predictive" for advanced use.
 const CURSOR_MODES: &[&str] = &["metadata", "painted", "hidden", "predictive"];
+
+const MULTIMON_PRESETS: &[MultimonPreset] = &[
+    MultimonPreset::Single,
+    MultimonPreset::Dual,
+    MultimonPreset::Triple,
+    MultimonPreset::Quad,
+    MultimonPreset::Custom,
+];
 
 pub fn view_advanced_tab(state: &AppState) -> Element<'_, Message> {
     column![
@@ -45,7 +55,7 @@ pub fn view_advanced_tab(state: &AppState) -> Element<'_, Message> {
             column![].into()
         },
         space().height(12.0),
-        // Display Control section
+        // Display Control section (includes multimon)
         widgets::collapsible_header(
             "Display Control",
             state.display_expanded,
@@ -53,6 +63,18 @@ pub fn view_advanced_tab(state: &AppState) -> Element<'_, Message> {
         ),
         if state.display_expanded {
             view_display_config(state)
+        } else {
+            column![].into()
+        },
+        space().height(12.0),
+        // Video Pipeline section
+        widgets::collapsible_header(
+            "Video Pipeline",
+            state.video_pipeline_expanded,
+            Message::VideoPipelineToggleExpanded,
+        ),
+        if state.video_pipeline_expanded {
+            view_video_pipeline_config(state)
         } else {
             column![].into()
         },
@@ -77,6 +99,18 @@ pub fn view_advanced_tab(state: &AppState) -> Element<'_, Message> {
         ),
         if state.cursor_expanded {
             view_cursor_config(state)
+        } else {
+            column![].into()
+        },
+        space().height(12.0),
+        // Logging & Diagnostics section
+        widgets::collapsible_header(
+            "Logging & Diagnostics",
+            state.logging_expanded,
+            Message::LoggingToggleExpanded,
+        ),
+        if state.logging_expanded {
+            view_logging_config(state)
         } else {
             column![].into()
         },
@@ -109,7 +143,7 @@ fn view_damage_tracking_config(state: &AppState) -> Element<'_, Message> {
             .into(),
         ),
         space().height(4.0),
-        text("• Diff: CPU pixel comparison | PipeWire: Compositor hints | Hybrid: Both")
+        text("Diff: CPU pixel comparison | PipeWire: Compositor hints | Hybrid: Both")
             .size(12)
             .style(|_theme| text::Style {
                 color: Some(theme::colors::TEXT_MUTED),
@@ -208,7 +242,7 @@ fn view_damage_tracking_config(state: &AppState) -> Element<'_, Message> {
                     60.0,
                     Message::DamageTrackingMinRegionAreaChanged,
                 ),
-                text(" pixels²"),
+                text(" pixels\u{00B2}"),
             ]
             .align_y(Alignment::Center)
             .into(),
@@ -224,11 +258,17 @@ fn view_hardware_encoding_config(state: &AppState) -> Element<'_, Message> {
 
     column![
         space().height(8.0),
-        widgets::toggle_with_help(
+        text("Hardware encoding requires display handler integration (OpenH264 software currently used)")
+            .size(12)
+            .style(|_theme| text::Style {
+                color: Some(theme::colors::TEXT_MUTED),
+            }),
+        space().height(12.0),
+        widgets::toggle_pending_with_note(
             "Enable Hardware Acceleration",
             hw.enabled,
-            "Use GPU for H.264 encoding (lower CPU usage)",
             Message::HardwareEncodingEnabledToggled,
+            "Needs display handler integration",
         ),
         space().height(12.0),
         // Display detected GPUs
@@ -238,10 +278,10 @@ fn view_hardware_encoding_config(state: &AppState) -> Element<'_, Message> {
                 .iter()
                 .map(|gpu| {
                     format!(
-                        "• {} {} ({driver})",
+                        "{} {} ({})",
                         gpu.vendor,
                         gpu.model,
-                        driver = gpu.driver
+                        gpu.driver
                     )
                 })
                 .collect();
@@ -253,7 +293,7 @@ fn view_hardware_encoding_config(state: &AppState) -> Element<'_, Message> {
         } else {
             Element::from(space().height(0.0))
         },
-        widgets::labeled_row(
+        widgets::labeled_row_pending_with_note(
             "VA-API Device:",
             150.0,
             pick_list(
@@ -263,27 +303,31 @@ fn view_hardware_encoding_config(state: &AppState) -> Element<'_, Message> {
             )
             .width(Length::Fixed(200.0))
             .into(),
+            "Factory exists but not integrated",
         ),
         space().height(12.0),
-        widgets::toggle_switch(
+        widgets::toggle_pending_with_note(
             "Enable DMA-BUF Zero-Copy",
             hw.enable_dmabuf_zerocopy,
             Message::HardwareEncodingDmabufZerocopyToggled,
+            "Requires VA-API integration",
         ),
         space().height(8.0),
-        widgets::toggle_switch(
+        widgets::toggle_pending_with_note(
             "Fallback to Software",
             hw.fallback_to_software,
             Message::HardwareEncodingFallbackToSoftwareToggled,
+            "Requires hardware path first",
         ),
         space().height(8.0),
-        widgets::toggle_switch(
+        widgets::toggle_pending_with_note(
             "Prefer NVENC over VA-API",
             hw.prefer_nvenc,
             Message::HardwareEncodingPreferNvencToggled,
+            "Factory supports this, needs integration",
         ),
         space().height(12.0),
-        widgets::labeled_row(
+        widgets::labeled_row_pending_with_note(
             "Quality Preset:",
             150.0,
             pick_list(
@@ -293,37 +337,111 @@ fn view_hardware_encoding_config(state: &AppState) -> Element<'_, Message> {
             )
             .width(Length::Fixed(150.0))
             .into(),
+            "Factory supports this, needs integration",
         ),
     ]
     .padding([0, 16])
     .into()
 }
 
-/// Display control configuration view
+/// Display control configuration view (includes multimon)
 fn view_display_config(state: &AppState) -> Element<'_, Message> {
     let display = &state.config.display;
 
+    // Determine current preset based on max_monitors
+    let current_preset = match state.config.multimon.max_monitors {
+        1 => Some(MultimonPreset::Single),
+        2 => Some(MultimonPreset::Dual),
+        3 => Some(MultimonPreset::Triple),
+        4 => Some(MultimonPreset::Quad),
+        _ => Some(MultimonPreset::Custom),
+    };
+
     column![
         space().height(8.0),
-        widgets::toggle_switch(
+        // Multi-monitor subsection
+        widgets::subsection_header("Multi-Monitor"),
+        space().height(8.0),
+        widgets::toggle_with_help(
+            "Enable Multi-Monitor Support",
+            state.config.multimon.enabled,
+            "Allow clients to connect to multiple monitors",
+            Message::MultimonEnabledToggled,
+        ),
+        space().height(12.0),
+        widgets::labeled_row(
+            "Display Configuration:",
+            150.0,
+            row![
+                pick_list(
+                    MULTIMON_PRESETS.to_vec(),
+                    current_preset,
+                    Message::MultimonPresetSelected,
+                )
+                .width(Length::Fixed(200.0)),
+                space().width(16.0),
+                text(format!("{} monitor(s)", state.config.multimon.max_monitors))
+                    .size(13)
+                    .style(|_theme| text::Style {
+                        color: Some(theme::colors::TEXT_SECONDARY),
+                    }),
+            ]
+            .align_y(Alignment::Center)
+            .into(),
+        ),
+        space().height(8.0),
+        widgets::labeled_row(
+            "Maximum Monitors:",
+            150.0,
+            row![
+                slider(1..=16, state.config.multimon.max_monitors as u8, |v| {
+                    Message::MultimonMaxMonitorsChanged(v.to_string())
+                },)
+                .width(Length::Fixed(200.0)),
+                space().width(16.0),
+                container(text(&state.edit_strings.max_monitors).size(14))
+                    .width(Length::Fixed(40.0))
+                    .center_x(Length::Fill),
+            ]
+            .align_y(Alignment::Center)
+            .into(),
+        ),
+        space().height(4.0),
+        text("Portal provides all selected monitors; max setting is advisory")
+            .size(11)
+            .style(|_theme| text::Style {
+                color: Some(theme::colors::TEXT_MUTED),
+            }),
+        space().height(16.0),
+        // Display control subsection
+        widgets::subsection_header("Display Control"),
+        space().height(8.0),
+        widgets::toggle_pending_with_note(
             "Allow Dynamic Resolution",
             display.allow_resize,
             Message::DisplayAllowResizeToggled,
+            "Portal handles resize negotiation",
         ),
         space().height(8.0),
-        widgets::toggle_switch(
+        widgets::toggle_pending_with_note(
             "DPI Aware",
             display.dpi_aware,
             Message::DisplayDpiAwareToggled,
+            "Needs DPI tracking implementation",
         ),
         space().height(8.0),
-        widgets::toggle_switch(
+        widgets::toggle_pending_with_note(
             "Allow Rotation",
             display.allow_rotation,
             Message::DisplayAllowRotationToggled,
+            "Needs rotation handling in pipeline",
         ),
         space().height(12.0),
-        text("Allowed Resolutions (empty = all):").size(13),
+        text("Allowed Resolutions (empty = all):")
+            .size(13)
+            .style(|_theme| text::Style {
+                color: Some(theme::colors::TEXT_MUTED),
+            }),
         space().height(4.0),
         widgets::text_area(
             &state.edit_strings.resolutions_text,
@@ -331,7 +449,177 @@ fn view_display_config(state: &AppState) -> Element<'_, Message> {
             80.0,
             Message::DisplayAllowedResolutionsChanged,
         ),
+        text("Resolution filtering not yet implemented")
+            .size(11)
+            .style(|_theme| text::Style {
+                color: Some(theme::colors::TEXT_MUTED),
+            }),
     ]
+    .padding([0, 16])
+    .into()
+}
+
+/// Video pipeline configuration view
+fn view_video_pipeline_config(state: &AppState) -> Element<'_, Message> {
+    column![
+        space().height(8.0),
+        text("Video pipeline architecture reserved for future use")
+            .size(12)
+            .style(|_theme| text::Style {
+                color: Some(theme::colors::TEXT_MUTED),
+            }),
+        space().height(12.0),
+        // Processor section
+        widgets::subsection_header("Frame Processor"),
+        space().height(8.0),
+        widgets::labeled_row(
+            "Max Queue Depth:",
+            150.0,
+            widgets::number_input(
+                &state.edit_strings.max_queue_depth,
+                "30",
+                80.0,
+                Message::ProcessorMaxQueueDepthChanged,
+            ),
+        ),
+        space().height(8.0),
+        widgets::toggle_with_help(
+            "Adaptive Quality",
+            state.config.video_pipeline.processor.adaptive_quality,
+            "Adjust quality based on network conditions",
+            Message::ProcessorAdaptiveQualityToggled,
+        ),
+        space().height(8.0),
+        widgets::labeled_row(
+            "Damage Threshold:",
+            150.0,
+            widgets::float_slider(
+                state.config.video_pipeline.processor.damage_threshold,
+                Message::ProcessorDamageThresholdChanged,
+            ),
+        ),
+        space().height(8.0),
+        widgets::toggle_with_help(
+            "Drop on Full Queue",
+            state.config.video_pipeline.processor.drop_on_full_queue,
+            "Drop frames when queue is full",
+            Message::ProcessorDropOnFullQueueToggled,
+        ),
+        space().height(8.0),
+        widgets::toggle_with_help(
+            "Enable Metrics",
+            state.config.video_pipeline.processor.enable_metrics,
+            "Collect pipeline performance metrics",
+            Message::ProcessorEnableMetricsToggled,
+        ),
+        space().height(16.0),
+        // Dispatcher section
+        widgets::subsection_header("Frame Dispatcher"),
+        space().height(8.0),
+        widgets::labeled_row(
+            "Channel Size:",
+            150.0,
+            widgets::number_input(
+                &state.edit_strings.channel_size,
+                "30",
+                80.0,
+                Message::DispatcherChannelSizeChanged,
+            ),
+        ),
+        space().height(8.0),
+        widgets::toggle_with_help(
+            "Priority Dispatch",
+            state.config.video_pipeline.dispatcher.priority_dispatch,
+            "Prioritize certain frame types",
+            Message::DispatcherPriorityDispatchToggled,
+        ),
+        space().height(8.0),
+        widgets::labeled_row(
+            "Max Frame Age:",
+            150.0,
+            row![
+                widgets::number_input(
+                    &state.edit_strings.max_frame_age,
+                    "150",
+                    80.0,
+                    Message::DispatcherMaxFrameAgeChanged,
+                ),
+                text(" ms"),
+            ]
+            .align_y(Alignment::Center)
+            .into(),
+        ),
+        space().height(8.0),
+        widgets::toggle_with_help(
+            "Enable Backpressure",
+            state.config.video_pipeline.dispatcher.enable_backpressure,
+            "Slow down when downstream is congested",
+            Message::DispatcherEnableBackpressureToggled,
+        ),
+        space().height(8.0),
+        widgets::labeled_row(
+            "High Water Mark:",
+            150.0,
+            widgets::float_slider(
+                state.config.video_pipeline.dispatcher.high_water_mark,
+                Message::DispatcherHighWaterMarkChanged,
+            ),
+        ),
+        space().height(8.0),
+        widgets::labeled_row(
+            "Low Water Mark:",
+            150.0,
+            widgets::float_slider(
+                state.config.video_pipeline.dispatcher.low_water_mark,
+                Message::DispatcherLowWaterMarkChanged,
+            ),
+        ),
+        space().height(8.0),
+        widgets::toggle_with_help(
+            "Load Balancing",
+            state.config.video_pipeline.dispatcher.load_balancing,
+            "Balance load across encoders",
+            Message::DispatcherLoadBalancingToggled,
+        ),
+        space().height(16.0),
+        // Converter section
+        widgets::subsection_header("Bitmap Converter"),
+        space().height(8.0),
+        widgets::labeled_row(
+            "Buffer Pool Size:",
+            150.0,
+            widgets::number_input(
+                &state.edit_strings.converter_buffer_pool_size,
+                "8",
+                80.0,
+                Message::ConverterBufferPoolSizeChanged,
+            ),
+        ),
+        space().height(8.0),
+        widgets::toggle_with_help(
+            "Enable SIMD",
+            state.config.video_pipeline.converter.enable_simd,
+            "Use SIMD acceleration for conversion",
+            Message::ConverterEnableSimdToggled,
+        ),
+        space().height(8.0),
+        widgets::labeled_row(
+            "Damage Threshold:",
+            150.0,
+            widgets::float_slider(
+                state.config.video_pipeline.converter.damage_threshold,
+                Message::ConverterDamageThresholdChanged,
+            ),
+        ),
+        space().height(8.0),
+        widgets::toggle_with_help(
+            "Enable Statistics",
+            state.config.video_pipeline.converter.enable_statistics,
+            "Collect conversion statistics",
+            Message::ConverterEnableStatisticsToggled,
+        ),
+    ]
+    .spacing(4)
     .padding([0, 16])
     .into()
 }
@@ -342,22 +630,24 @@ fn view_advanced_video_config(state: &AppState) -> Element<'_, Message> {
 
     column![
         space().height(8.0),
-        widgets::toggle_switch(
+        widgets::toggle_pending_with_note(
             "Enable Frame Skip",
             av.enable_frame_skip,
             Message::AdvancedVideoEnableFrameSkipToggled,
+            "OpenH264 handles frame skip internally",
         ),
         space().height(8.0),
-        widgets::labeled_row(
+        widgets::labeled_row_pending_with_note(
             "Scene Change Threshold:",
             180.0,
             widgets::float_slider(
                 av.scene_change_threshold,
                 Message::AdvancedVideoSceneChangeThresholdChanged,
             ),
+            "Needs scene detection implementation",
         ),
         space().height(8.0),
-        widgets::labeled_row(
+        widgets::labeled_row_pending_with_note(
             "Intra Refresh Interval:",
             180.0,
             row![
@@ -371,12 +661,14 @@ fn view_advanced_video_config(state: &AppState) -> Element<'_, Message> {
             ]
             .align_y(Alignment::Center)
             .into(),
+            "Use periodic_idr_interval in EGFX tab instead",
         ),
         space().height(8.0),
-        widgets::toggle_switch(
+        widgets::toggle_pending_with_note(
             "Enable Adaptive Quality",
             av.enable_adaptive_quality,
             Message::AdvancedVideoEnableAdaptiveQualityToggled,
+            "Needs rate control feedback loop",
         ),
     ]
     .padding([0, 16])
@@ -389,7 +681,13 @@ fn view_cursor_config(state: &AppState) -> Element<'_, Message> {
 
     column![
         space().height(8.0),
-        widgets::labeled_row_with_help(
+        text("Cursor handling uses metadata mode (lowest latency). Advanced modes need implementation.")
+            .size(12)
+            .style(|_theme| text::Style {
+                color: Some(theme::colors::TEXT_MUTED),
+            }),
+        space().height(12.0),
+        widgets::labeled_row_pending_with_note(
             "Cursor Mode:",
             150.0,
             pick_list(CURSOR_MODES.to_vec(), Some(cursor.mode.as_str()), |s| {
@@ -397,27 +695,28 @@ fn view_cursor_config(state: &AppState) -> Element<'_, Message> {
             },)
             .width(Length::Fixed(150.0))
             .into(),
-            "Metadata: client-side | Painted: composited | Predictive: physics-based",
+            "Only 'metadata' mode currently active",
         ),
         space().height(8.0),
         text(
-            "• Metadata - Client renders cursor (lowest latency)\n\
-              • Painted - Cursor composited into video\n\
-              • Hidden - No cursor (touch/pen)\n\
-              • Predictive - Physics-based prediction"
+            "Metadata - Client renders cursor (lowest latency)\n\
+              Painted - Cursor composited into video\n\
+              Hidden - No cursor (touch/pen)\n\
+              Predictive - Physics-based prediction"
         )
         .size(12)
         .style(|_theme| text::Style {
             color: Some(theme::colors::TEXT_MUTED),
         }),
         space().height(12.0),
-        widgets::toggle_switch(
+        widgets::toggle_pending_with_note(
             "Auto Mode Selection",
             cursor.auto_mode,
             Message::CursorAutoModeToggled,
+            "Needs mode switching logic",
         ),
         space().height(8.0),
-        widgets::labeled_row(
+        widgets::labeled_row_pending_with_note(
             "Predictive Threshold:",
             150.0,
             row![
@@ -431,9 +730,10 @@ fn view_cursor_config(state: &AppState) -> Element<'_, Message> {
             ]
             .align_y(Alignment::Center)
             .into(),
+            "For predictive mode",
         ),
         space().height(8.0),
-        widgets::labeled_row(
+        widgets::labeled_row_pending_with_note(
             "Cursor Update FPS:",
             150.0,
             widgets::number_input(
@@ -442,11 +742,12 @@ fn view_cursor_config(state: &AppState) -> Element<'_, Message> {
                 60.0,
                 Message::CursorUpdateFpsChanged,
             ),
+            "For painted mode",
         ),
         space().height(12.0),
         // Predictor sub-section
         widgets::collapsible_header(
-            "Predictor Configuration",
+            "Predictor Configuration (Future)",
             state.cursor_predictor_expanded,
             Message::CursorPredictorToggleExpanded,
         ),
@@ -465,6 +766,12 @@ fn view_cursor_predictor_config(state: &AppState) -> Element<'_, Message> {
     let pred = &state.config.cursor.predictor;
 
     column![
+        space().height(8.0),
+        text("Predictor requires physics-based cursor mode implementation")
+            .size(12)
+            .style(|_theme| text::Style {
+                color: Some(theme::colors::TEXT_MUTED),
+            }),
         space().height(8.0),
         widgets::labeled_row(
             "History Size:",
@@ -540,6 +847,68 @@ fn view_cursor_predictor_config(state: &AppState) -> Element<'_, Message> {
                 pred.stop_convergence_rate,
                 Message::PredictorStopConvergenceRateChanged,
             ),
+        ),
+    ]
+    .padding([0, 16])
+    .into()
+}
+
+/// Logging & Diagnostics configuration view
+fn view_logging_config(state: &AppState) -> Element<'_, Message> {
+    column![
+        space().height(8.0),
+        // Log level
+        widgets::labeled_row_with_help(
+            "Log Level:",
+            150.0,
+            pick_list(
+                LOG_LEVELS.to_vec(),
+                Some(state.config.logging.level.as_str()),
+                |s| Message::LoggingLevelChanged(s.to_string()),
+            )
+            .width(Length::Fixed(150.0))
+            .into(),
+            "Trace: Everything | Debug: Verbose | Info: Normal | Warn/Error: Minimal",
+        ),
+        space().height(16.0),
+        // Log output info
+        text("Log Output:").size(13),
+        space().height(4.0),
+        text("Console output (stdout) is always enabled")
+            .size(12)
+            .style(|_theme| text::Style {
+                color: Some(theme::colors::TEXT_MUTED),
+            }),
+        space().height(12.0),
+        // Log directory (file logging)
+        text("Log Directory (for file logging):").size(13),
+        space().height(4.0),
+        row![
+            widgets::path_input(
+                &state.edit_strings.log_dir,
+                "Leave empty for console-only",
+                Message::LoggingLogDirChanged,
+                Message::LoggingBrowseLogDir,
+            ),
+            space().width(8.0),
+            button(text("Clear"))
+                .on_press(Message::LoggingClearLogDir)
+                .padding([6, 12])
+                .style(theme::secondary_button_style),
+        ],
+        space().height(4.0),
+        text("Leave empty for console-only logging")
+            .size(11)
+            .style(|_theme| text::Style {
+                color: Some(theme::colors::TEXT_MUTED),
+            }),
+        space().height(16.0),
+        // Metrics toggle
+        widgets::toggle_pending_with_note(
+            "Enable Performance Metrics",
+            state.config.logging.metrics,
+            Message::LoggingMetricsToggled,
+            "Metrics collection not yet implemented",
         ),
     ]
     .padding([0, 16])

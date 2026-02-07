@@ -1,5 +1,10 @@
 //! Mutter Direct API Strategy Implementation
 //!
+//! **Execution Path:** Mutter ScreenCast + Mutter RemoteDesktop D-Bus APIs
+//! **Status:** Active (v1.0.0+)
+//! **Platform:** GNOME-only, Native-only (no Flatpak)
+//! **Session Type:** `MutterDirectStrategy`
+//!
 //! Uses org.gnome.Mutter.ScreenCast and org.gnome.Mutter.RemoteDesktop D-Bus APIs
 //! directly, bypassing the XDG Portal permission model entirely.
 //!
@@ -47,7 +52,6 @@ impl SessionHandle for MutterSessionHandleImpl {
     }
 
     async fn notify_keyboard_keycode(&self, keycode: i32, pressed: bool) -> Result<()> {
-        // Create RemoteDesktop session proxy for input injection
         let rd_session = crate::mutter::MutterRemoteDesktopSession::new(
             &self.mutter_handle.connection,
             self.mutter_handle.remote_desktop_session.clone(),
@@ -62,7 +66,6 @@ impl SessionHandle for MutterSessionHandleImpl {
     }
 
     async fn notify_pointer_motion_absolute(&self, stream_id: u32, x: f64, y: f64) -> Result<()> {
-        // Create RemoteDesktop session proxy
         let rd_session = crate::mutter::MutterRemoteDesktopSession::new(
             &self.mutter_handle.connection,
             self.mutter_handle.remote_desktop_session.clone(),
@@ -85,7 +88,6 @@ impl SessionHandle for MutterSessionHandleImpl {
     }
 
     async fn notify_pointer_button(&self, button: i32, pressed: bool) -> Result<()> {
-        // Create RemoteDesktop session proxy
         let rd_session = crate::mutter::MutterRemoteDesktopSession::new(
             &self.mutter_handle.connection,
             self.mutter_handle.remote_desktop_session.clone(),
@@ -100,7 +102,6 @@ impl SessionHandle for MutterSessionHandleImpl {
     }
 
     async fn notify_pointer_axis(&self, dx: f64, dy: f64) -> Result<()> {
-        // Create RemoteDesktop session proxy
         let rd_session = crate::mutter::MutterRemoteDesktopSession::new(
             &self.mutter_handle.connection,
             self.mutter_handle.remote_desktop_session.clone(),
@@ -131,17 +132,10 @@ pub struct MutterDirectStrategy {
 }
 
 impl MutterDirectStrategy {
-    /// Create a new Mutter Direct strategy
-    ///
-    /// # Arguments
-    ///
-    /// * `monitor_connector` - Optional monitor connector name for physical monitor,
-    ///                         or None to use virtual monitor (headless)
     pub fn new(monitor_connector: Option<String>) -> Self {
         Self { monitor_connector }
     }
 
-    /// Check if Mutter API is available before use
     pub async fn is_available() -> bool {
         crate::mutter::is_mutter_api_available().await
     }
@@ -166,25 +160,21 @@ impl SessionStrategy for MutterDirectStrategy {
     async fn create_session(&self) -> Result<Arc<dyn SessionHandle>> {
         info!("Creating session using Mutter Direct API (NO DIALOG)");
 
-        // Verify we're on GNOME
         let compositor = crate::compositor::identify_compositor();
         if !matches!(compositor, crate::compositor::CompositorType::Gnome { .. }) {
             return Err(anyhow!("Mutter Direct API only available on GNOME"));
         }
 
-        // Check if running in Flatpak (would block D-Bus access)
         if std::path::Path::new("/.flatpak-info").exists() {
             return Err(anyhow!(
                 "Mutter Direct API not available in Flatpak (sandbox blocks D-Bus access)"
             ));
         }
 
-        // Create Mutter session manager
         let manager = MutterSessionManager::new()
             .await
             .context("Failed to create Mutter session manager")?;
 
-        // Create session with specified monitor (or virtual)
         let mutter_handle = manager
             .create_session(self.monitor_connector.as_deref())
             .await
@@ -205,7 +195,6 @@ impl SessionStrategy for MutterDirectStrategy {
             );
         }
 
-        // Wrap in our handle type
         let handle = MutterSessionHandleImpl { mutter_handle };
 
         Ok(Arc::new(handle))

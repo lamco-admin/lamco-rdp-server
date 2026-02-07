@@ -1,21 +1,31 @@
-//! Clipboard Manager
+//! Clipboard Orchestrator
+//!
+//! **Execution Path:** Portal Clipboard API + optional Klipper D-Bus cooperation
+//! **Status:** Active (v1.0.0+)
+//! **Platform:** Universal (Flatpak + Native)
 //!
 //! Main clipboard synchronization coordinator that manages bidirectional
 //! clipboard sharing between RDP client and Wayland compositor.
 //!
 //! # Architecture
 //!
-//! The manager uses library types from the lamco crate ecosystem:
+//! The orchestrator uses library types from the lamco crate ecosystem:
 //! - `lamco-clipboard-core` - Format conversion, transfer engine
 //! - `lamco-portal` - D-Bus clipboard bridge
 //!
 //! Server-specific types from this crate:
 //! - `SyncManager` - State machine with echo protection
 //! - `ClipboardEvent` - Server event routing
+//!
+//! # See Also
+//!
+//! - [`ClipboardIntegrationMode`] - Strategy selection (to be renamed)
+//! - [`KlipperCooperationCoordinator`] - KDE-specific integration
+//! - [`DbusClipboardBridge`] - Portal D-Bus communication
 
 use crate::clipboard::error::{ClipboardError, Result};
 use crate::clipboard::sync::{ClipboardState, SyncManager};
-use crate::clipboard::FormatConverterExt; // Extension trait for converter methods
+use crate::clipboard::FormatConverterExt;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -24,7 +34,6 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 use tracing::{debug, error, info, trace, warn};
 
-// Import from lamco crates
 use lamco_clipboard_core::{
     sanitize::{
         parse_file_uris, sanitize_filename_for_linux, sanitize_text_for_linux,
@@ -34,9 +43,13 @@ use lamco_clipboard_core::{
 };
 use lamco_portal::dbus_clipboard::DbusClipboardBridge;
 
-/// Clipboard configuration
+/// Runtime configuration for the clipboard orchestrator
+///
+/// This is the internal implementation config, separate from the user-facing
+/// `crate::config::types::ClipboardConfig` which defines what users can configure.
+/// The server maps user settings to this runtime config at startup.
 #[derive(Debug, Clone)]
-pub struct ClipboardConfig {
+pub struct ClipboardOrchestratorConfig {
     /// Maximum data size in bytes
     pub max_data_size: usize,
 
@@ -64,9 +77,15 @@ pub struct ClipboardConfig {
     /// Minimum milliseconds between forwarded clipboard events (rate limiting)
     /// Prevents rapid-fire D-Bus signals from overwhelming Portal. Set to 0 to disable.
     pub rate_limit_ms: u64,
+
+    /// [EXPERIMENTAL] Include x-kde-syncselection hint for Klipper
+    ///
+    /// See `crate::config::types::ClipboardConfig::kde_syncselection_hint` for details.
+    /// Default: false (disabled)
+    pub kde_syncselection_hint: bool,
 }
 
-impl Default for ClipboardConfig {
+impl Default for ClipboardOrchestratorConfig {
     fn default() -> Self {
         Self {
             max_data_size: 16 * 1024 * 1024, // 16MB
@@ -77,7 +96,8 @@ impl Default for ClipboardConfig {
             chunk_size: 64 * 1024, // 64KB chunks
             timeout_ms: 5000,
             loop_detection_window_ms: 500,
-            rate_limit_ms: 200, // Max 5 events/second
+            rate_limit_ms: 200,            // Max 5 events/second
+            kde_syncselection_hint: false, // Disabled by default
         }
     }
 }
@@ -175,9 +195,27 @@ impl std::fmt::Debug for ClipboardEvent {
 }
 
 /// Clipboard manager coordinates all clipboard operations
-pub struct ClipboardManager {
+/// Coordinates bidirectional clipboard sync between RDP client and system clipboard
+///
+/// **Role:** Primary clipboard orchestrator for the server
+/// **Integrates:** IronRDP (RDP side), Portal/Klipper (system side), format conversion
+/// **Not to be confused with:** `DetectedSystemClipboardManager` (detection metadata)
+///
+/// # Architecture
+///
+/// Routes clipboard events between:
+/// - RDP client (via `LamcoCliprdrFactory`)
+/// - System clipboard (via `DbusClipboardBridge` → Portal)
+/// - Klipper (via `KlipperCooperationCoordinator` when detected)
+///
+/// # See Also
+///
+/// - [`ClipboardIntegrationMode`] - Strategy selection (to be renamed from ClipboardIntegrationMode)
+/// - [`KlipperCooperationCoordinator`] - KDE-specific integration
+/// - [`DbusClipboardBridge`] - Portal D-Bus communication
+pub struct ClipboardOrchestrator {
     /// Configuration
-    config: ClipboardConfig,
+    config: ClipboardOrchestratorConfig,
 
     /// Format converter
     converter: Arc<FormatConverter>,
@@ -191,8 +229,14 @@ pub struct ClipboardManager {
     /// Event sender
     event_tx: mpsc::Sender<ClipboardEvent>,
 
-    /// Shutdown signal
+    /// Shutdown signal (mpsc for single event processor task)
     shutdown_tx: Option<mpsc::Sender<()>>,
+
+    /// Shutdown broadcast (for all other async tasks)
+    shutdown_broadcast: Arc<tokio::sync::broadcast::Sender<()>>,
+
+    /// Task handles (for cleanup verification)
+    task_handles: Arc<tokio::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>>,
 
     /// Portal clipboard manager for read/write operations (wrapped for dynamic update)
     portal_clipboard: Arc<RwLock<Option<Arc<crate::portal::PortalClipboardManager>>>>,
@@ -236,7 +280,7 @@ pub struct ClipboardManager {
     file_transfer_state: Arc<RwLock<FileTransferState>>,
 
     /// FUSE filesystem manager for on-demand file transfer
-    fuse_manager: Arc<RwLock<Option<crate::clipboard::fuse::FuseManager>>>,
+    fuse_manager: Arc<RwLock<Option<crate::clipboard::fuse::FuseMount>>>,
 
     /// Channel sender for FUSE file content requests
     fuse_request_tx: Option<mpsc::Sender<crate::clipboard::fuse::FileContentsRequest>>,
@@ -260,6 +304,37 @@ pub struct ClipboardManager {
     /// Formats we've advertised TO Windows (for Linux → Windows data requests)
     /// When Windows requests data by format ID, we look up the format name here.
     local_advertised_formats: Arc<RwLock<Vec<ClipboardFormat>>>,
+
+    /// Klipper (KDE clipboard manager) info for compositor-aware behavior
+    klipper_info: Arc<RwLock<crate::clipboard::klipper::KlipperInfo>>,
+
+    /// Guard: timestamp of last reannounce operation (Klipper mitigation)
+    /// Used to prevent rapid reannouncement loops
+    last_reannounce_time: Arc<RwLock<Option<std::time::SystemTime>>>,
+
+    /// Guard: count reannouncements per RDP format list (prevent loops)
+    /// Key: sorted format IDs, Value: reannounce count
+    /// Used to limit reannouncements to max 2 per RDP copy operation
+    reannounce_count: Arc<RwLock<HashMap<Vec<u32>, u32>>>,
+
+    /// Clipboard integration strategy (determined from service registry)
+    ///
+    /// Determines how we interact with clipboard manager (if any).
+    /// Selected at initialization based on compositor, manager, deployment mode.
+    strategy: crate::clipboard::ClipboardIntegrationMode,
+
+    /// Klipper cooperation coordinator (Tier 2 strategy)
+    ///
+    /// When strategy is KlipperCooperationMode, this handles bidirectional
+    /// sync with Klipper clipboard manager. None for other strategies.
+    cooperation_coordinator: Arc<RwLock<Option<crate::clipboard::KlipperCooperationCoordinator>>>,
+
+    /// Cooperation content cache
+    ///
+    /// Stores content received from Klipper cooperation mode.
+    /// When KlipperContentUpdated fires, we store the text here.
+    /// When client requests data, we serve from this cache.
+    cooperation_content_cache: Arc<RwLock<Option<Vec<u8>>>>,
 }
 
 /// State for managing file transfers between Windows and Linux
@@ -346,7 +421,6 @@ impl FileTransferState {
         self.pending_descriptors.clear();
     }
 
-    /// Get the next stream ID and increment the counter
     fn allocate_stream_id(&mut self) -> u32 {
         let id = self.next_stream_id;
         self.next_stream_id = self.next_stream_id.wrapping_add(1);
@@ -374,7 +448,6 @@ fn lookup_format_id_for_mime(formats: &[ClipboardFormat], mime_type: &str) -> Op
     // For text/plain, prefer CF_UNICODETEXT (13) over CF_TEXT (1)
     // CF_UNICODETEXT is UTF-16LE (full Unicode), CF_TEXT is ANSI (limited to Windows-1252)
     if mime_type == "text/plain;charset=utf-8" || mime_type == "text/plain" {
-        // Check if CF_UNICODETEXT is available
         if formats.iter().any(|f| f.id == 13) {
             debug!(
                 "Preferring CF_UNICODETEXT (13) for {} (full Unicode support)",
@@ -425,9 +498,9 @@ fn lookup_format_id_for_mime(formats: &[ClipboardFormat], mime_type: &str) -> Op
     None
 }
 
-impl std::fmt::Debug for ClipboardManager {
+impl std::fmt::Debug for ClipboardOrchestrator {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ClipboardManager")
+        f.debug_struct("ClipboardOrchestrator")
             .field("config", &self.config)
             .field(
                 "has_portal_clipboard",
@@ -449,12 +522,10 @@ impl std::fmt::Debug for ClipboardManager {
     }
 }
 
-impl ClipboardManager {
-    /// Create a new clipboard manager
-    pub async fn new(config: ClipboardConfig) -> Result<Self> {
+impl ClipboardOrchestrator {
+    pub async fn new(config: ClipboardOrchestratorConfig) -> Result<Self> {
         let converter = Arc::new(FormatConverter::new());
 
-        // Configure transfer engine with library types
         let transfer_config = TransferConfig {
             chunk_size: config.chunk_size,
             max_size: config.max_data_size,
@@ -463,7 +534,6 @@ impl ClipboardManager {
         };
         let transfer_engine = Arc::new(TransferEngine::with_config(transfer_config));
 
-        // Configure loop detection with rate limiting if enabled
         let loop_config = LoopDetectionConfig {
             window_ms: config.loop_detection_window_ms,
             max_history: 10,
@@ -474,12 +544,10 @@ impl ClipboardManager {
                 None
             },
         };
-        // SyncManager now creates its own LoopDetector from config
         let sync_manager = Arc::new(RwLock::new(SyncManager::with_config(loop_config)));
 
         let (event_tx, event_rx) = mpsc::channel(100);
 
-        // Create file transfer state with downloads directory
         // Use XDG_DOWNLOAD_DIR for proper Flatpak sandbox compatibility
         let download_dir = std::env::var("XDG_DOWNLOAD_DIR")
             .ok()
@@ -493,12 +561,10 @@ impl ClipboardManager {
 
         let file_transfer_state = Arc::new(RwLock::new(FileTransferState::new(download_dir)));
 
-        // Create FUSE request channel (will be used to handle on-demand file reads)
         let (fuse_request_tx, fuse_request_rx) =
             mpsc::channel::<crate::clipboard::fuse::FileContentsRequest>(32);
 
-        // Create FUSE manager (mount will happen when needed)
-        let fuse_manager = match crate::clipboard::fuse::FuseManager::new(fuse_request_tx.clone()) {
+        let fuse_manager = match crate::clipboard::fuse::FuseMount::new(fuse_request_tx.clone()) {
             Ok(fm) => {
                 debug!("FUSE manager created");
                 Some(fm)
@@ -514,6 +580,14 @@ impl ClipboardManager {
 
         let fuse_manager = Arc::new(RwLock::new(fuse_manager));
         let pending_fuse_responses = Arc::new(RwLock::new(HashMap::new()));
+
+        let klipper_info = crate::clipboard::klipper::KlipperMonitor::detect().await;
+        let klipper_info = Arc::new(RwLock::new(klipper_info));
+
+        let (shutdown_broadcast, _) = tokio::sync::broadcast::channel(16);
+        let shutdown_broadcast = Arc::new(shutdown_broadcast);
+
+        let task_handles = Arc::new(tokio::sync::Mutex::new(Vec::new()));
 
         let mut manager = Self {
             config,
@@ -534,12 +608,17 @@ impl ClipboardManager {
             pending_fuse_responses: Arc::clone(&pending_fuse_responses),
             current_rdp_formats: Arc::new(RwLock::new(Vec::new())),
             local_advertised_formats: Arc::new(RwLock::new(Vec::new())),
+            klipper_info,
+            last_reannounce_time: Arc::new(RwLock::new(None)),
+            reannounce_count: Arc::new(RwLock::new(HashMap::new())),
+            strategy: crate::clipboard::ClipboardIntegrationMode::PortalDirect, // Default, will be set by initialize_strategy
+            cooperation_coordinator: Arc::new(RwLock::new(None)),
+            cooperation_content_cache: Arc::new(RwLock::new(None)),
+            shutdown_broadcast: Arc::clone(&shutdown_broadcast),
+            task_handles: Arc::clone(&task_handles),
         };
 
-        // Start FUSE request handler (bridges FUSE reads to RDP requests)
         manager.start_fuse_request_handler(fuse_request_rx, Arc::clone(&pending_fuse_responses));
-
-        // Start event processor
         manager.start_event_processor(event_rx);
 
         debug!("Clipboard manager initialized");
@@ -547,9 +626,171 @@ impl ClipboardManager {
         Ok(manager)
     }
 
-    /// Get event sender for external components
     pub fn event_sender(&self) -> mpsc::Sender<ClipboardEvent> {
         self.event_tx.clone()
+    }
+
+    /// Initialize clipboard strategy and cooperation mode
+    ///
+    /// Should be called after `new()` once environment detection is complete.
+    pub async fn initialize_strategy(
+        &mut self,
+        strategy: crate::clipboard::ClipboardIntegrationMode,
+        session_connection: Option<zbus::Connection>,
+    ) -> Result<()> {
+        info!("═══════════════════════════════════════════════════════════════");
+        info!("  Initializing Clipboard Strategy");
+        info!("═══════════════════════════════════════════════════════════════");
+        info!("  Strategy: {}", strategy.name());
+
+        self.strategy = strategy.clone();
+
+        if strategy.uses_klipper_cooperation() {
+            info!("  Klipper cooperation mode ENABLED");
+
+            if let Some(conn) = session_connection {
+                let (coordinator, event_rx) =
+                    crate::clipboard::KlipperCooperationCoordinator::new(conn, 1000).await?;
+
+                coordinator.start_monitoring().await?;
+                *self.cooperation_coordinator.write().await = Some(coordinator);
+
+                self.start_cooperation_event_handler(event_rx);
+
+                info!("  ✅ Cooperation coordinator active and monitoring");
+            } else {
+                warn!("  ⚠️  No D-Bus connection - cooperation disabled");
+                warn!("     Falling back to Tier 3 (re-announce) strategy");
+            }
+        } else {
+            info!("  Standard strategy - no cooperation needed");
+        }
+
+        info!("═══════════════════════════════════════════════════════════════");
+
+        Ok(())
+    }
+
+    /// Handle cooperation events from Klipper coordinator
+    ///
+    /// Spawns a task that processes cooperation events and syncs content
+    /// between Klipper and RDP client.
+    ///
+    /// # Phase 2: Shutdown Signal
+    ///
+    /// Task subscribes to shutdown broadcast and exits cleanly when signaled.
+    async fn start_cooperation_event_handler(
+        &self,
+        mut event_rx: tokio::sync::mpsc::UnboundedReceiver<crate::clipboard::CooperationEvent>,
+    ) {
+        let converter = Arc::clone(&self.converter);
+        let server_event_sender = Arc::clone(&self.server_event_sender);
+        let sync_manager = Arc::clone(&self.sync_manager);
+        let cooperation_content_cache = Arc::clone(&self.cooperation_content_cache);
+
+        let mut shutdown_rx = self.shutdown_broadcast.subscribe();
+
+        let handle = tokio::spawn(async move {
+            info!("🎧 Cooperation event handler started");
+
+            loop {
+                tokio::select! {
+                    Some(event) = event_rx.recv() => {
+                match event {
+                    crate::clipboard::CooperationEvent::KlipperContentUpdated {
+                        content,
+                        timestamp_ms,
+                    } => {
+                        debug!("📨 Cooperation: Klipper content updated ({}ms)", timestamp_ms);
+
+                        // Klipper's D-Bus API only provides text
+                        let formats = vec![
+                            ClipboardFormat {
+                                id: 13, // CF_UNICODETEXT
+                                name: None,
+                            },
+                            ClipboardFormat {
+                                id: 1, // CF_TEXT
+                                name: None,
+                            },
+                        ];
+
+                        {
+                            let mut mgr = sync_manager.write().await;
+                            mgr.handle_portal_formats(
+                                vec!["text/plain".to_string()],
+                                true, // force=true, this is authoritative from Klipper
+                            );
+                        }
+
+                        if let Some(ref sender) = *server_event_sender.read().await {
+                            use ironrdp_cliprdr::backend::ClipboardMessage;
+
+                            let ironrdp_formats: Vec<ironrdp_cliprdr::pdu::ClipboardFormat> =
+                                formats
+                                    .iter()
+                                    .map(|f| {
+                                        ironrdp_cliprdr::pdu::ClipboardFormat {
+                                            id: ironrdp_cliprdr::pdu::ClipboardFormatId(f.id),
+                                            name: None,
+                                        }
+                                    })
+                                    .collect();
+
+                            if sender
+                                .send(ironrdp_server::ServerEvent::Clipboard(
+                                    ClipboardMessage::SendInitiateCopy(ironrdp_formats),
+                                ))
+                                .is_ok()
+                            {
+                                info!("✅ Cooperation: Sent FormatList to client (text from Klipper)");
+
+                                // Convert to UTF-16 for CF_UNICODETEXT format
+                                let utf16_data: Vec<u16> = content
+                                    .encode_utf16()
+                                    .chain(std::iter::once(0)) // Null terminator
+                                    .collect();
+                                let bytes: Vec<u8> = utf16_data
+                                    .iter()
+                                    .flat_map(|&c| c.to_le_bytes())
+                                    .collect();
+
+                                *cooperation_content_cache.write().await = Some(bytes.clone());
+                                debug!(
+                                    "Stored {} bytes in cooperation cache (UTF-16 text)",
+                                    bytes.len()
+                                );
+                            } else {
+                                warn!("Cooperation: Failed to send FormatList (channel closed)");
+                            }
+                        } else {
+                            debug!("Cooperation: No server event sender (not ready yet)");
+                        }
+                    }
+
+                    crate::clipboard::CooperationEvent::CooperationFailed { reason, retry } => {
+                        if retry {
+                            warn!("⚠️  Cooperation failed (retrying): {}", reason);
+                        } else {
+                            error!("❌ Cooperation failed (permanent): {}", reason);
+                            error!("   Falling back to Tier 3 (re-announce) strategy");
+                        }
+                    }
+                }
+                    }
+
+                    // Shutdown signal received
+                    _ = shutdown_rx.recv() => {
+                        info!("🛑 Cooperation event handler received shutdown signal");
+                        break;
+                    }
+                }
+            }
+
+            info!("Cooperation event handler stopped");
+        });
+
+        self.task_handles.lock().await.push(handle);
     }
 
     /// Set server event sender (called by LamcoCliprdrFactory after initialization)
@@ -588,10 +829,6 @@ impl ClipboardManager {
         Ok(())
     }
 
-    /// Create virtual files in FUSE from file descriptors
-    ///
-    /// Returns paths to the virtual files for URI generation.
-    /// Used when Windows copies files and we need to present them to Linux.
     pub async fn create_fuse_virtual_files(
         &self,
         descriptors: Vec<crate::clipboard::fuse::FileDescriptor>,
@@ -636,11 +873,8 @@ impl ClipboardManager {
         *self.portal_session.write().await = Some(Arc::clone(&session));
         debug!(" Portal clipboard and session dynamically set in clipboard manager");
 
-        // Start SelectionTransfer listener for delayed rendering (Windows → Linux paste)
         self.start_selection_transfer_listener(Arc::clone(&portal), Arc::clone(&session))
             .await;
-
-        // Start SelectionOwnerChanged listener for local clipboard monitoring (Linux → Windows copy)
         self.start_owner_changed_listener(Arc::clone(&portal), Arc::clone(&session))
             .await;
 
@@ -661,15 +895,12 @@ impl ClipboardManager {
             >,
         >,
     ) {
-        // Create channel for SelectionTransfer events
         let (transfer_tx, mut transfer_rx) = mpsc::unbounded_channel();
 
-        // Start the Portal listener (spawns background task)
         match portal.start_selection_transfer_listener(transfer_tx).await {
             Ok(()) => {
                 debug!("Starting SelectionTransfer handler task");
 
-                // Clone refs for the spawned task
                 let pending_requests = Arc::clone(&self.pending_portal_requests);
                 let server_event_sender = Arc::clone(&self.server_event_sender);
                 let converter = Arc::clone(&self.converter);
@@ -677,10 +908,17 @@ impl ClipboardManager {
                 let portal_clipboard = Arc::clone(&self.portal_clipboard);
                 let portal_session = Arc::clone(&self.portal_session);
                 let current_rdp_formats = Arc::clone(&self.current_rdp_formats);
+                let mut shutdown_rx = self.shutdown_broadcast.subscribe();
 
-                // Spawn task to handle SelectionTransfer events
-                tokio::spawn(async move {
-                    while let Some(transfer_event) = transfer_rx.recv().await {
+                let handle = tokio::spawn(async move {
+                    loop {
+                    let transfer_event = tokio::select! {
+                        Some(event) = transfer_rx.recv() => event,
+                        _ = shutdown_rx.recv() => {
+                            info!("SelectionTransfer handler received shutdown signal");
+                            break;
+                        }
+                    };
                         info!(
                             "SelectionTransfer signal: {} (serial {})",
                             transfer_event.mime_type, transfer_event.serial
@@ -742,16 +980,13 @@ impl ClipboardManager {
                         // REMOVED: Don't block based on pending requests
                         // Each Ctrl+V is distinct user intent, queue them in order
 
-                        // Update last paste time
                         LAST_PASTE_TIME_MS.store(now_ms, Ordering::Relaxed);
 
-                        // This is the FIRST request for this paste operation - handle it
                         debug!(
                             " First SelectionTransfer for paste operation - will fulfill serial {}",
                             transfer_event.serial
                         );
 
-                        // Log timing to track delay between signal and write
                         let _transfer_time = std::time::Instant::now();
 
                         // CRITICAL: Check clipboard state before asking RDP for data
@@ -783,9 +1018,8 @@ impl ClipboardManager {
                         // Already added to pending queue above (before sending request)
                         // This ensures FIFO ordering: first request gets first response
 
-                        // Convert MIME type → RDP format ID
-                        // First try stored format list (for registered formats with dynamic IDs)
-                        // Then fall back to hardcoded mapping
+                        // First try stored format list (registered formats have dynamic IDs),
+                        // then fall back to hardcoded mapping
                         let stored_formats = current_rdp_formats.read().await;
                         let format_id = if let Some(id) =
                             lookup_format_id_for_mime(&stored_formats, &transfer_event.mime_type)
@@ -825,13 +1059,12 @@ impl ClipboardManager {
                         };
                         drop(stored_formats); // Release lock before await
 
-                        // Send ServerEvent to request data from RDP client (TRUE delayed rendering!)
                         let sender_opt = server_event_sender.read().await.clone();
                         if let Some(sender) = sender_opt {
                             use ironrdp_cliprdr::backend::ClipboardMessage;
                             use ironrdp_cliprdr::pdu::ClipboardFormatId;
 
-                            // Add to pending queue BEFORE sending request
+                            // Must enqueue BEFORE sending so response handler finds it
                             pending_requests.write().await.push_back((
                                 transfer_event.serial,
                                 transfer_event.mime_type.clone(),
@@ -852,7 +1085,7 @@ impl ClipboardManager {
                                     format_id, transfer_event.serial
                                 );
 
-                                // Start timeout task - cancel transfer if RDP doesn't respond in 5 seconds
+                                // Cancel transfer if RDP doesn't respond in 5 seconds
                                 let serial = transfer_event.serial;
                                 let pending_clone = Arc::clone(&pending_requests);
                                 let portal_clone = Arc::clone(&portal_clipboard);
@@ -861,7 +1094,6 @@ impl ClipboardManager {
                                 tokio::spawn(async move {
                                     tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
 
-                                    // Check if request still pending in FIFO queue
                                     if pending_clone
                                         .read()
                                         .await
@@ -870,7 +1102,6 @@ impl ClipboardManager {
                                     {
                                         warn!("Clipboard request timeout for serial {} - RDP client didn't respond in 5 seconds", serial);
 
-                                        // Notify Portal of transfer failure
                                         if let (Some(portal), Some(session)) = (
                                             portal_clone.read().await.clone(),
                                             session_clone.read().await.clone(),
@@ -887,7 +1118,6 @@ impl ClipboardManager {
                                             }
                                         }
 
-                                        // Remove from pending requests
                                         pending_clone
                                             .write()
                                             .await
@@ -902,10 +1132,12 @@ impl ClipboardManager {
                                 .await
                                 .retain(|(s, _, _)| *s != transfer_event.serial);
                         }
-                    }
+                    } // end loop body
 
                     warn!("SelectionTransfer handler task ended");
                 });
+
+                self.task_handles.lock().await.push(handle);
 
                 info!("SelectionTransfer listener and handler started - delayed rendering enabled");
             }
@@ -929,33 +1161,54 @@ impl ClipboardManager {
             >,
         >,
     ) {
-        // Create channel for SelectionOwnerChanged events
         let (owner_tx, mut owner_rx) = mpsc::unbounded_channel();
 
-        // Start the Portal listener
         match portal.start_owner_changed_listener(owner_tx).await {
             Ok(()) => {
                 debug!("Starting SelectionOwnerChanged handler task");
 
                 let event_tx = self.event_tx.clone();
+                let mut shutdown_rx = self.shutdown_broadcast.subscribe();
 
-                // Spawn task to handle clipboard ownership changes
-                tokio::spawn(async move {
+                let handle = tokio::spawn(async move {
                     info!(
                         "SelectionOwnerChanged handler task ready - waiting for clipboard changes"
                     );
                     let mut change_count = 0;
 
-                    while let Some(mime_types) = owner_rx.recv().await {
-                        change_count += 1;
-                        info!(
-                            "Local clipboard change #{}: {} formats: {:?}",
-                            change_count,
-                            mime_types.len(),
-                            mime_types
-                        );
+                    // KDE klipper signature MIME types
+                    const KLIPPER_SIGNATURES: &[&str] = &[
+                        "application/x-kde-onlyReplaceEmpty",
+                        "application/x-kde-cutselection",
+                    ];
 
-                        // Send event to announce these formats to RDP clients
+                    loop {
+                        let mime_types = tokio::select! {
+                            Some(types) = owner_rx.recv() => types,
+                            _ = shutdown_rx.recv() => {
+                                info!("SelectionOwnerChanged handler received shutdown signal");
+                                break;
+                            }
+                        };
+
+                        change_count += 1;
+
+                        let is_klipper = mime_types
+                            .iter()
+                            .any(|m| KLIPPER_SIGNATURES.iter().any(|sig| m.contains(sig)));
+
+                        info!(
+                            "┌─ SelectionOwnerChanged #{} ─────────────────────────────────",
+                            change_count
+                        );
+                        info!("│ Received from Portal (session_is_owner=false, external source)");
+                        info!("│ MIME types ({}): {:?}", mime_types.len(), mime_types);
+                        if is_klipper {
+                            warn!("│ KLIPPER DETECTED: Contains KDE clipboard manager signature");
+                            warn!("│ This may be klipper syncing/taking over clipboard");
+                        }
+                        info!("└────────────────────────────────────────────────────────────────");
+
                         // Portal already filtered echoes (session_is_owner=true), so force=true
                         if let Err(e) = event_tx
                             .send(ClipboardEvent::PortalFormatsAvailable(
@@ -977,6 +1230,8 @@ impl ClipboardManager {
                     );
                 });
 
+                self.task_handles.lock().await.push(handle);
+
                 debug!(" SelectionOwnerChanged listener started - monitoring Linux clipboard");
                 debug!("Using Portal path (KDE/Sway/wlroots mode) - NOT D-Bus extension");
             }
@@ -992,7 +1247,6 @@ impl ClipboardManager {
     pub async fn start_dbus_clipboard_listener(&self) {
         debug!("Checking for GNOME clipboard extension on D-Bus...");
 
-        // Check if extension is available (static method)
         if !DbusClipboardBridge::is_available().await {
             debug!("GNOME clipboard extension not detected - D-Bus bridge inactive");
             debug!(
@@ -1001,7 +1255,6 @@ impl ClipboardManager {
             return;
         }
 
-        // Connect to D-Bus bridge (this spawns the signal listener internally)
         let bridge = match DbusClipboardBridge::connect().await {
             Ok(b) => b,
             Err(e) => {
@@ -1010,37 +1263,33 @@ impl ClipboardManager {
             }
         };
 
-        // Subscribe to clipboard events (broadcast::Receiver)
         let mut dbus_rx = bridge.subscribe();
-
-        // Store bridge reference
         *self.dbus_bridge.write().await = Some(bridge);
 
-        // Clone event sender and hash tracker for the spawned task
         let event_tx = self.event_tx.clone();
         let recently_written_hashes = Arc::clone(&self.recently_written_hashes);
         let rate_limit_ms = self.config.rate_limit_ms;
 
-        // Start background hash cleanup task
-        // This removes the expensive cleanup from the clipboard event hot path
+        // Hash cleanup runs in background to keep the event hot path fast
         let hashes_for_cleanup = Arc::clone(&self.recently_written_hashes);
-        tokio::spawn(async move {
+        let mut shutdown_rx2 = self.shutdown_broadcast.subscribe();
+
+        let handle2 = tokio::spawn(async move {
             const LOOP_SUPPRESSION_WINDOW_MS: u128 = 2000;
             const MAX_HASH_CACHE_SIZE: usize = 50;
 
             loop {
-                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                tokio::select! {
+                    _ = tokio::time::sleep(tokio::time::Duration::from_secs(1)) => {
 
                 let mut hashes = hashes_for_cleanup.write().await;
                 let before_size = hashes.len();
 
-                // Clean up expired entries
                 let now = std::time::Instant::now();
                 hashes.retain(|_, written_at| {
                     now.duration_since(*written_at).as_millis() < LOOP_SUPPRESSION_WINDOW_MS
                 });
 
-                // Enforce size limit
                 while hashes.len() > MAX_HASH_CACHE_SIZE {
                     if let Some(oldest_key) = hashes
                         .iter()
@@ -1053,15 +1302,27 @@ impl ClipboardManager {
                     }
                 }
 
-                let after_size = hashes.len();
-                if before_size != after_size {
-                    debug!("Hash cleanup: {} → {} entries", before_size, after_size);
+                        let after_size = hashes.len();
+                        if before_size != after_size {
+                            debug!("Hash cleanup: {} → {} entries", before_size, after_size);
+                        }
+                    }
+
+                    _ = shutdown_rx2.recv() => {
+                        info!("🛑 Hash cleanup task received shutdown signal");
+                        break;
+                    }
                 }
             }
+
+            info!("Hash cleanup task stopped");
         });
 
-        // Spawn task to forward D-Bus events to ClipboardManager
-        tokio::spawn(async move {
+        self.task_handles.lock().await.push(handle2);
+
+        let mut shutdown_rx3 = self.shutdown_broadcast.subscribe();
+
+        let handle3 = tokio::spawn(async move {
             info!(
                 "D-Bus clipboard event forwarder started (rate limit: {}ms)",
                 rate_limit_ms
@@ -1081,7 +1342,9 @@ impl ClipboardManager {
 
             // Note: broadcast::Receiver uses Ok(event) pattern, not Some(event)
             // It also returns RecvError::Lagged if we fell behind - we ignore those
-            while let Ok(dbus_event) = dbus_rx.recv().await {
+            loop {
+                tokio::select! {
+                    Ok(dbus_event) = dbus_rx.recv() => {
                 event_count += 1;
 
                 // Library's DbusClipboardEvent only monitors CLIPBOARD selection
@@ -1111,8 +1374,7 @@ impl ClipboardManager {
                 {
                     let hashes = recently_written_hashes.read().await;
 
-                    // Check if this event's hash matches one we recently wrote
-                    if hashes.contains_key(&dbus_event.content_hash) {
+                        if hashes.contains_key(&dbus_event.content_hash) {
                         suppressed_count += 1;
                         info!(
                             "LOOP SUPPRESSED #{}: D-Bus event hash {} matches our recent write - skipping",
@@ -1122,7 +1384,6 @@ impl ClipboardManager {
                     }
                 }
 
-                // Update rate limit timestamp
                 last_forward_time = Some(std::time::Instant::now());
 
                 info!(
@@ -1133,8 +1394,6 @@ impl ClipboardManager {
                 );
                 debug!("   MIME types: {:?}", dbus_event.mime_types);
 
-                // Forward to ClipboardManager as PortalFormatsAvailable event
-                // This triggers the same flow as if Portal had sent SelectionOwnerChanged
                 // D-Bus extension signals are authoritative (force=true) - always override RDP ownership
                 if let Err(e) = event_tx
                     .send(ClipboardEvent::PortalFormatsAvailable(
@@ -1143,18 +1402,27 @@ impl ClipboardManager {
                     ))
                     .await
                 {
-                    error!("Failed to forward D-Bus event to ClipboardManager: {}", e);
+                    error!("Failed to forward D-Bus event to ClipboardOrchestrator: {}", e);
                     break;
                 }
 
-                debug!(" Forwarded clipboard change to RDP client announcement flow");
+                        debug!(" Forwarded clipboard change to RDP client announcement flow");
+                    }
+
+                    _ = shutdown_rx3.recv() => {
+                        info!("🛑 D-Bus forwarder received shutdown signal");
+                        break;
+                    }
+                }
             }
 
-            warn!(
-                "D-Bus clipboard event forwarder ended after {} events ({} loop-suppressed, {} rate-limited)",
+            info!(
+                "D-Bus clipboard event forwarder stopped after {} events ({} loop-suppressed, {} rate-limited)",
                 event_count, suppressed_count, rate_limited_count
             );
         });
+
+        self.task_handles.lock().await.push(handle3);
 
         debug!(" D-Bus clipboard bridge started - GNOME extension integration active");
         debug!("Using D-Bus path (GNOME mode) - NOT Portal SelectionOwnerChanged");
@@ -1166,7 +1434,7 @@ impl ClipboardManager {
     /// This bridges synchronous FUSE read() calls to async RDP FileContentsRequests.
     /// When the Linux file manager reads a virtual file, FUSE blocks on a channel
     /// while we fetch the data from Windows via RDP.
-    fn start_fuse_request_handler(
+    async fn start_fuse_request_handler(
         &self,
         mut request_rx: mpsc::Receiver<crate::clipboard::fuse::FileContentsRequest>,
         pending_responses: Arc<
@@ -1182,12 +1450,14 @@ impl ClipboardManager {
 
         let server_event_sender = Arc::clone(&self.server_event_sender);
         let file_transfer_state = Arc::clone(&self.file_transfer_state);
+        let mut shutdown_rx4 = self.shutdown_broadcast.subscribe();
 
-        tokio::spawn(async move {
+        let handle4 = tokio::spawn(async move {
             debug!("FUSE request handler started");
 
-            while let Some(request) = request_rx.recv().await {
-                // Allocate a stream ID for this request
+            loop {
+                tokio::select! {
+                    Some(request) = request_rx.recv() => {
                 let stream_id = {
                     let mut state = file_transfer_state.write().await;
                     state.allocate_stream_id()
@@ -1198,13 +1468,11 @@ impl ClipboardManager {
                     request.file_index, request.offset, request.size, stream_id
                 );
 
-                // Store response channel for later
                 {
                     let mut pending = pending_responses.write().await;
                     pending.insert(stream_id, request.response_tx);
                 }
 
-                // Send FileContentsRequest to RDP
                 if let Some(sender) = server_event_sender.read().await.as_ref() {
                     use ironrdp_cliprdr::backend::ClipboardMessage;
                     use ironrdp_cliprdr::pdu::{
@@ -1224,7 +1492,6 @@ impl ClipboardManager {
                         ClipboardMessage::SendFileContentsRequest(rdp_request),
                     )) {
                         error!("Failed to send FileContentsRequest to RDP: {:?}", e);
-                        // Send error response back to FUSE
                         if let Some(response_tx) =
                             pending_responses.write().await.remove(&stream_id)
                         {
@@ -1235,16 +1502,24 @@ impl ClipboardManager {
                     }
                 } else {
                     warn!("ServerEvent sender not available for FUSE request");
-                    // Send error response back to FUSE
                     if let Some(response_tx) = pending_responses.write().await.remove(&stream_id) {
                         let _ = response_tx
                             .send(FileContentsResponse::Error("RDP not connected".to_string()));
                     }
                 }
+                    }
+
+                    _ = shutdown_rx4.recv() => {
+                        info!("🛑 FUSE request handler received shutdown signal");
+                        break;
+                    }
+                }
             }
 
-            debug!("FUSE request handler ended");
+            info!("FUSE request handler stopped");
         });
+
+        self.task_handles.lock().await.push(handle4);
     }
 
     /// Deliver FUSE file contents response from RDP
@@ -1281,7 +1556,6 @@ impl ClipboardManager {
         let sync_manager = self.sync_manager.clone();
         let transfer_engine = self.transfer_engine.clone();
         let config = self.config.clone();
-        // Clone the Arc<RwLock<>> wrappers - they can be read dynamically
         let portal_clipboard = Arc::clone(&self.portal_clipboard);
         let portal_session = Arc::clone(&self.portal_session);
         let pending_portal_requests = Arc::clone(&self.pending_portal_requests);
@@ -1291,6 +1565,11 @@ impl ClipboardManager {
         let fuse_manager = Arc::clone(&self.fuse_manager);
         let current_rdp_formats = Arc::clone(&self.current_rdp_formats);
         let local_advertised_formats = Arc::clone(&self.local_advertised_formats);
+        let last_reannounce_time = Arc::clone(&self.last_reannounce_time);
+        let reannounce_count = Arc::clone(&self.reannounce_count);
+        let klipper_info = Arc::clone(&self.klipper_info);
+        let cooperation_coordinator = Arc::clone(&self.cooperation_coordinator);
+        let cooperation_content_cache = Arc::clone(&self.cooperation_content_cache);
 
         let (shutdown_tx, mut shutdown_rx) = mpsc::channel::<()>(1);
         self.shutdown_tx = Some(shutdown_tx);
@@ -1314,6 +1593,11 @@ impl ClipboardManager {
                             &fuse_manager,
                             &current_rdp_formats,
                             &local_advertised_formats,
+                            &last_reannounce_time,
+                            &reannounce_count,
+                            &klipper_info,
+                            &cooperation_coordinator,
+                            &cooperation_content_cache,
                         ).await {
                             error!("Error handling clipboard event: {:?}", e);
                         }
@@ -1333,7 +1617,7 @@ impl ClipboardManager {
         converter: &FormatConverter,
         sync_manager: &Arc<RwLock<SyncManager>>,
         transfer_engine: &TransferEngine,
-        _config: &ClipboardConfig,
+        _config: &ClipboardOrchestratorConfig,
         portal_clipboard: &Arc<RwLock<Option<Arc<crate::portal::PortalClipboardManager>>>>,
         portal_session: &Arc<
             RwLock<
@@ -1359,9 +1643,16 @@ impl ClipboardManager {
             RwLock<std::collections::HashMap<String, std::time::Instant>>,
         >,
         file_transfer_state: &Arc<RwLock<FileTransferState>>,
-        fuse_manager: &Arc<RwLock<Option<crate::clipboard::fuse::FuseManager>>>,
+        fuse_manager: &Arc<RwLock<Option<crate::clipboard::fuse::FuseMount>>>,
         current_rdp_formats: &Arc<RwLock<Vec<ClipboardFormat>>>,
         local_advertised_formats: &Arc<RwLock<Vec<ClipboardFormat>>>,
+        last_reannounce_time: &Arc<RwLock<Option<std::time::SystemTime>>>,
+        reannounce_count: &Arc<RwLock<HashMap<Vec<u32>, u32>>>,
+        klipper_info: &Arc<RwLock<crate::clipboard::klipper::KlipperInfo>>,
+        cooperation_coordinator: &Arc<
+            RwLock<Option<crate::clipboard::KlipperCooperationCoordinator>>,
+        >,
+        cooperation_content_cache: &Arc<RwLock<Option<Vec<u8>>>>,
     ) -> Result<()> {
         match event {
             ClipboardEvent::RdpReady => {
@@ -1377,7 +1668,6 @@ impl ClipboardManager {
                     let formats_to_send = advertised.clone();
                     drop(advertised);
 
-                    // Send the cached formats to RDP
                     let sender_opt = server_event_sender.read().await.clone();
                     if let Some(sender) = sender_opt {
                         use ironrdp_cliprdr::backend::ClipboardMessage;
@@ -1420,6 +1710,9 @@ impl ClipboardManager {
                     portal_clipboard,
                     portal_session,
                     current_rdp_formats,
+                    _config,
+                    klipper_info,
+                    cooperation_coordinator,
                 )
                 .await
             }
@@ -1434,6 +1727,7 @@ impl ClipboardManager {
                     server_event_sender,
                     local_advertised_formats,
                     file_transfer_state,
+                    &cooperation_content_cache,
                 )
                 .await
             }
@@ -1507,6 +1801,11 @@ impl ClipboardManager {
                     sync_manager,
                     server_event_sender,
                     local_advertised_formats,
+                    current_rdp_formats,
+                    portal_clipboard,
+                    portal_session,
+                    last_reannounce_time,
+                    reannounce_count,
                 )
                 .await
             }
@@ -1549,10 +1848,15 @@ impl ClipboardManager {
             >,
         >,
         current_rdp_formats: &Arc<RwLock<Vec<ClipboardFormat>>>,
+        config: &ClipboardOrchestratorConfig,
+        klipper_info: &Arc<RwLock<crate::clipboard::klipper::KlipperInfo>>,
+        cooperation_coordinator: &Arc<
+            RwLock<Option<crate::clipboard::KlipperCooperationCoordinator>>,
+        >,
     ) -> Result<()> {
         debug!("RDP format list received: {:?}", formats);
 
-        // Store the format list for later lookup (registered format IDs vary per session)
+        // Registered format IDs vary per session, store for later lookup
         {
             let mut stored_formats = current_rdp_formats.write().await;
             *stored_formats = formats.clone();
@@ -1562,10 +1866,20 @@ impl ClipboardManager {
             );
         }
 
-        // Check with sync manager (loop detection)
+        {
+            let coordinator_opt = cooperation_coordinator.read().await;
+            if let Some(ref coordinator) = *coordinator_opt {
+                coordinator.update_rdp_formats(formats.clone()).await;
+                debug!(
+                    "Updated cooperation coordinator with {} RDP formats",
+                    formats.len()
+                );
+            }
+        }
+
         let should_sync = {
             let mut mgr = sync_manager.write().await;
-            mgr.handle_rdp_formats(formats.clone())?
+            mgr.handle_rdp_formats(formats.clone())
         };
 
         if !should_sync {
@@ -1573,12 +1887,34 @@ impl ClipboardManager {
             return Ok(());
         }
 
-        // Convert RDP formats to MIME types
-        let mime_types = converter.rdp_to_mime_types(&formats)?;
+        let mut mime_types = converter.rdp_to_mime_types(&formats)?;
 
         debug!("Converted to MIME types: {:?}", mime_types);
 
-        // Get Portal clipboard and session (dynamically read from Arc<RwLock<>>)
+        if config.kde_syncselection_hint {
+            let klipper_detected = {
+                let info = klipper_info.read().await;
+                info.detected && info.responsive
+            };
+
+            if klipper_detected {
+                warn!("⚠️  EXPERIMENTAL: Adding x-kde-syncselection hint");
+                warn!("   This tells Klipper to completely ignore our clipboard");
+                warn!("   This MIME type is intended for Klipper's internal use only");
+
+                const KDE_SYNCSELECTION: &str = "application/x-kde-syncselection";
+
+                if !mime_types.contains(&KDE_SYNCSELECTION.to_string()) {
+                    mime_types.push(KDE_SYNCSELECTION.to_string());
+                    debug!("   Added {} to MIME types", KDE_SYNCSELECTION);
+                }
+            } else {
+                debug!("kde_syncselection_hint enabled but Klipper not detected - skipping hint");
+            }
+        }
+
+        debug!("Final MIME types for SetSelection: {:?}", mime_types);
+
         let portal_opt = portal_clipboard.read().await.clone();
         let session_opt = portal_session.read().await.clone();
 
@@ -1604,8 +1940,20 @@ impl ClipboardManager {
             }
         };
 
-        // Announce formats to Portal using delayed rendering (SetSelection)
-        // This tells Wayland "these formats are available" WITHOUT transferring data
+        // Delayed rendering: announce format availability WITHOUT transferring data
+        info!("┌─ SetSelection (RDP → Portal) ───────────────────────────────");
+        info!(
+            "│ Announcing {} MIME types to Portal: {:?}",
+            mime_types.len(),
+            mime_types
+        );
+        info!(
+            "│ Echo protection window starts NOW ({}ms)",
+            2000 // ECHO_PROTECTION_WINDOW_MS from sync.rs
+        );
+        info!("│ Any SelectionOwnerChanged within this window will be blocked");
+        info!("└────────────────────────────────────────────────────────────────");
+
         let session_guard = session.read().await;
         portal
             .announce_rdp_formats(&session_guard, mime_types)
@@ -1644,13 +1992,61 @@ impl ClipboardManager {
         >,
         local_advertised_formats: &Arc<RwLock<Vec<ClipboardFormat>>>,
         file_transfer_state: &Arc<RwLock<FileTransferState>>,
+        cooperation_content_cache: &Arc<RwLock<Option<Vec<u8>>>>,
     ) -> Result<()> {
         info!(
             "RDP data request for format ID: {} (Linux → Windows paste)",
             format_id
         );
 
-        // Check if this is a registered format from our advertised list
+        // PRIORITY 1: Check cooperation content cache (from Klipper sync)
+        // If we recently synced from Klipper, serve that content
+        if let Some(cached_data) = cooperation_content_cache.read().await.as_ref() {
+            // Check if format_id matches what we cached (CF_UNICODETEXT=13 or CF_TEXT=1)
+            if format_id == 13 || format_id == 1 {
+                info!(
+                    "✅ Serving from cooperation cache: {} bytes (Klipper sync)",
+                    cached_data.len()
+                );
+
+                let sender_opt = server_event_sender.read().await.clone();
+                if let Some(sender) = sender_opt {
+                    use ironrdp_cliprdr::backend::ClipboardMessage;
+                    use ironrdp_cliprdr::pdu::FormatDataResponse;
+                    use ironrdp_pdu::IntoOwned;
+
+                    let data_to_send = if format_id == 1 {
+                        // CF_TEXT - Convert UTF-16 to ASCII/UTF-8
+                        // For now, just use the UTF-16 data as-is
+                        // TODO: Proper UTF-16 to ASCII conversion if needed
+                        cached_data.clone()
+                    } else {
+                        // CF_UNICODETEXT - Use as-is (already UTF-16)
+                        cached_data.clone()
+                    };
+
+                    let response = FormatDataResponse::new_data(data_to_send.clone());
+                    let owned_response = response.into_owned();
+
+                    if sender
+                        .send(ironrdp_server::ServerEvent::Clipboard(
+                            ClipboardMessage::SendFormatData(owned_response),
+                        ))
+                        .is_ok()
+                    {
+                        info!(
+                            "Sent {} bytes from cooperation cache to RDP client",
+                            data_to_send.len()
+                        );
+                        return Ok(());
+                    }
+                } else {
+                    warn!("ServerEvent sender not available");
+                }
+            }
+        }
+
+        // Normal path: read from Portal clipboard
         let advertised = local_advertised_formats.read().await;
         let format_name = advertised
             .iter()
@@ -1658,7 +2054,6 @@ impl ClipboardManager {
             .and_then(|f| f.name.clone());
         drop(advertised);
 
-        // Check if this is FileGroupDescriptorW (file transfer)
         if let Some(ref name) = format_name {
             if name == "FileGroupDescriptorW" {
                 debug!("Windows requests FileGroupDescriptorW - sending file list from Linux clipboard");
@@ -1672,7 +2067,6 @@ impl ClipboardManager {
             }
         }
 
-        // Get Portal clipboard and session
         let portal_opt = portal_clipboard.read().await.clone();
         let session_opt = portal_session.read().await.clone();
 
@@ -1680,13 +2074,11 @@ impl ClipboardManager {
             (Some(p), Some(s)) => (p, s),
             _ => {
                 warn!("Portal not available for RDP data request");
-                // Send error response to RDP client
                 Self::send_format_data_error(server_event_sender).await;
                 return Ok(());
             }
         };
 
-        // Convert format ID to MIME type
         let mime_type = match converter.format_id_to_mime(format_id) {
             Ok(m) => m,
             Err(e) => {
@@ -1697,7 +2089,6 @@ impl ClipboardManager {
         };
         debug!("Format {} maps to MIME: {}", format_id, mime_type);
 
-        // Read from Portal clipboard via SelectionRead
         let session_guard = session.read().await;
         let portal_data = match portal
             .read_local_clipboard(&session_guard, &mime_type)
@@ -1713,7 +2104,6 @@ impl ClipboardManager {
             }
             Err(e) => {
                 error!("Failed to read from Portal clipboard: {:#}", e);
-                // Send error response to RDP client
                 drop(session_guard);
                 Self::send_format_data_error(server_event_sender).await;
                 return Ok(());
@@ -1721,7 +2111,6 @@ impl ClipboardManager {
         };
         drop(session_guard);
 
-        // Convert Portal data to RDP format based on format ID and MIME type
         let rdp_data = if format_id == 13 {
             // CF_UNICODETEXT - Convert UTF-8 to UTF-16LE with line ending conversion
             let text = String::from_utf8_lossy(&portal_data);
@@ -1743,22 +2132,16 @@ impl ClipboardManager {
             // CF_DIB - Windows wants DIB, Portal has image format
             if mime_type.starts_with("image/png") {
                 trace!(" Converting PNG to DIB for Windows");
-                lamco_clipboard_core::image::png_to_dib(&portal_data).map_err(|e| {
-                    error!("PNG to DIB conversion failed: {}", e);
-                    ClipboardError::Core(e)
-                })?
+                lamco_clipboard_core::image::png_to_dib(&portal_data)
+                    .map_err(ClipboardError::Core)?
             } else if mime_type.starts_with("image/jpeg") {
                 trace!(" Converting JPEG to DIB for Windows");
-                lamco_clipboard_core::image::jpeg_to_dib(&portal_data).map_err(|e| {
-                    error!("JPEG to DIB conversion failed: {}", e);
-                    ClipboardError::Core(e)
-                })?
+                lamco_clipboard_core::image::jpeg_to_dib(&portal_data)
+                    .map_err(ClipboardError::Core)?
             } else if mime_type.starts_with("image/bmp") || mime_type.starts_with("image/x-bmp") {
                 trace!(" Converting BMP to DIB for Windows");
-                lamco_clipboard_core::image::bmp_to_dib(&portal_data).map_err(|e| {
-                    error!("BMP to DIB conversion failed: {}", e);
-                    ClipboardError::Core(e)
-                })?
+                lamco_clipboard_core::image::bmp_to_dib(&portal_data)
+                    .map_err(ClipboardError::Core)?
             } else {
                 debug!("Unknown image MIME for DIB: {}, passing through", mime_type);
                 portal_data
@@ -1767,16 +2150,12 @@ impl ClipboardManager {
             // CF_DIBV5 - Windows wants DIBV5 with alpha channel support
             if mime_type.starts_with("image/png") {
                 trace!(" Converting PNG to DIBV5 for Windows (with alpha)");
-                lamco_clipboard_core::image::png_to_dibv5(&portal_data).map_err(|e| {
-                    error!("PNG to DIBV5 conversion failed: {}", e);
-                    ClipboardError::Core(e)
-                })?
+                lamco_clipboard_core::image::png_to_dibv5(&portal_data)
+                    .map_err(ClipboardError::Core)?
             } else if mime_type.starts_with("image/jpeg") {
                 trace!(" Converting JPEG to DIBV5 for Windows");
-                lamco_clipboard_core::image::jpeg_to_dibv5(&portal_data).map_err(|e| {
-                    error!("JPEG to DIBV5 conversion failed: {}", e);
-                    ClipboardError::Core(e)
-                })?
+                lamco_clipboard_core::image::jpeg_to_dibv5(&portal_data)
+                    .map_err(ClipboardError::Core)?
             } else {
                 // Unsupported MIME for DIBV5, fall back to raw data
                 debug!(
@@ -1806,14 +2185,12 @@ impl ClipboardManager {
         let data_len = rdp_data.len();
         debug!("Converted to RDP format: {} bytes", data_len);
 
-        // Send response back to RDP client via ServerEvent
         let sender_opt = server_event_sender.read().await.clone();
         if let Some(sender) = sender_opt {
             use ironrdp_cliprdr::backend::ClipboardMessage;
             use ironrdp_cliprdr::pdu::FormatDataResponse;
             use ironrdp_pdu::IntoOwned;
 
-            // Create FormatDataResponse and convert to owned
             let response = FormatDataResponse::new_data(rdp_data);
             let owned_response = response.into_owned();
 
@@ -1858,7 +2235,6 @@ impl ClipboardManager {
         >,
         file_transfer_state: &Arc<RwLock<FileTransferState>>,
     ) -> Result<()> {
-        // Get Portal clipboard and session
         let portal_opt = portal_clipboard.read().await.clone();
         let session_opt = portal_session.read().await.clone();
 
@@ -1908,8 +2284,6 @@ impl ClipboardManager {
         };
         drop(session_guard);
 
-        // Parse URIs from the clipboard data using the library function
-        // This handles both text/uri-list and x-special/gnome-copied-files formats
         let file_paths = parse_file_uris(&uri_data);
 
         for path in &file_paths {
@@ -1922,7 +2296,6 @@ impl ClipboardManager {
             return Ok(());
         }
 
-        // Store outgoing files for FileContents requests
         {
             let mut state = file_transfer_state.write().await;
             state.clear_outgoing();
@@ -1947,7 +2320,6 @@ impl ClipboardManager {
             );
         }
 
-        // Build FILEDESCRIPTORW data
         let descriptor_data = match lamco_clipboard_core::build_file_group_descriptor_w(&file_paths)
         {
             Ok(data) => {
@@ -1965,7 +2337,6 @@ impl ClipboardManager {
             }
         };
 
-        // Send response to Windows
         let sender_opt = server_event_sender.read().await.clone();
         if let Some(sender) = sender_opt {
             use ironrdp_cliprdr::backend::ClipboardMessage;
@@ -2039,21 +2410,19 @@ impl ClipboardManager {
             RwLock<std::collections::HashMap<String, std::time::Instant>>,
         >,
         file_transfer_state: &Arc<RwLock<FileTransferState>>,
-        fuse_manager: &Arc<RwLock<Option<crate::clipboard::fuse::FuseManager>>>,
+        fuse_manager: &Arc<RwLock<Option<crate::clipboard::fuse::FuseMount>>>,
         server_event_sender: &Arc<
             RwLock<Option<mpsc::UnboundedSender<ironrdp_server::ServerEvent>>>,
         >,
     ) -> Result<()> {
         debug!("RDP data response received: {} bytes", data.len());
 
-        // Check for content loop
-        let should_transfer = sync_manager.write().await.check_content(&data, true)?;
+        let should_transfer = sync_manager.write().await.check_content(&data, true);
         if !should_transfer {
             debug!("Skipping RDP data due to content loop detection");
             return Ok(());
         }
 
-        // Get Portal clipboard and session
         let portal_opt = portal_clipboard.read().await.clone();
         let session_opt = portal_session.read().await.clone();
 
@@ -2138,7 +2507,6 @@ impl ClipboardManager {
                         }
                     }
 
-                    // Check if FUSE is available and mounted - use on-demand transfer
                     let fuse_available = {
                         let fuse = fuse_manager.read().await;
                         fuse.as_ref().map(|m| m.is_mounted()).unwrap_or(false)
@@ -2149,7 +2517,6 @@ impl ClipboardManager {
                         // Data will be fetched on-demand when file manager reads
                         info!("Using FUSE on-demand file transfer (no upfront download)");
 
-                        // Lock clipboard data for the duration of the transfer
                         let clip_data_id = 1u32;
                         if let Some(sender) = server_event_sender.read().await.as_ref() {
                             use ironrdp_cliprdr::backend::ClipboardMessage;
@@ -2160,7 +2527,6 @@ impl ClipboardManager {
                             }
                         }
 
-                        // Convert library FileDescriptor to FUSE FileDescriptor
                         let fuse_descriptors: Vec<crate::clipboard::fuse::FileDescriptor> =
                             descriptors
                                 .iter()
@@ -2173,7 +2539,6 @@ impl ClipboardManager {
                                 })
                                 .collect();
 
-                        // Create virtual files in FUSE
                         let paths = {
                             let fuse = fuse_manager.read().await;
                             if let Some(ref manager) = *fuse {
@@ -2187,7 +2552,6 @@ impl ClipboardManager {
                             error!("FUSE failed to create virtual files - falling back to staging");
                             // Fall through to staging approach
                         } else {
-                            // Generate URI list for Portal
                             let uri_content =
                                 crate::clipboard::fuse::generate_gnome_copied_files_content(&paths);
                             let uri_bytes = uri_content.into_bytes();
@@ -2198,7 +2562,6 @@ impl ClipboardManager {
                                 serial
                             );
 
-                            // Write URI list to Portal
                             let session_guard = session.read().await;
                             match portal
                                 .write_selection_data(&session_guard, serial, uri_bytes)
@@ -2225,7 +2588,6 @@ impl ClipboardManager {
                     // Staging fallback path: download files upfront (when FUSE not available)
                     info!("Using staging file transfer (FUSE not available)");
 
-                    // Initialize file transfer state and request file contents
                     let sender_opt = server_event_sender.read().await.clone();
                     let sender = match sender_opt {
                         Some(s) => s,
@@ -2233,7 +2595,6 @@ impl ClipboardManager {
                             error!(
                                 "ServerEvent sender not available - cannot request file contents"
                             );
-                            // Cancel Portal request since we can't proceed
                             let session_guard = session.read().await;
                             let _ = portal
                                 .portal_clipboard()
@@ -2246,7 +2607,6 @@ impl ClipboardManager {
                     {
                         let mut state = file_transfer_state.write().await;
 
-                        // Clear any previous transfer state
                         state.clear_incoming();
                         state.set_pending_descriptors(descriptors.clone());
                         state.portal_serial = Some(serial);
@@ -2254,9 +2614,8 @@ impl ClipboardManager {
                         use ironrdp_cliprdr::backend::ClipboardMessage;
                         use ironrdp_cliprdr::pdu::{FileContentsFlags, FileContentsRequest};
 
-                        // Lock clipboard data before requesting file contents
                         // Required when CAN_LOCK_CLIPDATA is negotiated
-                        let clip_data_id = 1u32; // Use a consistent ID for this transfer
+                        let clip_data_id = 1u32;
                         info!("Sending Lock PDU (clip_data_id={})", clip_data_id);
                         if let Err(e) = sender.send(ironrdp_server::ServerEvent::Clipboard(
                             ClipboardMessage::SendLockClipboard { clip_data_id },
@@ -2264,10 +2623,8 @@ impl ClipboardManager {
                             error!("Failed to send Lock PDU: {:?}", e);
                         }
 
-                        // Create IncomingFile entry for each file and request its contents
                         for (idx, desc) in descriptors.iter().enumerate() {
                             let stream_id = state.allocate_stream_id();
-                            // Sanitize Windows filename for Linux filesystem compatibility
                             let original_name = &desc.name;
                             let filename = sanitize_filename_for_linux(original_name);
                             let total_size = desc.size.unwrap_or(0);
@@ -2286,12 +2643,10 @@ impl ClipboardManager {
                                 );
                             }
 
-                            // Create temp file for receiving data
                             let temp_path = state
                                 .download_dir
                                 .join(format!(".{}.{}.tmp", filename, stream_id));
 
-                            // Ensure download directory exists
                             if let Err(e) = std::fs::create_dir_all(&state.download_dir) {
                                 error!("Failed to create download directory: {}", e);
                                 continue;
@@ -2309,7 +2664,6 @@ impl ClipboardManager {
                                 }
                             };
 
-                            // Register this incoming file
                             let incoming = IncomingFile {
                                 stream_id,
                                 filename: filename.clone(),
@@ -2322,8 +2676,6 @@ impl ClipboardManager {
                             };
                             state.incoming_files.insert(stream_id, incoming);
 
-                            // Send FileContentsRequest for this file
-                            // Request all data at once (position 0, size = total_size or reasonable max)
                             let request_size = if total_size > 0 {
                                 total_size.min(64 * 1024 * 1024) as u32 // Max 64MB per request
                             } else {
@@ -2367,7 +2719,6 @@ impl ClipboardManager {
             }
         }
 
-        // Convert RDP data to Portal format based on requested MIME type
         let portal_data = if requested_mime.starts_with("image/png") {
             // Portal wants PNG, Windows sent DIB or DIBV5
             // Auto-detect format based on header size
@@ -2478,10 +2829,12 @@ impl ClipboardManager {
                 );
             }
             rtf_bytes
-        } else if (requested_mime == "text/plain" || requested_mime == "text/html")
+        } else if (requested_mime.starts_with("text/plain")
+            || requested_mime.starts_with("text/html"))
             && data.len() >= 2
         {
             // text/plain and text/html from Windows are UTF-16LE (CF_UNICODETEXT)
+            // MIME may have charset suffix like "text/plain;charset=utf-8"
             // Convert UTF-16LE to UTF-8 with line ending conversion
             let utf16_data: Vec<u16> = data
                 .chunks_exact(2)
@@ -2521,8 +2874,7 @@ impl ClipboardManager {
         // User may legitimately want to paste same content multiple times
         // Hash dedup was blocking valid user actions and breaking clipboard UX
 
-        // Write data to Portal via SelectionWrite workflow
-        // IMPORTANT: Use timeout to prevent event loop from getting stuck on lock contention
+        // Timeout prevents event loop from getting stuck on lock contention
         debug!(
             "Acquiring session read lock for Portal write (serial {})",
             serial
@@ -2557,7 +2909,6 @@ impl ClipboardManager {
                     serial
                 );
                 error!("This prevents event loop from getting stuck. Canceling this clipboard transfer.");
-                // Cancel the Portal transfer to prevent Portal from waiting forever
                 if let (Some(p), Some(s)) = (
                     portal_clipboard.read().await.clone(),
                     portal_session.read().await.clone(),
@@ -2598,7 +2949,6 @@ impl ClipboardManager {
                     "TIMEOUT: Portal selection_write took >30s (serial {}) - canceling",
                     serial
                 );
-                // Notify Portal of failure
                 let _ = portal
                     .portal_clipboard()
                     .selection_write_done(&session_guard, serial, false)
@@ -2608,7 +2958,6 @@ impl ClipboardManager {
             Ok(Err(e)) => {
                 error!("Failed to write clipboard data to Portal: {:#}", e);
 
-                // Remove THIS failed request from pending queue
                 let mut pending = pending_portal_requests.write().await;
                 pending.retain(|(s, _, _)| *s != serial);
                 drop(pending);
@@ -2636,7 +2985,6 @@ impl ClipboardManager {
                 pending.clear(); // Clear ALL (including the one we just fulfilled)
                 drop(pending);
 
-                // Cancel unfulfilled Portal requests
                 if !unfulfilled.is_empty() {
                     debug!(" Canceling {} unfulfilled SelectionTransfer requests (LibreOffice multi-MIME)", unfulfilled.len());
 
@@ -2692,7 +3040,6 @@ impl ClipboardManager {
         // RDP client returned error - format not available (expected protocol behavior)
         debug!("RDP FormatDataResponse: format not available, notifying Portal");
 
-        // Get Portal clipboard and session
         let portal_opt = portal_clipboard.read().await.clone();
         let session_opt = portal_session.read().await.clone();
 
@@ -2705,7 +3052,6 @@ impl ClipboardManager {
             }
         };
 
-        // Get all pending requests and notify Portal of failure for each
         let pending = pending_portal_requests.read().await;
         let serials: Vec<u32> = pending.iter().map(|(s, _, _)| *s).collect();
         drop(pending);
@@ -2713,7 +3059,6 @@ impl ClipboardManager {
         for serial in serials {
             debug!("Notifying Portal of transfer failure (serial {})", serial);
 
-            // Notify Portal that the transfer failed
             let session_guard = session.read().await;
             match portal
                 .portal_clipboard()
@@ -2729,7 +3074,6 @@ impl ClipboardManager {
                 }
             }
 
-            // Remove from pending FIFO queue
             pending_portal_requests
                 .write()
                 .await
@@ -2751,7 +3095,27 @@ impl ClipboardManager {
             RwLock<Option<mpsc::UnboundedSender<ironrdp_server::ServerEvent>>>,
         >,
         local_advertised_formats: &Arc<RwLock<Vec<ClipboardFormat>>>,
+        current_rdp_formats: &Arc<RwLock<Vec<ClipboardFormat>>>,
+        portal_clipboard: &Arc<RwLock<Option<Arc<crate::portal::PortalClipboardManager>>>>,
+        portal_session: &Arc<
+            RwLock<
+                Option<
+                    Arc<
+                        RwLock<
+                            ashpd::desktop::Session<
+                                'static,
+                                ashpd::desktop::remote_desktop::RemoteDesktop<'static>,
+                            >,
+                        >,
+                    >,
+                >,
+            >,
+        >,
+        last_reannounce_time: &Arc<RwLock<Option<std::time::SystemTime>>>,
+        reannounce_count: &Arc<RwLock<HashMap<Vec<u32>, u32>>>,
     ) -> Result<()> {
+        use std::time::{Duration, SystemTime};
+
         info!(
             "handle_portal_formats called with {} MIME types (force={}): {:?}",
             mime_types.len(),
@@ -2759,18 +3123,144 @@ impl ClipboardManager {
             mime_types
         );
 
-        // Check with sync manager (loop detection)
-        let should_sync = {
+        let sync_decision = {
             let mut mgr = sync_manager.write().await;
-            mgr.handle_portal_formats(mime_types.clone(), force)?
+            mgr.handle_portal_formats(mime_types.clone(), force)
         };
 
-        if !should_sync {
-            debug!("Skipping Portal formats due to loop detection");
-            return Ok(());
+        match sync_decision {
+            crate::clipboard::sync::PortalSyncDecision::Allow => {
+                // Normal Linux → Windows sync
+                debug!("Sync decision: Allow - proceeding with normal sync");
+            }
+
+            crate::clipboard::sync::PortalSyncDecision::Block => {
+                debug!("Sync decision: Block - skipping Portal formats");
+                return Ok(());
+            }
+
+            crate::clipboard::sync::PortalSyncDecision::KlipperReannounce => {
+                // Klipper took over clipboard - re-announce RDP formats to reclaim ownership
+                info!("┌─ Klipper Takeover Mitigation ─────────────────────────────");
+                info!("│ Klipper has taken clipboard ownership");
+
+                // GUARD 1: Time-based (prevent rapid reannouncements)
+                let time_ok = {
+                    let last_time = last_reannounce_time.read().await;
+                    match *last_time {
+                        Some(t) => {
+                            let elapsed = SystemTime::now()
+                                .duration_since(t)
+                                .unwrap_or(Duration::from_secs(999))
+                                .as_millis();
+
+                            if elapsed < 500 {
+                                warn!("│ SKIP: Reannounced {}ms ago (< 500ms guard)", elapsed);
+                                info!(
+                                    "└────────────────────────────────────────────────────────────"
+                                );
+                                return Ok(());
+                            } else {
+                                debug!("│ Time guard OK: {}ms since last reannounce", elapsed);
+                                true
+                            }
+                        }
+                        None => {
+                            debug!("│ First reannounce - no time guard");
+                            true
+                        }
+                    }
+                };
+
+                if !time_ok {
+                    info!("└────────────────────────────────────────────────────────────");
+                    return Ok(());
+                }
+
+                // GUARD 2: Count-based (max 2 reannouncements per RDP format list)
+                let count_ok = {
+                    let stored_formats = current_rdp_formats.read().await;
+                    let mut format_ids: Vec<u32> = stored_formats.iter().map(|f| f.id).collect();
+                    format_ids.sort_unstable(); // Ensure consistent ordering for HashMap key
+
+                    let mut counts = reannounce_count.write().await;
+                    let count = counts.entry(format_ids).or_insert(0);
+
+                    if *count >= 2 {
+                        warn!(
+                            "│ SKIP: Already reannounced {} times for this RDP copy",
+                            count
+                        );
+                        warn!("│ Accepting Klipper ownership to prevent infinite loop");
+                        info!("└────────────────────────────────────────────────────────────");
+                        return Ok(());
+                    } else {
+                        *count += 1;
+                        info!("│ Reannounce attempt #{} (max 2 allowed)", count);
+                        true
+                    }
+                };
+
+                if !count_ok {
+                    info!("└────────────────────────────────────────────────────────────");
+                    return Ok(());
+                }
+
+                // RE-ANNOUNCE: Call SetSelection again with original RDP formats
+                let stored = current_rdp_formats.read().await;
+
+                if stored.is_empty() {
+                    warn!("│ No RDP formats stored to re-announce");
+                    info!("└────────────────────────────────────────────────────────────");
+                    return Ok(());
+                }
+
+                let reannounce_mimes = converter.rdp_to_mime_types(&stored)?;
+
+                info!(
+                    "│ Re-announcing {} RDP formats as {} MIME types",
+                    stored.len(),
+                    reannounce_mimes.len()
+                );
+                debug!("│ MIME types: {:?}", reannounce_mimes);
+
+                let portal_opt = portal_clipboard.read().await.clone();
+                let session_opt = portal_session.read().await.clone();
+
+                match (portal_opt, session_opt) {
+                    (Some(portal), Some(session_arc)) => {
+                        let session = session_arc.read().await;
+
+                        match portal
+                            .announce_rdp_formats(&session, reannounce_mimes)
+                            .await
+                        {
+                            Ok(_) => {
+                                info!("│ ✅ SetSelection succeeded - ownership reclaimed");
+
+                                *last_reannounce_time.write().await = Some(SystemTime::now());
+
+                                info!("│ Monitoring for Klipper's response...");
+                            }
+                            Err(e) => {
+                                error!("│ ❌ SetSelection failed: {:#}", e);
+                                error!("│ Context: RDP formats={}", stored.len());
+                            }
+                        }
+                    }
+                    (None, _) => {
+                        warn!("│ Portal clipboard not available for reannounce");
+                    }
+                    (_, None) => {
+                        warn!("│ Portal session not available for reannounce");
+                    }
+                }
+
+                info!("└────────────────────────────────────────────────────────────");
+                return Ok(());
+            }
         }
 
-        // Convert MIME types to RDP formats
         let rdp_formats = converter.mime_to_rdp_formats(&mime_types)?;
         debug!(
             "Converted {} MIME types to {} RDP formats",
@@ -2778,7 +3268,6 @@ impl ClipboardManager {
             rdp_formats.len()
         );
 
-        // Convert to IronRDP ClipboardFormat type
         let ironrdp_formats: Vec<ironrdp_cliprdr::pdu::ClipboardFormat> = rdp_formats
             .iter()
             .map(|f| {
@@ -2796,7 +3285,6 @@ impl ClipboardManager {
             })
             .collect();
 
-        // Store the formats we're advertising (for data request lookup)
         {
             let mut advertised = local_advertised_formats.write().await;
             advertised.clear();
@@ -2812,14 +3300,12 @@ impl ClipboardManager {
             );
         }
 
-        // Log format details for debugging
         debug!(" Sending FormatList to RDP client:");
         for (idx, fmt) in ironrdp_formats.iter().enumerate() {
             let name_str = fmt.name.as_ref().map(|n| n.value()).unwrap_or("");
             info!("   Format {}: ID={}, Name={:?}", idx, fmt.id.0, name_str);
         }
 
-        // Send ServerEvent to announce formats to RDP clients
         let sender_opt = server_event_sender.read().await.clone();
         if let Some(sender) = sender_opt {
             use ironrdp_cliprdr::backend::ClipboardMessage;
@@ -2873,7 +3359,6 @@ impl ClipboardManager {
     ) -> Result<()> {
         debug!("Portal data request for MIME type: {}", mime_type);
 
-        // Convert MIME type to RDP format ID
         let format_id = converter.mime_to_format_id(&mime_type)?;
 
         info!(
@@ -2901,8 +3386,7 @@ impl ClipboardManager {
     ) -> Result<()> {
         debug!("Portal data response received: {} bytes", data.len());
 
-        // Check for content loop
-        let should_transfer = sync_manager.write().await.check_content(&data, false)?;
+        let should_transfer = sync_manager.write().await.check_content(&data, false);
 
         if !should_transfer {
             debug!("Skipping Portal data due to content loop detection");
@@ -2940,7 +3424,6 @@ impl ClipboardManager {
             }
         };
 
-        // Get file from outgoing files list
         let state = file_transfer_state.read().await;
         let file_info = state
             .outgoing_files
@@ -2954,18 +3437,15 @@ impl ClipboardManager {
                 ClipboardError::InvalidState(format!("File index {} not found", list_index))
             })?;
 
-        // Import types for sending FileContentsResponse
         use ironrdp_cliprdr::backend::ClipboardMessage;
         use ironrdp_cliprdr::pdu::FileContentsResponse;
 
         if is_size_request {
-            // Return file size as 8-byte little-endian
             info!(
                 "Returning file size: {} bytes for '{}'",
                 file_info.size, file_info.filename
             );
 
-            // Create and send FileContentsResponse with size
             let response = FileContentsResponse::new_size_response(stream_id, file_info.size);
             info!(
                 "Sending FileContentsResponse(stream={}, size={})",
@@ -2978,7 +3458,6 @@ impl ClipboardManager {
                 error!("Failed to send FileContentsResponse: {:?}", e);
             }
         } else {
-            // Read data from file
             let path = file_info.path.clone();
             let file_size = file_info.size;
             drop(state); // Release lock before file I/O
@@ -2993,7 +3472,6 @@ impl ClipboardManager {
                         file_size
                     );
 
-                    // Create and send FileContentsResponse with data
                     let response = FileContentsResponse::new_data_response(stream_id, data.clone());
                     info!(
                         "Sending FileContentsResponse(stream={}, {} bytes)",
@@ -3010,7 +3488,6 @@ impl ClipboardManager {
                 Err(e) => {
                     error!("Failed to read file '{}': {}", path.display(), e);
 
-                    // Send error response
                     let response = FileContentsResponse::new_error(stream_id);
                     info!("Sending FileContentsResponse ERROR (stream={})", stream_id);
 
@@ -3076,14 +3553,12 @@ impl ClipboardManager {
         if is_error {
             warn!("FileContentsResponse ERROR: stream={}", stream_id);
 
-            // Clean up failed transfer
             let mut state = file_transfer_state.write().await;
             if let Some(file) = state.incoming_files.remove(&stream_id) {
                 info!("Cleaning up failed transfer: {}", file.filename);
                 let _ = std::fs::remove_file(&file.temp_path);
             }
 
-            // Cancel Portal request if this was part of a transfer
             if let Some(serial) = state.portal_serial.take() {
                 drop(state);
                 if let (Some(portal), Some(session)) = (
@@ -3110,7 +3585,6 @@ impl ClipboardManager {
         let mut state = file_transfer_state.write().await;
         let download_dir = state.download_dir.clone();
 
-        // Get incoming file entry (should exist from transfer initiation)
         let file = match state.incoming_files.get_mut(&stream_id) {
             Some(f) => f,
             None => {
@@ -3122,7 +3596,6 @@ impl ClipboardManager {
             }
         };
 
-        // Write data chunk to file
         file.file_handle.write_all(&data).map_err(|e| {
             error!(
                 "Failed to write {} bytes to '{}': {}",
@@ -3135,7 +3608,6 @@ impl ClipboardManager {
 
         file.received_size += data.len() as u64;
 
-        // Log progress (less frequently for large files)
         let percent = if file.total_size > 0 {
             (file.received_size as f64 / file.total_size as f64) * 100.0
         } else {
@@ -3153,13 +3625,11 @@ impl ClipboardManager {
             percent
         );
 
-        // Check if this file transfer is complete
         let file_complete = file.total_size > 0 && file.received_size >= file.total_size;
 
         if file_complete {
             debug!(" File transfer complete: '{}'", file.filename);
 
-            // Flush and close temp file
             file.file_handle
                 .flush()
                 .map_err(|e| ClipboardError::FileIoError(format!("Failed to flush file: {}", e)))?;
@@ -3167,22 +3637,15 @@ impl ClipboardManager {
             let temp_path = file.temp_path.clone();
             let filename = file.filename.clone();
 
-            // Move temp file to final location
             let final_path = download_dir.join(&filename);
-
-            // Store the completed file path before any more operations
             state.completed_files.push(final_path.clone());
-
-            // Remove from incoming files
             state.incoming_files.remove(&stream_id);
 
-            // Check if ALL files are now complete
             let all_complete = state.incoming_files.is_empty();
             let portal_serial = state.portal_serial;
             let completed_files = state.completed_files.clone();
             drop(state); // Release lock before file operation
 
-            // Perform the file rename (outside of lock)
             std::fs::rename(&temp_path, &final_path).map_err(|e| {
                 error!(
                     "Failed to move '{}' to '{}': {}",
@@ -3195,17 +3658,14 @@ impl ClipboardManager {
 
             info!("Saved file to: {}", final_path.display());
 
-            // If all files complete, deliver URIs to Portal
             if all_complete {
                 debug!(
                     "All {} file(s) transferred successfully",
                     completed_files.len()
                 );
 
-                // Build file:// URI list with proper URL encoding
-                // Only encode characters that are problematic in URIs, NOT dots/dashes/underscores
+                // Only encode characters problematic in URIs, NOT dots/dashes/underscores
                 use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
-                // Encode: control chars, space, and URI-special characters
                 const FILE_URI_ENCODE: &AsciiSet = &CONTROLS
                     .add(b' ')
                     .add(b'"')
@@ -3220,7 +3680,6 @@ impl ClipboardManager {
                 let uris: Vec<String> = completed_files
                     .iter()
                     .map(|path| {
-                        // URL-encode each path component except the slashes
                         let path_str = path.to_string_lossy();
                         let encoded: String = path_str
                             .split('/')
@@ -3233,8 +3692,7 @@ impl ClipboardManager {
                     })
                     .collect();
 
-                // Format as x-special/gnome-copied-files
-                // Format: "copy\nfile:///path1\nfile:///path2\0" (null-terminated)
+                // x-special/gnome-copied-files format: "copy\nfile:///path1\nfile:///path2\0" (null-terminated)
                 let uri_list = format!("copy\n{}\0", uris.join("\n"));
 
                 debug!(
@@ -3242,7 +3700,6 @@ impl ClipboardManager {
                     uri_list
                 );
 
-                // Deliver to Portal
                 if let Some(serial) = portal_serial {
                     if let (Some(portal), Some(session)) = (
                         portal_clipboard.read().await.as_ref().cloned(),
@@ -3250,7 +3707,6 @@ impl ClipboardManager {
                     ) {
                         let session_guard = session.read().await;
 
-                        // Write URI list data
                         let uri_bytes = uri_list.into_bytes();
                         match portal
                             .write_selection_data(&session_guard, serial, uri_bytes.clone())
@@ -3277,7 +3733,6 @@ impl ClipboardManager {
                     }
                 }
 
-                // Clear completed files list
                 let mut state = file_transfer_state.write().await;
                 state.completed_files.clear();
                 state.portal_serial = None;
@@ -3292,7 +3747,6 @@ impl ClipboardManager {
             let filename = file.filename.clone();
             drop(state); // Release lock before sending
 
-            // Request next chunk
             if let Some(sender) = server_event_sender.read().await.as_ref() {
                 use ironrdp_cliprdr::backend::ClipboardMessage;
                 use ironrdp_cliprdr::pdu::{FileContentsFlags, FileContentsRequest};
@@ -3326,21 +3780,140 @@ impl ClipboardManager {
     ///
     /// Sends a shutdown signal to the event loop if it's running.
     /// If the event loop hasn't been started, this is a no-op.
-    pub async fn shutdown(&mut self) -> Result<()> {
-        if let Some(ref tx) = self.shutdown_tx {
-            tx.send(()).await.map_err(|e| {
-                ClipboardError::InvalidState(format!("Failed to send shutdown signal: {}", e))
-            })?;
+    /// Clear Portal clipboard selection
+    ///
+    /// Calls Portal SetSelection with empty MIME types to clear clipboard.
+    /// This cancels pending clipboard operations and prevents callbacks
+    /// from firing after disconnect.
+    ///
+    /// # Use Cases
+    ///
+    /// - On RDP disconnect: Prevents stale clipboard operations
+    /// - Before shutdown: Cleans up Portal state
+    /// - On reconnect: Resets clipboard for new session
+    ///
+    /// # Errors
+    ///
+    /// Returns error if Portal not available or SetSelection fails.
+    /// Non-fatal - continue shutdown even if this fails.
+    pub async fn clear_portal_clipboard(&self) -> Result<()> {
+        info!("Clearing Portal clipboard selection");
+
+        let portal_guard = self.portal_clipboard.read().await;
+        if let Some(ref portal_clipboard_mgr) = *portal_guard {
+            let outer_session_guard = self.portal_session.read().await;
+            if let Some(ref session_arc) = *outer_session_guard {
+                let session_guard = session_arc.read().await;
+
+                let clipboard_portal = portal_clipboard_mgr.portal_clipboard();
+
+                match clipboard_portal
+                    .set_selection(&*session_guard, Default::default())
+                    .await
+                {
+                    Ok(_) => {
+                        info!("✅ Portal clipboard cleared successfully");
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        warn!("⚠️  Failed to clear Portal clipboard: {}", e);
+                        // Don't propagate error - clearing is best-effort
+                        return Ok(());
+                    }
+                }
+            } else {
+                debug!("Portal session not set");
+                return Ok(());
+            }
+        } else {
+            debug!("No Portal clipboard to clear");
+            Ok(())
         }
-        // Clear the sender after shutdown
+    }
+
+    pub async fn shutdown(&mut self) -> Result<()> {
+        info!("═══════════════════════════════════════════════════════════");
+        info!("  Clipboard Orchestrator Shutdown");
+        info!("═══════════════════════════════════════════════════════════");
+
+        info!("  Step 1: Clearing Portal clipboard...");
+        if let Err(e) = self.clear_portal_clipboard().await {
+            warn!("  Failed to clear Portal clipboard: {}", e);
+        }
+
+        info!("  Step 2: Signaling async tasks...");
+
+        if let Some(ref tx) = self.shutdown_tx {
+            if let Err(e) = tx.send(()).await {
+                warn!("  Failed to send shutdown signal to event processor: {}", e);
+            } else {
+                info!("  ✅ Event processor shutdown signal sent");
+            }
+        }
+
+        let subscriber_count = self.shutdown_broadcast.receiver_count();
+        info!("  Broadcasting shutdown to {} tasks...", subscriber_count);
+        let _ = self.shutdown_broadcast.send(());
+        info!("  ✅ Shutdown broadcast sent");
+
+        info!("  Step 3: Waiting for tasks to finish...");
+        let task_count = {
+            let handles = self.task_handles.lock().await;
+            handles.len()
+        };
+
+        if task_count > 0 {
+            info!(
+                "  Waiting for {} background tasks (5s timeout)...",
+                task_count
+            );
+            let timeout = tokio::time::Duration::from_secs(5);
+            let mut handles = self.task_handles.lock().await;
+
+            for (i, handle) in handles.drain(..).enumerate() {
+                match tokio::time::timeout(timeout, handle).await {
+                    Ok(Ok(_)) => {
+                        debug!("  Task {} finished cleanly", i + 1);
+                    }
+                    Ok(Err(e)) => {
+                        warn!("  Task {} panicked: {:?}", i + 1, e);
+                    }
+                    Err(_) => {
+                        warn!("  Task {} timed out, aborting", i + 1);
+                    }
+                }
+            }
+            info!("  ✅ All tasks stopped");
+        } else {
+            debug!("  No background tasks to wait for");
+        }
+
+        info!("  Step 3: Stopping Klipper cooperation...");
+        if let Some(coord) = self.cooperation_coordinator.write().await.take() {
+            drop(coord); // Will drop D-Bus connection and tasks
+            info!("  ✅ Cooperation coordinator stopped");
+        }
+
+        info!("  Step 4: Stopping D-Bus bridge...");
+        if let Some(bridge) = self.dbus_bridge.write().await.take() {
+            drop(bridge); // Will close D-Bus connection
+            info!("  ✅ D-Bus bridge stopped");
+        }
+
+        info!("  Step 5: Releasing Portal session reference...");
+        *self.portal_session.write().await = None;
+
         self.shutdown_tx = None;
+
+        info!("  Step 6: FUSE filesystem will unmount via Drop");
+
+        info!("  ═══════════════════════════════════════════════════════════");
+        info!("  ✅ Clipboard orchestrator shutdown complete");
+        info!("  ═══════════════════════════════════════════════════════════");
+
         Ok(())
     }
 }
-
-// =============================================================================
-// Tests
-// =============================================================================
 
 #[cfg(test)]
 mod tests {
@@ -3348,16 +3921,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_clipboard_manager_creation() {
-        let config = ClipboardConfig::default();
-        let mut manager = ClipboardManager::new(config).await.unwrap();
+        let config = ClipboardOrchestratorConfig::default();
+        let mut manager = ClipboardOrchestrator::new(config).await.unwrap();
 
         assert!(manager.event_tx.capacity() > 0);
     }
 
     #[tokio::test]
     async fn test_rdp_format_list_handling() {
-        let config = ClipboardConfig::default();
-        let mut manager = ClipboardManager::new(config).await.unwrap();
+        let config = ClipboardOrchestratorConfig::default();
+        let mut manager = ClipboardOrchestrator::new(config).await.unwrap();
 
         let formats = vec![ClipboardFormat::with_name(13, "CF_UNICODETEXT")];
         let event = ClipboardEvent::RdpFormatList(formats);
@@ -3367,8 +3940,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_shutdown() {
-        let config = ClipboardConfig::default();
-        let mut manager = ClipboardManager::new(config).await.unwrap();
+        let config = ClipboardOrchestratorConfig::default();
+        let mut manager = ClipboardOrchestrator::new(config).await.unwrap();
         manager.shutdown().await.unwrap();
     }
 }

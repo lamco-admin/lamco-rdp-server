@@ -70,57 +70,39 @@ pub struct VirtualKeyboard {
 }
 
 impl VirtualKeyboard {
-    /// Create a new virtual keyboard with XKB keymap
-    ///
-    /// This performs the complete initialization sequence:
-    /// 1. Generates XKB keymap from system defaults
-    /// 2. Creates shared memory fd and writes keymap
-    /// 3. Sends keymap to compositor
-    ///
-    /// # Arguments
-    ///
-    /// * `manager` - The zwp_virtual_keyboard_manager_v1 global
-    /// * `seat` - The wl_seat to associate with (typically the default seat)
-    /// * `qh` - Queue handle for the Wayland event queue
-    ///
-    /// # Returns
-    ///
-    /// A VirtualKeyboard instance ready for key event injection
-    ///
-    /// # Errors
-    ///
-    /// - Fails if XKB keymap generation fails
-    /// - Fails if memfd creation fails
-    /// - Fails if keymap writing fails
     pub fn new<State>(
         manager: &ZwpVirtualKeyboardManagerV1,
         seat: &WlSeat,
         qh: &QueueHandle<State>,
+        keyboard_layout: &str,
     ) -> Result<Self>
     where
         State: 'static,
     {
-        info!("🔑 wlr_direct: Creating virtual keyboard with XKB keymap");
+        info!(
+            "🔑 wlr_direct: Creating virtual keyboard with XKB keymap (layout: {})",
+            if keyboard_layout.is_empty() || keyboard_layout == "auto" {
+                "system default"
+            } else {
+                keyboard_layout
+            }
+        );
 
-        // Generate XKB keymap from system defaults
         let keymap_string =
-            generate_xkb_keymap().context("Failed to generate XKB keymap from system defaults")?;
+            generate_xkb_keymap(keyboard_layout).context("Failed to generate XKB keymap")?;
 
         debug!(
             "[wlr_direct] Generated XKB keymap: {} bytes",
             keymap_string.len()
         );
 
-        // Create memfd and write keymap
         let keymap_fd = create_keymap_fd(&keymap_string)
             .context("Failed to create shared memory fd for XKB keymap")?;
 
         debug!("[wlr_direct] Created memfd for keymap");
 
-        // Create virtual keyboard
         let keyboard = manager.create_virtual_keyboard(seat, qh, ());
 
-        // Send keymap to compositor
         // KeymapFormat::XkbV1 = 1 in the protocol
         keyboard.keymap(
             1u32, // XKB_V1 format
@@ -136,20 +118,6 @@ impl VirtualKeyboard {
         })
     }
 
-    /// Send key event
-    ///
-    /// Injects a keyboard key press or release.
-    ///
-    /// # Arguments
-    ///
-    /// * `time` - Timestamp in milliseconds
-    /// * `keycode` - Linux evdev keycode (e.g., 30 for 'A', 28 for Enter)
-    /// * `state` - Key state (pressed or released)
-    ///
-    /// # Note
-    ///
-    /// Keycodes are Linux evdev keycodes, which are already provided by the
-    /// input handler after translating from RDP scancodes.
     pub fn key(&self, time: u32, keycode: u32, state: KeyState) {
         // KeyState in wayland-protocols uses u32:
         // 0 = released, 1 = pressed
@@ -166,22 +134,9 @@ impl VirtualKeyboard {
         self.keyboard.key(time, keycode, state_val);
     }
 
-    /// Send modifier state
+    /// Send modifier state (Ctrl, Alt, Shift, etc.)
     ///
-    /// Updates the modifier key state (Ctrl, Alt, Shift, etc.).
-    ///
-    /// # Arguments
-    ///
-    /// * `depressed` - Bitmask of currently pressed modifiers
-    /// * `latched` - Bitmask of latched modifiers (sticky keys)
-    /// * `locked` - Bitmask of locked modifiers (Caps Lock, Num Lock)
-    /// * `group` - Keyboard layout group
-    ///
-    /// # Note
-    ///
-    /// For basic operation, this can be left with all zeros.
-    /// The compositor will track modifier state from key events.
-    /// Advanced implementations can use xkbcommon State tracking for accuracy.
+    /// For basic operation, all zeros works -- the compositor tracks state from key events.
     pub fn modifiers(&self, depressed: u32, latched: u32, locked: u32, group: u32) {
         debug!(
             "[wlr_direct] Keyboard modifiers: depressed={:x}, latched={:x}, locked={:x}, group={}",
@@ -191,9 +146,6 @@ impl VirtualKeyboard {
         self.keyboard.modifiers(depressed, latched, locked, group);
     }
 
-    /// Get the underlying Wayland protocol object
-    ///
-    /// Provides access to the raw protocol object for advanced use cases.
     pub fn inner(&self) -> &ZwpVirtualKeyboardV1 {
         &self.keyboard
     }
@@ -209,9 +161,7 @@ impl Drop for VirtualKeyboard {
 /// Key state for keyboard events
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyState {
-    /// Key released
     Released,
-    /// Key pressed
     Pressed,
 }
 
@@ -225,56 +175,36 @@ impl From<bool> for KeyState {
     }
 }
 
-/// Generate XKB keymap from system defaults
+/// Generate XKB keymap with optional layout override.
 ///
-/// Creates an XKB keymap using libxkbcommon, respecting environment variables
-/// and system configuration.
-///
-/// # Keymap Source
-///
-/// The keymap is generated from:
-/// - $XKB_DEFAULT_RULES (or system default: usually "evdev")
-/// - $XKB_DEFAULT_MODEL (or system default: usually "pc105")
-/// - $XKB_DEFAULT_LAYOUT (or system default: usually "us")
-/// - $XKB_DEFAULT_VARIANT (or system default: usually empty)
-/// - $XKB_DEFAULT_OPTIONS (or system default: usually empty)
-///
-/// Passing empty strings ("") to `new_from_names` triggers this default behavior.
-///
-/// # Returns
-///
-/// The XKB keymap as a string in XKB v1 text format
-///
-/// # Errors
-///
-/// Fails if:
-/// - XKB context creation fails
-/// - Keymap compilation fails (malformed XKB configuration)
-///
-/// # Example Keymap
-///
-/// ```text
-/// xkb_keymap {
-///     xkb_keycodes { include "evdev+aliases(qwerty)" };
-///     xkb_types { include "complete" };
-///     xkb_compat { include "complete" };
-///     xkb_symbols { include "pc+us+inet(evdev)" };
-///     xkb_geometry { include "pc(pc105)" };
-/// };
-/// ```
-fn generate_xkb_keymap() -> Result<String> {
-    // Create XKB context
+/// Empty or "auto" layout uses system defaults from $XKB_DEFAULT_LAYOUT.
+/// Keymap sources: $XKB_DEFAULT_RULES, $XKB_DEFAULT_MODEL, $XKB_DEFAULT_VARIANT, $XKB_DEFAULT_OPTIONS.
+fn generate_xkb_keymap(layout: &str) -> Result<String> {
     let context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
 
-    // Generate keymap from system defaults
-    // Empty strings trigger default behavior from environment or system config
+    // Determine layout: "auto" or empty means use system default
+    let layout_str = if layout.is_empty() || layout == "auto" {
+        "" // Empty = use $XKB_DEFAULT_LAYOUT or "us"
+    } else {
+        layout
+    };
+
+    if !layout_str.is_empty() {
+        debug!(
+            "[wlr_direct] Using keyboard layout from config: {}",
+            layout_str
+        );
+    } else {
+        debug!("[wlr_direct] Using system default keyboard layout");
+    }
+
     let keymap = xkb::Keymap::new_from_names(
         &context,
-        "",   // rules: $XKB_DEFAULT_RULES or "evdev"
-        "",   // model: $XKB_DEFAULT_MODEL or "pc105"
-        "",   // layout: $XKB_DEFAULT_LAYOUT or "us"
-        "",   // variant: $XKB_DEFAULT_VARIANT or ""
-        None, // options: $XKB_DEFAULT_OPTIONS or None
+        "",         // rules: $XKB_DEFAULT_RULES or "evdev"
+        "",         // model: $XKB_DEFAULT_MODEL or "pc105"
+        layout_str, // layout: from config, or $XKB_DEFAULT_LAYOUT or "us"
+        "",         // variant: $XKB_DEFAULT_VARIANT or ""
+        None,       // options: $XKB_DEFAULT_OPTIONS or None
         xkb::KEYMAP_COMPILE_NO_FLAGS,
     )
     .ok_or_else(|| {
@@ -284,7 +214,6 @@ fn generate_xkb_keymap() -> Result<String> {
         )
     })?;
 
-    // Convert keymap to XKB v1 text format
     let keymap_string = keymap.get_as_string(xkb::KEYMAP_FORMAT_TEXT_V1);
 
     if keymap_string.is_empty() {
@@ -294,7 +223,6 @@ fn generate_xkb_keymap() -> Result<String> {
         ));
     }
 
-    // Validate keymap has expected structure
     if !keymap_string.contains("xkb_keymap") {
         warn!(
             "⚠️  Generated XKB keymap may be malformed (missing 'xkb_keymap' marker). \
@@ -311,29 +239,9 @@ fn generate_xkb_keymap() -> Result<String> {
     Ok(keymap_string)
 }
 
-/// Create a memfd (anonymous shared memory file descriptor) for the XKB keymap
+/// Create a memfd for sharing the XKB keymap with the compositor.
 ///
-/// Creates an in-memory file descriptor that can be shared with the compositor.
-/// This avoids temporary files on disk and provides proper isolation.
-///
-/// # Arguments
-///
-/// * `keymap` - The XKB keymap string to write
-///
-/// # Returns
-///
-/// An owned file descriptor containing the keymap data
-///
-/// # Errors
-///
-/// Fails if:
-/// - memfd creation fails (kernel < 3.17 or memfd disabled)
-/// - Writing keymap to fd fails
-/// - File size setting fails
-///
-/// # Platform Support
-///
-/// Requires Linux 3.17+ with memfd_create syscall support.
+/// Requires Linux 3.17+ (memfd_create syscall).
 /// This is available on all modern distributions (Ubuntu 14.04+, RHEL 7+, etc.)
 fn create_keymap_fd(keymap: &str) -> Result<OwnedFd> {
     use nix::sys::memfd::{memfd_create, MemFdCreateFlag};
@@ -341,7 +249,6 @@ fn create_keymap_fd(keymap: &str) -> Result<OwnedFd> {
     use std::ffi::CString;
     use std::os::fd::AsFd;
 
-    // Create anonymous memory-backed file descriptor
     let name = CString::new("xkb-keymap")?;
     let fd = memfd_create(
         &name,
@@ -349,10 +256,8 @@ fn create_keymap_fd(keymap: &str) -> Result<OwnedFd> {
     )
     .context("Failed to create memfd. Requires Linux 3.17+ with memfd_create support.")?;
 
-    // Convert to OwnedFd for RAII
     let owned_fd = unsafe { OwnedFd::from_raw_fd(fd) };
 
-    // Write keymap to fd
     let bytes = keymap.as_bytes();
     let mut written = 0;
 
@@ -389,7 +294,6 @@ fn create_keymap_fd(keymap: &str) -> Result<OwnedFd> {
     // Note: nix crate doesn't provide fcntl_add_seals, but memfd sealing is optional
     // The keymap fd will work without sealing, just less secure
 
-    // Seek back to beginning so compositor can read from start
     use nix::unistd::{lseek, Whence};
     lseek(owned_fd.as_fd().as_raw_fd(), 0, Whence::SeekSet)
         .context("Failed to seek memfd to beginning")?;
@@ -409,18 +313,33 @@ mod tests {
 
     #[test]
     fn test_generate_xkb_keymap() {
-        // Test that we can generate a keymap
+        // Test that we can generate a keymap with system default layout
         // This requires XKB to be installed on the system
-        match generate_xkb_keymap() {
+        match generate_xkb_keymap("auto") {
             Ok(keymap) => {
                 assert!(!keymap.is_empty());
                 assert!(keymap.contains("xkb_keymap"));
-                println!("Generated keymap: {} bytes", keymap.len());
+                println!("Generated keymap (auto): {} bytes", keymap.len());
             }
             Err(e) => {
                 // This may fail in minimal test environments without XKB installed
                 println!(
                     "XKB keymap generation failed (expected in some test envs): {}",
+                    e
+                );
+            }
+        }
+
+        // Test with explicit "us" layout
+        match generate_xkb_keymap("us") {
+            Ok(keymap) => {
+                assert!(!keymap.is_empty());
+                assert!(keymap.contains("xkb_keymap"));
+                println!("Generated keymap (us): {} bytes", keymap.len());
+            }
+            Err(e) => {
+                println!(
+                    "XKB keymap generation for 'us' failed (expected in some test envs): {}",
                     e
                 );
             }

@@ -119,21 +119,6 @@ pub struct VaapiEncoder {
 }
 
 impl VaapiEncoder {
-    /// Create a new VA-API encoder
-    ///
-    /// # Arguments
-    ///
-    /// * `config` - Hardware encoding configuration
-    /// * `width` - Initial frame width
-    /// * `height` - Initial frame height
-    /// * `preset` - Quality preset
-    ///
-    /// # Errors
-    ///
-    /// Returns error if:
-    /// - VA-API device cannot be opened
-    /// - H.264 encoding is not supported
-    /// - Encoder initialization fails
     pub fn new(
         hw_config: &HardwareEncodingConfig,
         width: u32,
@@ -266,7 +251,11 @@ impl VaapiEncoder {
 
         info!(
             "✅ VA-API encoder initialized: {}x{}, {}kbps, IDR every {} frames, color_space={}",
-            width, height, bitrate_kbps, idr_interval, color_space.description()
+            width,
+            height,
+            bitrate_kbps,
+            idr_interval,
+            color_space.description()
         );
 
         Ok(Self {
@@ -291,12 +280,10 @@ impl VaapiEncoder {
         })
     }
 
-    /// Check if current frame should be IDR
     fn is_idr_frame(&self) -> bool {
         self.force_idr || self.frame_count % self.idr_interval as u64 == 0
     }
 
-    /// Get H.264 level for current resolution
     fn get_h264_level(&self) -> u8 {
         let macroblocks = (self.width / 16) * (self.height / 16);
         let macroblocks_per_sec = macroblocks * 30; // Assume 30fps
@@ -317,7 +304,6 @@ impl VaapiEncoder {
         }
     }
 
-    /// Extract SPS and PPS NAL units from Annex B bitstream
     fn extract_sps_pps(data: &[u8]) -> Option<Vec<u8>> {
         let mut sps_pps = Vec::new();
         let mut i = 0;
@@ -580,7 +566,6 @@ impl HardwareEncoder for VaapiEncoder {
 }
 
 impl VaapiEncoder {
-    /// Build H.264 sequence parameters (SPS)
     fn build_sequence_params(
         &self,
         mb_width: u16,
@@ -638,7 +623,6 @@ impl VaapiEncoder {
         )
     }
 
-    /// Build H.264 picture parameters (PPS)
     fn build_picture_params(
         &self,
         surface_id: u32,
@@ -702,7 +686,6 @@ impl VaapiEncoder {
         )
     }
 
-    /// Build H.264 slice parameters
     fn build_slice_params(
         &self,
         num_macroblocks: u32,

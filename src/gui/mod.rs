@@ -7,9 +7,11 @@
 pub mod app;
 pub mod capabilities;
 pub mod certificates;
+pub mod dbus_client;
 pub mod file_ops;
 pub mod hardware;
 pub mod message;
+pub mod server_connection;
 pub mod server_process;
 pub mod state;
 pub mod tabs;

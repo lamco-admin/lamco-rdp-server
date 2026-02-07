@@ -33,50 +33,36 @@ pub use opus::{OpusApplication, OpusEncoder, OpusEncoderConfig};
 
 use anyhow::Result;
 
-/// Unified audio encoder enum
-///
-/// Provides a common interface for all supported audio codecs.
 #[derive(Debug)]
 pub enum AudioEncoder {
-    /// OPUS codec - modern, efficient
     Opus(OpusEncoder),
-    /// PCM - uncompressed, universal
     Pcm(PcmEncoder),
-    /// IMA ADPCM - 4:1 compression
     Adpcm(AdpcmEncoder),
-    /// G.711 μ-law - telephony (North America)
     G711Mulaw(MulawEncoder),
-    /// G.711 A-law - telephony (Europe)
     G711Alaw(AlawEncoder),
 }
 
 impl AudioEncoder {
-    /// Create a new OPUS encoder with default settings
     pub fn opus() -> Result<Self> {
         Ok(Self::Opus(OpusEncoder::new_default()?))
     }
 
-    /// Create a new OPUS encoder with custom config
     pub fn opus_with_config(config: OpusEncoderConfig) -> Result<Self> {
         Ok(Self::Opus(OpusEncoder::new(config)?))
     }
 
-    /// Create a new PCM encoder
     pub fn pcm(channels: usize, sample_rate: u32, bits_per_sample: u16) -> Self {
         Self::Pcm(PcmEncoder::new(channels, sample_rate, bits_per_sample))
     }
 
-    /// Create a new ADPCM encoder
     pub fn adpcm(channels: usize, samples_per_block: usize) -> Self {
         Self::Adpcm(AdpcmEncoder::new(channels, samples_per_block))
     }
 
-    /// Create a new G.711 μ-law encoder
     pub fn g711_mulaw() -> Self {
         Self::G711Mulaw(MulawEncoder::new())
     }
 
-    /// Create a new G.711 A-law encoder
     pub fn g711_alaw() -> Self {
         Self::G711Alaw(AlawEncoder::new())
     }
@@ -108,7 +94,6 @@ impl AudioEncoder {
         }
     }
 
-    /// Get the codec name for logging
     pub fn name(&self) -> &'static str {
         match self {
             Self::Opus(_) => "OPUS",
@@ -119,7 +104,6 @@ impl AudioEncoder {
         }
     }
 
-    /// Get the RDPSND wave format tag
     pub fn format_tag(&self) -> u16 {
         match self {
             Self::Opus(_) => 0x704F,
@@ -131,9 +115,6 @@ impl AudioEncoder {
     }
 }
 
-/// PCM "encoder" (no compression)
-///
-/// Simply converts samples to the wire format expected by RDP.
 #[derive(Debug, Clone)]
 pub struct PcmEncoder {
     channels: usize,
@@ -142,7 +123,6 @@ pub struct PcmEncoder {
 }
 
 impl PcmEncoder {
-    /// Create a new PCM encoder
     pub fn new(channels: usize, sample_rate: u32, bits_per_sample: u16) -> Self {
         Self {
             channels,
@@ -151,12 +131,10 @@ impl PcmEncoder {
         }
     }
 
-    /// Create a default stereo 48kHz 16-bit encoder
     pub fn new_default() -> Self {
         Self::new(2, 48000, 16)
     }
 
-    /// Encode i16 samples to PCM bytes (little-endian)
     pub fn encode(&self, samples: &[i16]) -> Vec<u8> {
         let mut output = Vec::with_capacity(samples.len() * 2);
         for &sample in samples {
@@ -165,7 +143,6 @@ impl PcmEncoder {
         output
     }
 
-    /// Get the configuration
     pub fn config(&self) -> (usize, u32, u16) {
         (self.channels, self.sample_rate, self.bits_per_sample)
     }

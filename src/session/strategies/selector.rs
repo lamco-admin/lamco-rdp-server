@@ -16,7 +16,7 @@ use tracing::{debug, info, warn};
 
 use crate::services::{ServiceId, ServiceLevel, ServiceRegistry};
 use crate::session::strategy::SessionStrategy;
-use crate::session::TokenManager;
+use crate::session::Tokens;
 
 use super::mutter_direct::MutterDirectStrategy;
 use super::portal_token::PortalTokenStrategy;
@@ -30,20 +30,29 @@ use super::portal_token::PortalTokenStrategy;
 /// - Session persistence support
 pub struct SessionStrategySelector {
     service_registry: Arc<ServiceRegistry>,
-    token_manager: Arc<TokenManager>,
+    token_manager: Arc<Tokens>,
+    /// Keyboard layout from config (e.g., "us", "de", "auto")
+    keyboard_layout: String,
 }
 
 impl SessionStrategySelector {
-    /// Create a new strategy selector
-    ///
-    /// # Arguments
-    ///
-    /// * `service_registry` - For querying available capabilities
-    /// * `token_manager` - For token-based strategies
-    pub fn new(service_registry: Arc<ServiceRegistry>, token_manager: Arc<TokenManager>) -> Self {
+    pub fn new(service_registry: Arc<ServiceRegistry>, token_manager: Arc<Tokens>) -> Self {
         Self {
             service_registry,
             token_manager,
+            keyboard_layout: "auto".to_string(),
+        }
+    }
+
+    pub fn with_keyboard_layout(
+        service_registry: Arc<ServiceRegistry>,
+        token_manager: Arc<Tokens>,
+        keyboard_layout: String,
+    ) -> Self {
+        Self {
+            service_registry,
+            token_manager,
+            keyboard_layout,
         }
     }
 
@@ -60,7 +69,6 @@ impl SessionStrategySelector {
 
         let caps = self.service_registry.compositor_capabilities();
 
-        // Log deployment context
         info!("📦 Deployment: {}", caps.deployment);
         info!(
             "🎯 Session Persistence: {}",
@@ -115,12 +123,10 @@ impl SessionStrategySelector {
             .service_level(ServiceId::DirectCompositorAPI)
             >= ServiceLevel::BestEffort
         {
-            // Verify Mutter API is actually accessible
             if MutterDirectStrategy::is_available().await {
                 info!("✅ Selected: Mutter Direct API strategy");
                 info!("   Zero permission dialogs (not even first time)");
 
-                // Check if we should use physical monitor or virtual
                 let monitor_connector = self.detect_primary_monitor().await;
 
                 return Ok(Box::new(MutterDirectStrategy::new(monitor_connector)));
@@ -139,14 +145,15 @@ impl SessionStrategySelector {
         {
             use super::wlr_direct::WlrDirectStrategy;
 
-            // Verify protocols are actually accessible
             if WlrDirectStrategy::is_available().await {
                 info!("✅ Selected: wlr-direct strategy");
                 info!("   Native Wayland protocols for wlroots compositors");
                 info!("   Compositor: {}", caps.compositor);
                 info!("   Note: Input only (video via Portal ScreenCast)");
 
-                return Ok(Box::new(WlrDirectStrategy::new()));
+                return Ok(Box::new(WlrDirectStrategy::with_keyboard_layout(
+                    self.keyboard_layout.clone(),
+                )));
             } else {
                 warn!("Service Registry reports wlr-direct available, but protocol binding failed");
                 warn!("Falling back to next available strategy");
@@ -158,7 +165,6 @@ impl SessionStrategySelector {
         if self.service_registry.service_level(ServiceId::LibeiInput) >= ServiceLevel::BestEffort {
             use super::libei::LibeiStrategy;
 
-            // Verify Portal RemoteDesktop with ConnectToEIS is accessible
             if LibeiStrategy::is_available().await {
                 info!("✅ Selected: libei strategy");
                 info!("   Portal RemoteDesktop + EIS protocol for wlroots");
@@ -198,11 +204,7 @@ impl SessionStrategySelector {
         )))
     }
 
-    /// Detect primary monitor connector for Mutter
-    ///
-    /// Returns Some(connector) if physical monitor detected, None for virtual
     async fn detect_primary_monitor(&self) -> Option<String> {
-        // Try to detect connected physical monitors from DRM subsystem
         match Self::enumerate_drm_connectors().await {
             Ok(connectors) if !connectors.is_empty() => {
                 let primary = &connectors[0];
@@ -224,9 +226,6 @@ impl SessionStrategySelector {
         }
     }
 
-    /// Enumerate connected DRM connectors
-    ///
-    /// Reads /sys/class/drm/ to find connected displays
     async fn enumerate_drm_connectors() -> anyhow::Result<Vec<String>> {
         use std::path::Path;
         use tokio::fs;
@@ -267,7 +266,6 @@ impl SessionStrategySelector {
         Ok(connectors)
     }
 
-    /// Get recommended strategy name for logging
     pub fn recommended_strategy_name(&self) -> &'static str {
         self.service_registry.recommended_session_strategy()
     }
@@ -291,9 +289,9 @@ mod tests {
         let registry = Arc::new(ServiceRegistry::from_compositor(caps));
 
         let token_manager = Arc::new(
-            TokenManager::new(CredentialStorageMethod::EncryptedFile)
+            Tokens::new(CredentialStorageMethod::EncryptedFile)
                 .await
-                .expect("Failed to create TokenManager"),
+                .expect("Failed to create Tokens"),
         );
 
         let selector = SessionStrategySelector::new(registry, token_manager);

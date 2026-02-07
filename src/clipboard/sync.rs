@@ -1,5 +1,10 @@
 //! Clipboard Synchronization and Loop Prevention
 //!
+//! **Execution Path:** N/A (state machine logic)
+//! **Status:** Active (v1.0.0+)
+//! **Platform:** Universal
+//! **Role:** State tracking and echo protection for ClipboardOrchestrator
+//!
 //! Manages bidirectional clipboard synchronization between RDP and Wayland,
 //! with state tracking and echo protection.
 //!
@@ -16,7 +21,6 @@
 //! - **Ownership tracking**: State machine to know who "owns" the clipboard
 //! - **Policy decisions**: When to allow/block sync based on state
 
-use crate::clipboard::error::Result;
 use std::time::{Duration, SystemTime};
 use tracing::{debug, warn};
 
@@ -63,11 +67,36 @@ pub enum SyncDirection {
     PortalToRdp,
 }
 
+/// Result from handle_portal_formats indicating what action to take
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PortalSyncDecision {
+    /// Allow sync to RDP (normal Linux → Windows clipboard)
+    Allow,
+    /// Block sync (echo or loop detected)
+    Block,
+    /// Klipper took over clipboard - re-announce RDP formats to reclaim
+    KlipperReannounce,
+}
+
 /// Echo protection window in milliseconds
 ///
 /// D-Bus signals within this window after RDP ownership are likely echoes
 /// from our Portal writes, not real user copies.
 const ECHO_PROTECTION_WINDOW_MS: u128 = 2000;
+
+/// KDE klipper signature MIME types
+/// These indicate klipper is involved in the clipboard operation
+const KLIPPER_SIGNATURES: &[&str] = &[
+    "application/x-kde-onlyReplaceEmpty",
+    "application/x-kde-cutselection",
+];
+
+/// Check if MIME types contain klipper signature
+fn has_klipper_signature(mime_types: &[String]) -> bool {
+    mime_types
+        .iter()
+        .any(|m| KLIPPER_SIGNATURES.iter().any(|sig| m.contains(sig)))
+}
 
 /// Synchronization manager coordinates clipboard sync
 ///
@@ -100,114 +129,165 @@ impl SyncManager {
         }
     }
 
-    /// Get current state
     pub fn state(&self) -> &ClipboardState {
         &self.state
     }
 
-    /// Handle RDP format list announcement
-    ///
-    /// Called when the RDP client announces available clipboard formats.
-    /// Checks for loops and updates state if allowed.
-    ///
-    /// # Returns
-    ///
-    /// - `Ok(true)` - Proceed with sync
-    /// - `Ok(false)` - Skip sync (loop detected)
-    pub fn handle_rdp_formats(&mut self, formats: Vec<ClipboardFormat>) -> Result<bool> {
-        // Check for loop
+    /// Returns true to proceed with sync, false if loop detected.
+    pub fn handle_rdp_formats(&mut self, formats: Vec<ClipboardFormat>) -> bool {
+        let state_name = match &self.state {
+            ClipboardState::Idle => "Idle",
+            ClipboardState::RdpOwned(_, _) => "RdpOwned",
+            ClipboardState::PortalOwned(_) => "PortalOwned",
+            ClipboardState::Syncing(_) => "Syncing",
+        };
+
+        let format_names: Vec<_> = formats
+            .iter()
+            .map(|f| f.name.as_deref().unwrap_or("?"))
+            .collect();
+
+        debug!("┌─ handle_rdp_formats ─────────────────────────────────────────");
+        debug!(
+            "│ Current state: {}, formats: {} ({:?})",
+            state_name,
+            formats.len(),
+            format_names
+        );
+
         if self.loop_detector.would_cause_loop(&formats) {
+            debug!("│ DECISION: Block (loop detection - format hash match)");
+            debug!("└────────────────────────────────────────────────────────────────");
             warn!("Ignoring RDP format list due to loop detection");
-            return Ok(false); // Don't sync
+            return false;
         }
 
-        // Update state with current timestamp
-        self.state = ClipboardState::RdpOwned(formats.clone(), SystemTime::now());
+        let now = SystemTime::now();
+        self.state = ClipboardState::RdpOwned(formats.clone(), now);
+        debug!(
+            "│ State transition: {} → RdpOwned (echo protection starts now)",
+            state_name
+        );
+        debug!("│ DECISION: Allow sync to Portal/Linux");
+        debug!("└────────────────────────────────────────────────────────────────");
 
-        // Record operation in loop detector
         self.loop_detector
             .record_formats(&formats, ClipboardSource::Rdp);
         self.loop_detector.record_sync(ClipboardSource::Rdp);
 
-        Ok(true) // Proceed with sync
+        true
     }
 
     /// Handle Portal MIME types announcement
     ///
-    /// The `force` parameter indicates if this is from an authoritative source (D-Bus extension)
-    /// that should override RDP ownership. When force=false, we block if RDP owns the clipboard
-    /// to prevent echo loops. When force=true (D-Bus), we check if enough time has passed
-    /// since RDP took ownership to distinguish between echoes and real user copies.
-    ///
-    /// # Arguments
-    ///
-    /// * `mime_types` - MIME types available in Portal clipboard
-    /// * `force` - If true, this is from D-Bus extension (authoritative source)
-    ///
-    /// # Returns
-    ///
-    /// - `Ok(true)` - Proceed with sync
-    /// - `Ok(false)` - Skip sync (echo or loop detected)
-    pub fn handle_portal_formats(&mut self, mime_types: Vec<String>, force: bool) -> Result<bool> {
-        // If RDP currently owns the clipboard, apply echo protection
-        if let ClipboardState::RdpOwned(_, ownership_time) = &self.state {
+    /// `force=true` from D-Bus extension overrides RDP ownership.
+    /// `force=false` is blocked when RDP owns clipboard (echo prevention).
+    /// Within the echo protection window, Klipper takeover triggers KlipperReannounce.
+    pub fn handle_portal_formats(
+        &mut self,
+        mime_types: Vec<String>,
+        force: bool,
+    ) -> PortalSyncDecision {
+        let is_klipper = has_klipper_signature(&mime_types);
+        let state_name = match &self.state {
+            ClipboardState::Idle => "Idle",
+            ClipboardState::RdpOwned(_, _) => "RdpOwned",
+            ClipboardState::PortalOwned(_) => "PortalOwned",
+            ClipboardState::Syncing(_) => "Syncing",
+        };
+
+        debug!("┌─ handle_portal_formats ───────────────────────────────────────");
+        debug!(
+            "│ Current state: {}, force={}, klipper_signature={}",
+            state_name, force, is_klipper
+        );
+        debug!("│ MIME types ({}): {:?}", mime_types.len(), mime_types);
+
+        if let ClipboardState::RdpOwned(formats, ownership_time) = &self.state {
             let elapsed = SystemTime::now()
                 .duration_since(*ownership_time)
                 .unwrap_or(Duration::from_secs(0));
 
+            debug!(
+                "│ RDP ownership: {} formats, {}ms ago",
+                formats.len(),
+                elapsed.as_millis()
+            );
+
             if !force {
                 // Portal SelectionOwnerChanged (force=false) - always block when RDP owns
-                debug!("Ignoring Portal format list - RDP currently owns clipboard (preventing echo loop)");
-                return Ok(false);
+                debug!("│ DECISION: Block (force=false while RDP owns)");
+                debug!("└────────────────────────────────────────────────────────────────");
+                return PortalSyncDecision::Block;
             } else if elapsed.as_millis() < ECHO_PROTECTION_WINDOW_MS {
-                // D-Bus signal (force=true) but too soon after RDP ownership - this is an echo!
-                debug!(
-                    "Ignoring D-Bus signal - received {}ms after RDP ownership (echo protection)",
-                    elapsed.as_millis()
-                );
-                return Ok(false);
+                // Within echo protection window
+                if is_klipper {
+                    // Klipper takeover detected - signal caller to re-announce RDP formats
+                    warn!(
+                        "│ KLIPPER TAKEOVER DETECTED: {}ms after RDP ownership (within {}ms window)",
+                        elapsed.as_millis(),
+                        ECHO_PROTECTION_WINDOW_MS
+                    );
+                    warn!("│ Klipper has taken clipboard ownership with reduced MIME types");
+                    warn!("│ DECISION: KlipperReannounce - caller should re-call SetSelection");
+                    debug!("└────────────────────────────────────────────────────────────────");
+                    // Don't transition state - we want to stay RdpOwned and reclaim
+                    return PortalSyncDecision::KlipperReannounce;
+                } else if mime_types.is_empty() {
+                    // Klipper clearing clipboard (0 MIME types) after we reclaimed ownership
+                    // This is a secondary Klipper behavior - it clears after takeover
+                    warn!(
+                        "│ KLIPPER CLIPBOARD CLEAR: 0 MIME types {}ms after RDP ownership",
+                        elapsed.as_millis()
+                    );
+                    warn!("│ Klipper is clearing clipboard after we reclaimed it");
+                    warn!("│ DECISION: KlipperReannounce - re-announce to counter clearing");
+                    debug!("└────────────────────────────────────────────────────────────────");
+                    // Don't transition state - we want to stay RdpOwned and reclaim
+                    return PortalSyncDecision::KlipperReannounce;
+                } else {
+                    debug!(
+                        "│ DECISION: Block (echo protection, {}ms < {}ms window)",
+                        elapsed.as_millis(),
+                        ECHO_PROTECTION_WINDOW_MS
+                    );
+                }
+                debug!("└────────────────────────────────────────────────────────────────");
+                return PortalSyncDecision::Block;
             } else {
                 // D-Bus signal after protection window - likely a real user copy
                 debug!(
-                    "D-Bus signal {}ms after RDP ownership - allowing override (user likely copied)",
-                    elapsed.as_millis()
+                    "│ DECISION: Allow ({}ms >= {}ms, likely user copy)",
+                    elapsed.as_millis(),
+                    ECHO_PROTECTION_WINDOW_MS
                 );
             }
+        } else {
+            debug!("│ Not in RdpOwned state, proceeding with sync check");
         }
 
         // Check for loop using hash comparison - but SKIP for authoritative D-Bus signals
         // that passed the timing check above
         if !force && self.loop_detector.would_cause_loop_mime(&mime_types) {
+            debug!("│ DECISION: Block (loop detection - hash match)");
+            debug!("└────────────────────────────────────────────────────────────────");
             warn!("Ignoring Portal format list due to loop detection");
-            return Ok(false); // Don't sync
+            return PortalSyncDecision::Block;
         }
 
-        // Update state - Linux now owns clipboard
         self.state = ClipboardState::PortalOwned(mime_types.clone());
-        if force {
-            debug!("D-Bus extension signal - taking clipboard ownership from RDP");
-        }
+        debug!("│ State transition: {} → PortalOwned", state_name);
+        debug!("│ DECISION: Allow sync to RDP client");
+        debug!("└────────────────────────────────────────────────────────────────");
 
-        // Record operation in loop detector
         self.loop_detector
             .record_mime_types(&mime_types, ClipboardSource::Local);
         self.loop_detector.record_sync(ClipboardSource::Local);
 
-        Ok(true) // Proceed with sync
+        PortalSyncDecision::Allow
     }
 
-    /// Check if content would cause loop
-    ///
-    /// # Arguments
-    ///
-    /// * `content` - Clipboard content data
-    /// * `from_rdp` - True if content is from RDP, false if from Portal
-    ///
-    /// # Returns
-    ///
-    /// - `Ok(true)` - Proceed with transfer
-    /// - `Ok(false)` - Skip transfer (content loop detected)
-    pub fn check_content(&mut self, content: &[u8], from_rdp: bool) -> Result<bool> {
+    pub fn check_content(&mut self, content: &[u8], from_rdp: bool) -> bool {
         let source = if from_rdp {
             ClipboardSource::Rdp
         } else {
@@ -216,26 +296,22 @@ impl SyncManager {
 
         if self.loop_detector.would_cause_content_loop(content, source) {
             warn!("Content loop detected, skipping transfer");
-            return Ok(false); // Don't transfer
+            return false;
         }
 
-        // Record content for future loop detection
         self.loop_detector.record_content(content, source);
 
-        Ok(true) // Proceed with transfer
+        true
     }
 
-    /// Set syncing state
     pub fn set_syncing(&mut self, direction: SyncDirection) {
         self.state = ClipboardState::Syncing(direction);
     }
 
-    /// Reset to idle state
     pub fn reset(&mut self) {
         self.state = ClipboardState::Idle;
     }
 
-    /// Reset loop detector history
     pub fn reset_loop_detector(&mut self) {
         self.loop_detector.clear();
     }
@@ -254,22 +330,12 @@ impl SyncManager {
         self.loop_detector.would_cause_loop_mime(mime_types)
     }
 
-    /// Set RDP formats as current clipboard owner
-    ///
-    /// # Arguments
-    ///
-    /// * `formats` - RDP clipboard formats
     pub fn set_rdp_formats(&mut self, formats: Vec<ClipboardFormat>) {
         self.state = ClipboardState::RdpOwned(formats.clone(), SystemTime::now());
         self.loop_detector
             .record_formats(&formats, ClipboardSource::Rdp);
     }
 
-    /// Set Portal MIME types as current clipboard owner
-    ///
-    /// # Arguments
-    ///
-    /// * `mime_types` - Portal clipboard MIME types
     pub fn set_portal_formats(&mut self, mime_types: Vec<String>) {
         self.state = ClipboardState::PortalOwned(mime_types.clone());
         self.loop_detector
@@ -316,7 +382,7 @@ mod tests {
         let formats = make_text_formats();
 
         // Should allow first format announcement
-        assert!(manager.handle_rdp_formats(formats.clone()).unwrap());
+        assert!(manager.handle_rdp_formats(formats.clone()));
 
         // Verify state
         match manager.state() {
@@ -334,9 +400,10 @@ mod tests {
         let mime_types = vec!["text/plain".to_string(), "text/html".to_string()];
 
         // Should allow first format announcement (force=true simulates D-Bus)
-        assert!(manager
-            .handle_portal_formats(mime_types.clone(), true)
-            .unwrap());
+        assert_eq!(
+            manager.handle_portal_formats(mime_types.clone(), true),
+            PortalSyncDecision::Allow
+        );
 
         // Verify state
         match manager.state() {
@@ -351,16 +418,20 @@ mod tests {
 
         // RDP takes ownership
         let formats = make_text_formats();
-        assert!(manager.handle_rdp_formats(formats).unwrap());
+        assert!(manager.handle_rdp_formats(formats));
 
         // Immediate D-Bus signal should be blocked (echo protection)
         let mime_types = vec!["text/plain".to_string()];
-        assert!(!manager
-            .handle_portal_formats(mime_types.clone(), true)
-            .unwrap());
+        assert_eq!(
+            manager.handle_portal_formats(mime_types.clone(), true),
+            PortalSyncDecision::Block
+        );
 
         // Non-force Portal signal should always be blocked when RDP owns
-        assert!(!manager.handle_portal_formats(mime_types, false).unwrap());
+        assert_eq!(
+            manager.handle_portal_formats(mime_types, false),
+            PortalSyncDecision::Block
+        );
     }
 
     #[test]
@@ -373,7 +444,7 @@ mod tests {
 
         // RDP announces text formats
         let text_formats = make_text_formats();
-        assert!(manager.handle_rdp_formats(text_formats.clone()).unwrap());
+        assert!(manager.handle_rdp_formats(text_formats.clone()));
 
         // Simulate Portal echo - record it as coming from Local
         let text_mime = vec!["text/plain".to_string()];
@@ -382,7 +453,7 @@ mod tests {
             .record_mime_types(&text_mime, ClipboardSource::Local);
 
         // Now RDP trying to announce same formats again should be blocked (loop)
-        assert!(!manager.handle_rdp_formats(text_formats).unwrap());
+        assert!(!manager.handle_rdp_formats(text_formats));
     }
 
     #[test]
@@ -391,10 +462,10 @@ mod tests {
         let content = b"Test content";
 
         // First check from RDP should pass
-        assert!(manager.check_content(content, true).unwrap());
+        assert!(manager.check_content(content, true));
 
         // Same content from Portal should fail (loop)
-        assert!(!manager.check_content(content, false).unwrap());
+        assert!(!manager.check_content(content, false));
     }
 
     #[test]
@@ -402,7 +473,7 @@ mod tests {
         let mut manager = SyncManager::new();
         let formats = make_text_formats();
 
-        manager.handle_rdp_formats(formats).unwrap();
+        manager.handle_rdp_formats(formats);
 
         // Reset state
         manager.reset();
@@ -417,11 +488,11 @@ mod tests {
 
         // RDP announces text
         let text_formats = make_text_formats();
-        assert!(manager.handle_rdp_formats(text_formats).unwrap());
+        assert!(manager.handle_rdp_formats(text_formats));
 
         // RDP announces different format (image) - should succeed
         let image_formats = make_image_formats();
-        assert!(manager.handle_rdp_formats(image_formats).unwrap());
+        assert!(manager.handle_rdp_formats(image_formats));
     }
 
     #[test]

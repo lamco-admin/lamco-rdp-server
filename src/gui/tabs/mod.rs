@@ -2,13 +2,15 @@
 //!
 //! Tabs use shared widgets/theme for consistency; each tab owns
 //! only the domain-specific arrangement of controls.
+//!
+//! Note: Multimon settings merged into Advanced -> Display Control
+//! Note: Logging settings merged into Advanced -> Logging & Diagnostics
 
 mod advanced;
 mod audio;
 mod clipboard;
 mod egfx;
 mod input;
-mod logging;
 mod performance;
 mod security;
 mod server;
@@ -20,7 +22,6 @@ pub use audio::*;
 pub use clipboard::*;
 pub use egfx::*;
 pub use input::*;
-pub use logging::*;
 pub use performance::*;
 pub use security::*;
 pub use server::*;

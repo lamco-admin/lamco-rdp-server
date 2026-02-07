@@ -25,8 +25,8 @@ use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
 use crate::audio::codecs::{AudioEncoder, OpusEncoderConfig};
+use crate::config::AudioConfig;
 
-/// Supported audio format specification for advertisement
 #[derive(Debug, Clone)]
 struct FormatSpec {
     format_tag: WaveFormat,
@@ -52,23 +52,13 @@ impl FormatSpec {
     }
 }
 
-/// PipeWire Audio Handler for RDPSND
-///
-/// Implements `RdpsndServerHandler` to bridge PipeWire audio capture
-/// with RDP audio streaming. Audio data is sent through the server's
-/// event channel as `ServerEvent::Rdpsnd(RdpsndServerMessage::Wave)`.
 pub struct PipeWireAudioHandler {
-    /// Supported audio formats (advertised to client)
+    audio_config: AudioConfig,
     formats: Vec<AudioFormat>,
-    /// Selected format index (after negotiation)
     selected_format: Option<u16>,
-    /// Audio encoder for selected format
     encoder: Option<AudioEncoder>,
-    /// Server event channel for sending audio to RDP clients
     event_sender: Option<mpsc::UnboundedSender<ServerEvent>>,
-    /// PipeWire node ID for audio capture (optional)
     node_id: Option<u32>,
-    /// Whether capture is active
     active: bool,
 }
 
@@ -85,80 +75,87 @@ impl std::fmt::Debug for PipeWireAudioHandler {
 }
 
 impl PipeWireAudioHandler {
-    /// Create a new PipeWire audio handler
-    ///
-    /// # Arguments
-    ///
-    /// * `event_sender` - Server event channel for sending audio to RDP clients
-    /// * `node_id` - Optional PipeWire node ID for audio capture
     pub fn new(
+        audio_config: AudioConfig,
         event_sender: Option<mpsc::UnboundedSender<ServerEvent>>,
         node_id: Option<u32>,
     ) -> Self {
-        // Build list of supported formats in priority order
-        let format_specs = vec![
-            // OPUS - modern, efficient, best quality/bandwidth
-            FormatSpec {
+        let sample_rate = audio_config.sample_rate;
+        let channels = audio_config.channels as u16;
+        let block_align = channels * 2; // 16-bit samples
+        let pcm_bytes_per_sec = sample_rate * channels as u32 * 2;
+
+        let opus_bytes_per_sec = audio_config.opus_bitrate / 8;
+
+        // Ordered by preference: preferred codec first, then fallbacks
+        let mut format_specs = vec![];
+
+        if audio_config.codec == "opus" || audio_config.codec == "auto" {
+            format_specs.push(FormatSpec {
                 format_tag: WaveFormat::OPUS,
-                channels: 2,
-                sample_rate: 48000,
-                avg_bytes_per_sec: 12000, // ~96kbps
-                block_align: 4,
+                channels,
+                sample_rate,
+                avg_bytes_per_sec: opus_bytes_per_sec,
+                block_align,
                 bits_per_sample: 16,
                 extra_data: None,
-            },
-            // PCM - universal fallback, high bandwidth
-            FormatSpec {
+            });
+        }
+
+        if audio_config.codec == "pcm" || audio_config.codec == "auto" {
+            format_specs.push(FormatSpec {
                 format_tag: WaveFormat::PCM,
-                channels: 2,
-                sample_rate: 48000,
-                avg_bytes_per_sec: 192000, // 48kHz * 2ch * 16bit
-                block_align: 4,
+                channels,
+                sample_rate,
+                avg_bytes_per_sec: pcm_bytes_per_sec,
+                block_align,
                 bits_per_sample: 16,
                 extra_data: None,
-            },
-            // ADPCM - good compression for legacy clients
-            FormatSpec {
+            });
+        }
+
+        if audio_config.codec == "adpcm" || audio_config.codec == "auto" {
+            format_specs.push(FormatSpec {
                 format_tag: WaveFormat::ADPCM,
-                channels: 2,
-                sample_rate: 44100,
-                avg_bytes_per_sec: 44100, // ~352kbps stereo
+                channels,
+                sample_rate: 44100, // ADPCM standard rate
+                avg_bytes_per_sec: 44100,
                 block_align: 2048,
                 bits_per_sample: 4,
                 extra_data: Some(adpcm_extra_data()),
-            },
-            // G.711 μ-law - telephony fallback (mono 8kHz)
-            FormatSpec {
+            });
+        }
+
+        if audio_config.codec == "auto" {
+            format_specs.push(FormatSpec {
                 format_tag: WaveFormat::MULAW,
                 channels: 1,
                 sample_rate: 8000,
-                avg_bytes_per_sec: 8000, // 64kbps
+                avg_bytes_per_sec: 8000,
                 block_align: 1,
                 bits_per_sample: 8,
                 extra_data: None,
-            },
-            // G.711 A-law - telephony fallback (mono 8kHz)
-            FormatSpec {
+            });
+            format_specs.push(FormatSpec {
                 format_tag: WaveFormat::ALAW,
                 channels: 1,
                 sample_rate: 8000,
-                avg_bytes_per_sec: 8000, // 64kbps
+                avg_bytes_per_sec: 8000,
                 block_align: 1,
                 bits_per_sample: 8,
                 extra_data: None,
-            },
-        ];
+            });
+        }
 
         let formats: Vec<AudioFormat> = format_specs.iter().map(|f| f.to_audio_format()).collect();
 
         info!(
-            "PipeWire audio handler created with {} formats, node_id={:?}, has_event_sender={}",
-            formats.len(),
-            node_id,
-            event_sender.is_some()
+            "PipeWire audio handler: codec={}, sample_rate={}, channels={}, formats={}, node_id={:?}",
+            audio_config.codec, sample_rate, channels, formats.len(), node_id
         );
 
         Self {
+            audio_config,
             formats,
             selected_format: None,
             encoder: None,
@@ -168,19 +165,7 @@ impl PipeWireAudioHandler {
         }
     }
 
-    /// Send encoded audio data to the RDP client
-    ///
-    /// This sends the audio through the server event channel as
-    /// `ServerEvent::Rdpsnd(RdpsndServerMessage::Wave)`.
-    ///
-    /// # Arguments
-    ///
-    /// * `data` - Encoded audio data
-    /// * `timestamp` - Audio timestamp in milliseconds
-    ///
-    /// # Returns
-    ///
-    /// `true` if the audio was sent successfully, `false` if the channel is unavailable
+    /// Returns `true` if sent, `false` if no event channel.
     pub fn send_audio(&self, data: Vec<u8>, timestamp: u32) -> bool {
         if let Some(sender) = &self.event_sender {
             let msg = ServerEvent::Rdpsnd(RdpsndServerMessage::Wave(data, timestamp));
@@ -195,36 +180,38 @@ impl PipeWireAudioHandler {
         }
     }
 
-    /// Check if the handler can send audio
     pub fn can_send_audio(&self) -> bool {
         self.event_sender.is_some() && self.active
     }
 
-    /// Get the selected encoder (if any)
     pub fn encoder(&mut self) -> Option<&mut AudioEncoder> {
         self.encoder.as_mut()
     }
 
-    /// Check if audio capture is active
     pub fn is_active(&self) -> bool {
         self.active
     }
 
-    /// Get the PipeWire node ID
     pub fn node_id(&self) -> Option<u32> {
         self.node_id
     }
 
-    /// Create an encoder for the selected format
     fn create_encoder(&self, format: &AudioFormat) -> Option<AudioEncoder> {
         match format.format {
             WaveFormat::OPUS => {
+                let frame_size =
+                    (format.n_samples_per_sec * self.audio_config.frame_ms / 1000) as usize;
                 let config = OpusEncoderConfig {
                     sample_rate: format.n_samples_per_sec,
                     channels: format.n_channels as usize,
-                    bitrate: 96000, // 96kbps
+                    bitrate: self.audio_config.opus_bitrate,
+                    frame_size,
                     ..Default::default()
                 };
+                debug!(
+                    "Creating OPUS encoder: sample_rate={}, channels={}, bitrate={}, frame_size={} ({}ms)",
+                    config.sample_rate, config.channels, config.bitrate, config.frame_size, self.audio_config.frame_ms
+                );
                 match AudioEncoder::opus_with_config(config) {
                     Ok(enc) => Some(enc),
                     Err(e) => {
@@ -253,24 +240,10 @@ impl PipeWireAudioHandler {
 }
 
 impl RdpsndServerHandler for PipeWireAudioHandler {
-    /// Return supported audio formats
-    ///
-    /// These formats are sent to the client during negotiation.
-    /// The client will respond with formats it supports, and we'll
-    /// pick the best mutual match.
     fn get_formats(&self) -> &[AudioFormat] {
         &self.formats
     }
 
-    /// Called when client selects a format
-    ///
-    /// # Arguments
-    ///
-    /// * `client_format` - The client's audio format response
-    ///
-    /// # Returns
-    ///
-    /// Index of the selected format from our list, or None if no match
     fn start(&mut self, client_format: &ironrdp_rdpsnd::pdu::ClientAudioFormatPdu) -> Option<u16> {
         info!(
             "Client audio format negotiation: {} formats, flags={:?}",
@@ -278,9 +251,7 @@ impl RdpsndServerHandler for PipeWireAudioHandler {
             client_format.flags
         );
 
-        // Find the best matching format
-        // We iterate our formats in priority order and find the first
-        // one that the client also supports
+        // Iterate our formats in priority order to find first mutual match
         for (our_idx, our_fmt) in self.formats.iter().enumerate() {
             for client_fmt in &client_format.formats {
                 if formats_compatible(our_fmt, client_fmt) {
@@ -289,7 +260,6 @@ impl RdpsndServerHandler for PipeWireAudioHandler {
                         our_fmt.format, our_fmt.n_samples_per_sec, our_fmt.n_channels
                     );
 
-                    // Create encoder for selected format
                     if let Some(encoder) = self.create_encoder(our_fmt) {
                         self.selected_format = Some(our_idx as u16);
                         self.encoder = Some(encoder);
@@ -310,7 +280,6 @@ impl RdpsndServerHandler for PipeWireAudioHandler {
         None
     }
 
-    /// Called when audio session ends
     fn stop(&mut self) {
         info!("Audio handler stopping");
         self.active = false;
@@ -319,22 +288,15 @@ impl RdpsndServerHandler for PipeWireAudioHandler {
     }
 }
 
-/// Check if two audio formats are compatible
 fn formats_compatible(server: &AudioFormat, client: &AudioFormat) -> bool {
-    // Format tag must match
     if server.format != client.format {
         return false;
     }
 
-    // For most formats, we need matching sample rate and channels
-    // Some formats (like OPUS) are more flexible
     match server.format {
-        WaveFormat::OPUS => {
-            // OPUS is flexible - just need same tag
-            true
-        }
+        // OPUS is flexible on rate/channels during negotiation
+        WaveFormat::OPUS => true,
         _ => {
-            // For other formats, need exact match
             server.n_channels == client.n_channels
                 && server.n_samples_per_sec == client.n_samples_per_sec
                 && server.bits_per_sample == client.bits_per_sample
@@ -342,16 +304,12 @@ fn formats_compatible(server: &AudioFormat, client: &AudioFormat) -> bool {
     }
 }
 
-/// Generate ADPCM extra data (coefficients)
-///
 /// IMA ADPCM requires coefficient data in the format header.
 fn adpcm_extra_data() -> Vec<u8> {
-    // Standard IMA ADPCM coefficients
     // wSamplesPerBlock (2 bytes) + wNumCoef (2 bytes) + coefficients
     let samples_per_block: u16 = 1017;
     let num_coef: u16 = 7;
 
-    // Standard ADPCM coefficients
     let coefficients: [(i16, i16); 7] = [
         (256, 0),
         (512, -256),
@@ -380,7 +338,6 @@ mod tests {
 
     #[test]
     fn test_handler_creation() {
-        // Create handler without event sender (for unit testing)
         let handler = PipeWireAudioHandler::new(None, None);
 
         assert!(!handler.formats.is_empty());
@@ -395,8 +352,8 @@ mod tests {
         let handler = PipeWireAudioHandler::new(Some(tx), Some(42));
 
         assert!(!handler.formats.is_empty());
-        assert!(!handler.is_active()); // Not active until start() called
-        assert!(!handler.can_send_audio()); // Active but not started
+        assert!(!handler.is_active());
+        assert!(!handler.can_send_audio());
         assert_eq!(handler.node_id(), Some(42));
     }
 
@@ -422,7 +379,6 @@ mod tests {
             data: None,
         };
 
-        // OPUS is flexible - should match
         assert!(formats_compatible(&opus1, &opus2));
 
         let pcm1 = AudioFormat {
@@ -445,16 +401,14 @@ mod tests {
             data: None,
         };
 
-        // PCM requires exact match
         assert!(formats_compatible(&pcm1, &pcm1.clone()));
-        assert!(!formats_compatible(&pcm1, &pcm2)); // Different sample rate
+        assert!(!formats_compatible(&pcm1, &pcm2));
     }
 
     #[test]
     fn test_adpcm_extra_data() {
         let data = adpcm_extra_data();
         assert!(!data.is_empty());
-        // Should have samples_per_block + num_coef + 7 coefficient pairs
         assert!(data.len() >= 4 + 7 * 4);
     }
 }

@@ -77,7 +77,6 @@ pub mod factory;
 pub mod handler;
 pub mod pipeline;
 
-// Re-export key types
 pub use capture::{AudioCapture, AudioCaptureHandle, AudioFormat, AudioSamples, CaptureConfig};
 pub use codecs::{
     AdpcmDecoder, AdpcmEncoder, AlawEncoder, AudioEncoder, G711Encoder, G711Variant, MulawEncoder,
@@ -87,11 +86,7 @@ pub use factory::{create_sound_factory, LamcoSoundFactory};
 pub use handler::PipeWireAudioHandler;
 pub use pipeline::{AudioPipeline, FrameBuffer, PipelineConfig, PipelineState, PipelineStats};
 
-/// Check if audio support is available on this system
-///
-/// Returns true if PipeWire is available and opus encoding is supported.
 pub fn audio_available() -> bool {
-    // Check if PipeWire socket exists
     if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
         let socket_path = format!("{}/pipewire-0", runtime_dir);
         if std::path::Path::new(&socket_path).exists() {
@@ -101,7 +96,6 @@ pub fn audio_available() -> bool {
     false
 }
 
-/// Get default audio configuration
 pub fn default_audio_config() -> CaptureConfig {
     CaptureConfig::default()
 }

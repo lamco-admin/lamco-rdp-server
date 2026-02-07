@@ -65,12 +65,10 @@ pub enum ServiceLevel {
 }
 
 impl ServiceLevel {
-    /// Check if the service is operational (can be used)
     pub fn is_operational(&self) -> bool {
         matches!(self, Self::Full | Self::Degraded | Self::Fallback)
     }
 
-    /// Get emoji representation for display
     pub fn emoji(&self) -> &'static str {
         match self {
             Self::Full => "✅",
@@ -81,7 +79,6 @@ impl ServiceLevel {
         }
     }
 
-    /// Get human-readable name
     pub fn name(&self) -> &'static str {
         match self {
             Self::Full => "Full",
@@ -123,7 +120,6 @@ pub enum Subsystem {
 }
 
 impl Subsystem {
-    /// Get emoji representation for display
     pub fn emoji(&self) -> &'static str {
         match self {
             Self::Display => "🖥️",
@@ -174,7 +170,6 @@ pub enum UserImpact {
 }
 
 impl UserImpact {
-    /// Get emoji representation
     pub fn emoji(&self) -> &'static str {
         match self {
             Self::Minimal => "ℹ️",
@@ -226,17 +221,14 @@ pub struct MinimumViableConfig {
 }
 
 impl MinimumViableConfig {
-    /// Check if server can operate (serve RDP clients)
     pub fn can_operate_server(&self) -> bool {
         self.can_capture_screen && self.can_encode_video && self.can_serve_rdp
     }
 
-    /// Check if GUI can operate
     pub fn can_operate_gui(&self) -> bool {
         self.can_render_gui
     }
 
-    /// Get a summary of what's available
     pub fn summary(&self) -> String {
         let mut parts = Vec::new();
         if self.can_capture_screen {

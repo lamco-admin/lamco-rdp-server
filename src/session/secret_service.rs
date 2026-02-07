@@ -20,10 +20,6 @@ pub struct AsyncSecretServiceClient {
 }
 
 impl AsyncSecretServiceClient {
-    /// Connect to Secret Service
-    ///
-    /// This connects to org.freedesktop.secrets on the session D-Bus.
-    /// Works with GNOME Keyring, KWallet, KeePassXC, and other compatible backends.
     pub async fn connect() -> Result<Self> {
         debug!("Connecting to Secret Service (org.freedesktop.secrets)...");
 
@@ -38,17 +34,6 @@ impl AsyncSecretServiceClient {
         Ok(Self {})
     }
 
-    /// Store a secret
-    ///
-    /// # Arguments
-    ///
-    /// * `key` - Unique identifier for this secret
-    /// * `secret` - The secret value to store (will be zeroized after use)
-    /// * `attributes` - Key-value attributes for searching/filtering
-    ///
-    /// # Returns
-    ///
-    /// Ok(()) if secret was stored successfully
     pub async fn store_secret(
         &self,
         key: String,
@@ -57,28 +42,23 @@ impl AsyncSecretServiceClient {
     ) -> Result<()> {
         info!("Storing secret in Secret Service: {}", key);
 
-        // Connect to service
         let service = SecretService::connect(EncryptionType::Dh)
             .await
             .context("Failed to connect to Secret Service")?;
 
-        // Get the default collection (usually "login" keyring)
         let collection = service
             .get_default_collection()
             .await
             .context("Failed to get default Secret Service collection")?;
 
-        // Check if collection is locked
         if collection.is_locked().await.unwrap_or(true) {
             warn!("Secret Service collection is locked, attempting unlock");
 
-            // Try to unlock
             collection
                 .unlock()
                 .await
                 .context("Failed to unlock Secret Service collection")?;
 
-            // Verify unlock
             if collection.is_locked().await.unwrap_or(true) {
                 return Err(anyhow!("Collection remains locked after unlock attempt"));
             }
@@ -86,7 +66,6 @@ impl AsyncSecretServiceClient {
             info!("Secret Service collection unlocked successfully");
         }
 
-        // Build attributes map
         let mut attrs = HashMap::new();
         attrs.insert("application", "lamco-rdp-server");
         attrs.insert("key", key.as_str());
@@ -95,13 +74,10 @@ impl AsyncSecretServiceClient {
             attrs.insert(k.as_str(), v.as_str());
         }
 
-        // Create label for the secret
         let label = format!("lamco-rdp-server: {}", key);
 
-        // Convert secret to bytes (zeroize after use)
         let secret_bytes = Zeroizing::new(secret.as_bytes().to_vec());
 
-        // Store secret (Secret Service handles encryption automatically)
         collection
             .create_item(
                 &label,
@@ -118,24 +94,13 @@ impl AsyncSecretServiceClient {
         Ok(())
     }
 
-    /// Retrieve a secret
-    ///
-    /// # Arguments
-    ///
-    /// * `key` - Unique identifier for the secret
-    ///
-    /// # Returns
-    ///
-    /// The secret value if found
     pub async fn lookup_secret(&self, key: String) -> Result<String> {
         debug!("Looking up secret in Secret Service: {}", key);
 
-        // Connect to service
         let service = SecretService::connect(EncryptionType::Dh)
             .await
             .context("Failed to connect to Secret Service")?;
 
-        // Search for item by attributes
         let mut search_attrs = HashMap::new();
         search_attrs.insert("application", "lamco-rdp-server");
         search_attrs.insert("key", key.as_str());
@@ -149,7 +114,6 @@ impl AsyncSecretServiceClient {
             return Err(anyhow!("Secret not found: {}", key));
         }
 
-        // Try unlocked items first
         if !items.unlocked.is_empty() {
             let item = &items.unlocked[0];
             let secret_bytes = item
@@ -164,11 +128,9 @@ impl AsyncSecretServiceClient {
             return Ok(secret);
         }
 
-        // Try locked items (will require unlock)
         if !items.locked.is_empty() {
             let item = &items.locked[0];
 
-            // Try to unlock
             item.unlock()
                 .await
                 .context("Failed to unlock secret item")?;
@@ -188,24 +150,13 @@ impl AsyncSecretServiceClient {
         Err(anyhow!("Secret not found: {}", key))
     }
 
-    /// Delete a secret
-    ///
-    /// # Arguments
-    ///
-    /// * `key` - Unique identifier for the secret
-    ///
-    /// # Returns
-    ///
-    /// Ok(()) if secret was deleted or didn't exist
     pub async fn delete_secret(&self, key: String) -> Result<()> {
         info!("Deleting secret from Secret Service: {}", key);
 
-        // Connect to service
         let service = SecretService::connect(EncryptionType::Dh)
             .await
             .context("Failed to connect to Secret Service")?;
 
-        // Search for item
         let mut search_attrs = HashMap::new();
         search_attrs.insert("application", "lamco-rdp-server");
         search_attrs.insert("key", key.as_str());
@@ -215,7 +166,6 @@ impl AsyncSecretServiceClient {
             .await
             .context("Failed to search Secret Service")?;
 
-        // Delete all matching items (unlocked and locked)
         for item in items.unlocked.iter().chain(items.locked.iter()) {
             item.delete()
                 .await

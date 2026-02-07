@@ -157,7 +157,6 @@ pub struct CursorShape {
 }
 
 impl CursorStrategy {
-    /// Create a new cursor strategy manager
     pub fn new(config: CursorStrategyConfig) -> Self {
         let predictor = if config.mode == CursorMode::Predictive {
             Some(CursorPredictor::new(config.predictor.clone()))

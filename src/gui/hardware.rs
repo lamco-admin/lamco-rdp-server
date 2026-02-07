@@ -54,13 +54,9 @@ impl GpuInfo {
 pub fn detect_gpus() -> Vec<GpuInfo> {
     let mut gpus = Vec::new();
 
-    // Detect VA-API devices
     gpus.extend(detect_vaapi_devices());
-
-    // Detect NVIDIA devices (NVENC)
     gpus.extend(detect_nvidia_devices());
 
-    // If no GPUs found, add a software fallback entry
     if gpus.is_empty() {
         gpus.push(GpuInfo {
             name: "Software Encoding (OpenH264)".to_string(),
@@ -78,7 +74,6 @@ pub fn detect_gpus() -> Vec<GpuInfo> {
 fn detect_vaapi_devices() -> Vec<GpuInfo> {
     let mut devices = Vec::new();
 
-    // Check common VA-API device paths
     let vaapi_paths = [
         "/dev/dri/renderD128",
         "/dev/dri/renderD129",
@@ -100,7 +95,6 @@ fn detect_vaapi_devices() -> Vec<GpuInfo> {
 
 /// Probe a specific VA-API device for capabilities
 fn probe_vaapi_device(device_path: &PathBuf) -> Option<GpuInfo> {
-    // Try to get device info using vainfo
     let output = Command::new("vainfo")
         .arg("--display")
         .arg("drm")
@@ -122,7 +116,6 @@ fn probe_vaapi_device(device_path: &PathBuf) -> Option<GpuInfo> {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    // Parse vainfo output to get device name and capabilities
     let name = parse_vaapi_driver_name(&stdout)
         .unwrap_or_else(|| format!("VA-API Device ({})", device_path.display()));
 
@@ -145,7 +138,6 @@ fn parse_vaapi_driver_name(output: &str) -> Option<String> {
             let parts: Vec<&str> = line.split("Driver version:").collect();
             if parts.len() > 1 {
                 let driver = parts[1].trim();
-                // Clean up the driver name
                 if driver.contains("Intel") {
                     return Some(format!("Intel VA-API ({})", driver));
                 } else if driver.contains("AMD") || driver.contains("radeon") {
@@ -180,7 +172,6 @@ fn parse_vaapi_capabilities(output: &str) -> Vec<String> {
         && (output.contains("VAEntrypointEncSlice") || output.contains("VAEntrypointEncSliceLP"));
 
     if has_h264_encode {
-        // Check for specific profiles
         if output.contains("VAProfileH264High") {
             capabilities.push("H.264 High Profile".to_string());
         }
@@ -199,7 +190,6 @@ fn parse_vaapi_capabilities(output: &str) -> Vec<String> {
         }
     }
 
-    // Check for H.265/HEVC encode
     let has_hevc_encode = output.contains("VAProfileHEVC")
         && (output.contains("VAEntrypointEncSlice") || output.contains("VAEntrypointEncSliceLP"));
 
@@ -207,14 +197,12 @@ fn parse_vaapi_capabilities(output: &str) -> Vec<String> {
         capabilities.push("HEVC Encode".to_string());
     }
 
-    // Check for AV1 encode (very new hardware)
     let has_av1_encode = output.contains("VAProfileAV1") && output.contains("VAEntrypointEncSlice");
 
     if has_av1_encode {
         capabilities.push("AV1 Encode".to_string());
     }
 
-    // If no encode capabilities detected, note decode-only
     if capabilities.is_empty() {
         if output.contains("VAProfileH264") {
             capabilities.push("H.264 Decode Only".to_string());
@@ -230,7 +218,6 @@ fn parse_vaapi_capabilities(output: &str) -> Vec<String> {
 fn detect_nvidia_devices() -> Vec<GpuInfo> {
     let mut devices = Vec::new();
 
-    // Try nvidia-smi to detect NVIDIA GPUs
     let output = Command::new("nvidia-smi")
         .arg("--query-gpu=index,name,driver_version")
         .arg("--format=csv,noheader,nounits")
@@ -247,7 +234,6 @@ fn detect_nvidia_devices() -> Vec<GpuInfo> {
                     let name = parts[1];
                     let driver_version = parts[2];
 
-                    // Check NVENC capabilities
                     let capabilities = detect_nvenc_capabilities(index);
 
                     devices.push(GpuInfo {
@@ -269,7 +255,6 @@ fn detect_nvidia_devices() -> Vec<GpuInfo> {
 fn detect_nvenc_capabilities(gpu_index: &str) -> Vec<String> {
     let mut capabilities = Vec::new();
 
-    // Try to query encoder sessions capability
     let output = Command::new("nvidia-smi")
         .arg("-i")
         .arg(gpu_index)
@@ -277,10 +262,8 @@ fn detect_nvenc_capabilities(gpu_index: &str) -> Vec<String> {
         .arg("--format=csv,noheader,nounits")
         .output();
 
-    // If nvidia-smi encoder query works, NVENC is available
     if let Ok(output) = output {
         if output.status.success() {
-            // NVENC is available - assume modern capabilities
             capabilities.push("NVENC H.264".to_string());
             capabilities.push("NVENC HEVC".to_string());
 
@@ -320,7 +303,6 @@ fn detect_nvenc_capabilities(gpu_index: &str) -> Vec<String> {
     capabilities
 }
 
-/// Get the best available encoder device
 pub fn get_recommended_encoder() -> Option<GpuInfo> {
     let gpus = detect_gpus();
 
@@ -332,7 +314,6 @@ pub fn get_recommended_encoder() -> Option<GpuInfo> {
         return Some(nvenc.clone());
     }
 
-    // Then VA-API
     if let Some(vaapi) = gpus
         .iter()
         .find(|g| g.encoder_type == "vaapi" && g.is_available)
@@ -340,7 +321,6 @@ pub fn get_recommended_encoder() -> Option<GpuInfo> {
         return Some(vaapi.clone());
     }
 
-    // Fallback to first available
     gpus.into_iter().find(|g| g.is_available)
 }
 
@@ -352,7 +332,6 @@ pub fn validate_vaapi_device(device_path: &str) -> Result<(), String> {
         return Err(format!("Device path does not exist: {}", device_path));
     }
 
-    // Try to probe the device
     let output = Command::new("vainfo")
         .arg("--display")
         .arg("drm")

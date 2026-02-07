@@ -45,10 +45,6 @@
 
 use std::time::Instant;
 
-// =============================================================================
-// Types
-// =============================================================================
-
 /// A rectangular region of the screen that has changed
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DamageRegion {
@@ -63,7 +59,6 @@ pub struct DamageRegion {
 }
 
 impl DamageRegion {
-    /// Create a new damage region
     #[inline]
     pub fn new(x: u32, y: u32, width: u32, height: u32) -> Self {
         Self {
@@ -74,7 +69,6 @@ impl DamageRegion {
         }
     }
 
-    /// Create a region covering the entire frame
     #[inline]
     pub fn full_frame(width: u32, height: u32) -> Self {
         Self {
@@ -85,13 +79,11 @@ impl DamageRegion {
         }
     }
 
-    /// Calculate the area of this region in pixels
     #[inline]
     pub fn area(&self) -> u64 {
         self.width as u64 * self.height as u64
     }
 
-    /// Check if this region overlaps with another
     pub fn overlaps(&self, other: &DamageRegion) -> bool {
         let self_right = self.x + self.width;
         let self_bottom = self.y + self.height;
@@ -104,13 +96,11 @@ impl DamageRegion {
             && self_bottom > other.y
     }
 
-    /// Check if this region contains a point
     #[inline]
     pub fn contains(&self, x: u32, y: u32) -> bool {
         x >= self.x && x < self.x + self.width && y >= self.y && y < self.y + self.height
     }
 
-    /// Compute the union (bounding box) of two regions
     pub fn union(&self, other: &DamageRegion) -> DamageRegion {
         let x = self.x.min(other.x);
         let y = self.y.min(other.y);
@@ -125,7 +115,6 @@ impl DamageRegion {
         }
     }
 
-    /// Check if two regions are adjacent (within merge_distance pixels)
     pub fn is_adjacent(&self, other: &DamageRegion, merge_distance: u32) -> bool {
         let self_right = self.x + self.width;
         let self_bottom = self.y + self.height;
@@ -155,7 +144,6 @@ impl DamageRegion {
     }
 }
 
-/// Configuration for damage detection
 #[derive(Debug, Clone)]
 pub struct DamageConfig {
     /// Size of each comparison tile in pixels (default: 64)
@@ -189,7 +177,6 @@ impl Default for DamageConfig {
 }
 
 impl DamageConfig {
-    /// Create config optimized for low-bandwidth scenarios
     pub fn low_bandwidth() -> Self {
         Self {
             tile_size: 32,        // Finer granularity
@@ -200,7 +187,6 @@ impl DamageConfig {
         }
     }
 
-    /// Create config optimized for high-motion content
     pub fn high_motion() -> Self {
         Self {
             tile_size: 128,       // Coarser for speed
@@ -212,39 +198,23 @@ impl DamageConfig {
     }
 }
 
-/// Statistics about damage detection performance
 #[derive(Debug, Clone, Default)]
 pub struct DamageStats {
-    /// Total frames processed
     pub frames_processed: u64,
-
-    /// Frames with no damage (completely static)
+    /// Completely static frames (no damage detected)
     pub frames_skipped: u64,
-
-    /// Frames with full-frame damage
     pub frames_full: u64,
-
-    /// Frames with partial damage
     pub frames_partial: u64,
-
-    /// Total damaged area across all frames (pixels)
     pub total_damage_area: u64,
-
-    /// Total frame area across all frames (pixels)
     pub total_frame_area: u64,
-
-    /// Total time spent on detection (nanoseconds)
+    /// Nanoseconds
     pub total_detection_time_ns: u64,
-
-    /// Average damage ratio (damaged_area / frame_area)
+    /// damaged_area / frame_area
     pub avg_damage_ratio: f32,
-
-    /// Average detection time in milliseconds
     pub avg_detection_time_ms: f32,
 }
 
 impl DamageStats {
-    /// Calculate bandwidth reduction percentage
     pub fn bandwidth_reduction_percent(&self) -> f32 {
         if self.total_frame_area == 0 {
             return 0.0;
@@ -263,10 +233,6 @@ impl DamageStats {
         }
     }
 }
-
-// =============================================================================
-// SIMD Tile Comparison
-// =============================================================================
 
 /// Count pixels that differ by more than threshold (scalar fallback)
 fn count_different_pixels_scalar(prev: &[u8], curr: &[u8], threshold: u8) -> u32 {
@@ -288,7 +254,6 @@ fn count_different_pixels_scalar(prev: &[u8], curr: &[u8], threshold: u8) -> u32
     count
 }
 
-/// SIMD-optimized tile comparison for x86_64 with AVX2
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 fn count_different_pixels_avx2(prev: &[u8], curr: &[u8], threshold: u8) -> u32 {
     use std::arch::x86_64::*;
@@ -322,12 +287,10 @@ fn count_different_pixels_avx2(prev: &[u8], curr: &[u8], threshold: u8) -> u32 {
             // Compare against threshold
             let exceeds = _mm256_cmpgt_epi8(diff, threshold_vec);
 
-            // Count lanes that exceed threshold
             let mask = _mm256_movemask_epi8(exceeds) as u32;
             diff_count += mask.count_ones();
         }
 
-        // Process remaining bytes with scalar
         let remaining_start = chunks * 32;
         if remaining_start < prev.len() {
             diff_count += count_different_pixels_scalar(
@@ -337,13 +300,12 @@ fn count_different_pixels_avx2(prev: &[u8], curr: &[u8], threshold: u8) -> u32 {
             );
         }
 
-        // Convert byte count to pixel count (4 bytes per pixel, but we're checking RGB only)
-        // The mask gives us byte-level differences, divide by 4 for approximate pixel count
+        // The mask gives us byte-level differences; divide by 3 for approximate pixel count
+        // (checking R, G, B channels only)
         diff_count / 3
     }
 }
 
-/// SIMD-optimized tile comparison for aarch64 with NEON
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 fn count_different_pixels_neon(prev: &[u8], curr: &[u8], threshold: u8) -> u32 {
     use std::arch::aarch64::*;
@@ -377,7 +339,6 @@ fn count_different_pixels_neon(prev: &[u8], curr: &[u8], threshold: u8) -> u32 {
             diff_count += (sum / 255) as u32;
         }
 
-        // Process remaining bytes with scalar
         let remaining_start = chunks * 16;
         if remaining_start < prev.len() {
             diff_count += count_different_pixels_scalar(
@@ -387,12 +348,10 @@ fn count_different_pixels_neon(prev: &[u8], curr: &[u8], threshold: u8) -> u32 {
             );
         }
 
-        // Convert to approximate pixel count
         diff_count / 3
     }
 }
 
-/// Count different pixels using the best available SIMD implementation
 #[inline]
 fn count_different_pixels(prev: &[u8], curr: &[u8], threshold: u8) -> u32 {
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
@@ -414,17 +373,11 @@ fn count_different_pixels(prev: &[u8], curr: &[u8], threshold: u8) -> u32 {
     }
 }
 
-// =============================================================================
-// Region Merging
-// =============================================================================
-
-/// Merge adjacent regions that are within merge_distance of each other
 fn merge_regions(mut regions: Vec<DamageRegion>, merge_distance: u32) -> Vec<DamageRegion> {
     if regions.len() <= 1 {
         return regions;
     }
 
-    // Iteratively merge until no more merges possible
     let mut changed = true;
     while changed {
         changed = false;
@@ -439,7 +392,6 @@ fn merge_regions(mut regions: Vec<DamageRegion>, merge_distance: u32) -> Vec<Dam
             let mut current = regions[i];
             used[i] = true;
 
-            // Find all regions that can be merged with current
             for j in (i + 1)..regions.len() {
                 if used[j] {
                     continue;
@@ -461,7 +413,6 @@ fn merge_regions(mut regions: Vec<DamageRegion>, merge_distance: u32) -> Vec<Dam
     regions
 }
 
-/// Convert dirty tiles to damage regions
 fn tiles_to_regions(
     dirty_tiles: &[bool],
     tiles_x: usize,
@@ -476,7 +427,6 @@ fn tiles_to_regions(
         for tx in 0..tiles_x {
             let idx = ty * tiles_x + tx;
             if dirty_tiles[idx] {
-                // Calculate tile bounds, clamped to frame dimensions
                 let x = (tx * tile_size) as u32;
                 let y = (ty * tile_size) as u32;
                 let width = (tile_size as u32).min(frame_width.saturating_sub(x));
@@ -492,42 +442,24 @@ fn tiles_to_regions(
     regions
 }
 
-// =============================================================================
-// DamageDetector
-// =============================================================================
-
 /// Main damage detection engine
 ///
 /// Compares consecutive frames to identify changed regions,
 /// enabling bandwidth-efficient encoding of only modified areas.
 pub struct DamageDetector {
-    /// Configuration settings
     config: DamageConfig,
-
-    /// Previous frame data for comparison
     previous_frame: Option<Vec<u8>>,
-
-    /// Previous frame dimensions
     previous_dimensions: Option<(u32, u32)>,
-
-    /// Dirty tile grid (reused between frames)
+    /// Reused between frames to avoid allocation
     tile_dirty: Vec<bool>,
-
-    /// Number of tiles horizontally
     tiles_x: usize,
-
-    /// Number of tiles vertically
     tiles_y: usize,
-
-    /// Detection statistics
     stats: DamageStats,
-
-    /// Force full-frame on next detection
+    /// Forces full-frame damage on next detect() call
     invalidated: bool,
 }
 
 impl DamageDetector {
-    /// Create a new damage detector with the given configuration
     pub fn new(config: DamageConfig) -> Self {
         Self {
             config,
@@ -541,26 +473,14 @@ impl DamageDetector {
         }
     }
 
-    /// Create a detector with default configuration
     pub fn with_defaults() -> Self {
         Self::new(DamageConfig::default())
     }
 
-    /// Detect damaged regions in the current frame
+    /// Returns empty if frame is identical to previous. Returns full-frame
+    /// damage on the first call or after invalidation.
     ///
-    /// Returns a list of regions that have changed since the previous frame.
-    /// Returns an empty vector if the frame is identical to the previous one.
-    /// Returns full-frame damage on the first frame or after invalidation.
-    ///
-    /// # Arguments
-    ///
-    /// * `frame` - BGRA pixel data (4 bytes per pixel)
-    /// * `width` - Frame width in pixels
-    /// * `height` - Frame height in pixels
-    ///
-    /// # Panics
-    ///
-    /// Panics if frame length doesn't match width * height * 4
+    /// `frame` must be BGRA pixel data (4 bytes per pixel).
     pub fn detect(&mut self, frame: &[u8], width: u32, height: u32) -> Vec<DamageRegion> {
         let start = Instant::now();
         let frame_area = width as u64 * height as u64;
@@ -576,20 +496,17 @@ impl DamageDetector {
             height
         );
 
-        // Check for dimension change
         let dimensions_changed = self
             .previous_dimensions
             .map(|(w, h)| w != width || h != height)
             .unwrap_or(true);
 
-        // Handle first frame, invalidation, or dimension change
         if self.previous_frame.is_none() || self.invalidated || dimensions_changed {
             self.update_tile_grid(width, height);
             self.previous_frame = Some(frame.to_vec());
             self.previous_dimensions = Some((width, height));
             self.invalidated = false;
 
-            // Record stats
             self.stats.frames_processed += 1;
             self.stats.frames_full += 1;
             self.stats.total_damage_area += frame_area;
@@ -604,10 +521,8 @@ impl DamageDetector {
         let mut prev_frame = self.previous_frame.take().unwrap();
         let regions = self.detect_changes(&prev_frame, frame, width, height);
 
-        // Calculate damage area
         let damage_area: u64 = regions.iter().map(|r| r.area()).sum();
 
-        // Update stats
         self.stats.frames_processed += 1;
         self.stats.total_damage_area += damage_area;
         self.stats.total_frame_area += frame_area;
@@ -632,41 +547,29 @@ impl DamageDetector {
         regions
     }
 
-    /// Force full-frame damage on the next detect() call
-    ///
-    /// Call this after resolution changes, keyframe requests,
+    /// Call after resolution changes, keyframe requests,
     /// or other events that require a full refresh.
     pub fn invalidate(&mut self) {
         self.invalidated = true;
     }
 
-    /// Get current detection statistics
     pub fn stats(&self) -> &DamageStats {
         &self.stats
     }
 
-    /// Reset statistics to zero
     pub fn reset_stats(&mut self) {
         self.stats = DamageStats::default();
     }
 
-    /// Get the current configuration
     pub fn config(&self) -> &DamageConfig {
         &self.config
     }
 
-    /// Update configuration
-    ///
-    /// Note: This invalidates the detector, causing the next frame
-    /// to be treated as full damage.
+    /// Invalidates the detector, so the next frame is treated as full damage.
     pub fn set_config(&mut self, config: DamageConfig) {
         self.config = config;
         self.invalidate();
     }
-
-    // -------------------------------------------------------------------------
-    // Internal methods
-    // -------------------------------------------------------------------------
 
     fn update_tile_grid(&mut self, width: u32, height: u32) {
         self.tiles_x = ((width as usize) + self.config.tile_size - 1) / self.config.tile_size;
@@ -691,12 +594,10 @@ impl DamageDetector {
         let tile_pixels = (tile_size * tile_size) as u32;
         let diff_threshold_count = (tile_pixels as f32 * self.config.diff_threshold) as u32;
 
-        // Reset dirty flags
         for flag in &mut self.tile_dirty {
             *flag = false;
         }
 
-        // Compare each tile
         for ty in 0..self.tiles_y {
             for tx in 0..self.tiles_x {
                 let tile_x = tx * tile_size;
@@ -710,7 +611,6 @@ impl DamageDetector {
                     continue;
                 }
 
-                // Compare tile contents
                 let diff_count = self.compare_tile(
                     prev,
                     curr,
@@ -722,13 +622,11 @@ impl DamageDetector {
                     pixel_threshold,
                 );
 
-                // Mark dirty if difference exceeds threshold
                 let idx = ty * self.tiles_x + tx;
                 self.tile_dirty[idx] = diff_count > diff_threshold_count;
             }
         }
 
-        // Convert dirty tiles to regions
         let mut regions = tiles_to_regions(
             &self.tile_dirty,
             self.tiles_x,
@@ -738,10 +636,7 @@ impl DamageDetector {
             height,
         );
 
-        // Merge adjacent regions
         regions = merge_regions(regions, self.config.merge_distance);
-
-        // Filter out tiny regions
         regions.retain(|r| r.area() >= self.config.min_region_area);
 
         regions
@@ -765,7 +660,6 @@ impl DamageDetector {
             let y = tile_y + row;
             let offset = y * stride + tile_x * 4;
 
-            // Bounds check
             if offset + bytes_per_row > prev.len() || offset + bytes_per_row > curr.len() {
                 continue;
             }
@@ -779,10 +673,6 @@ impl DamageDetector {
         total_diff
     }
 }
-
-// =============================================================================
-// Tests
-// =============================================================================
 
 #[cfg(test)]
 mod tests {
@@ -816,10 +706,6 @@ mod tests {
 
         data
     }
-
-    // -------------------------------------------------------------------------
-    // DamageRegion tests
-    // -------------------------------------------------------------------------
 
     #[test]
     fn test_damage_region_area() {
@@ -880,10 +766,6 @@ mod tests {
         assert!(!r1.is_adjacent(&r3, 32));
     }
 
-    // -------------------------------------------------------------------------
-    // DamageConfig tests
-    // -------------------------------------------------------------------------
-
     #[test]
     fn test_damage_config_default() {
         let config = DamageConfig::default();
@@ -903,10 +785,6 @@ mod tests {
         assert_eq!(high_motion.tile_size, 128);
         assert!(high_motion.diff_threshold > 0.05);
     }
-
-    // -------------------------------------------------------------------------
-    // Pixel comparison tests
-    // -------------------------------------------------------------------------
 
     #[test]
     fn test_count_different_pixels_identical() {
@@ -938,10 +816,6 @@ mod tests {
         let count = count_different_pixels_scalar(&prev, &curr, 4);
         assert_eq!(count, 1); // Above threshold
     }
-
-    // -------------------------------------------------------------------------
-    // Region merging tests
-    // -------------------------------------------------------------------------
 
     #[test]
     fn test_merge_regions_empty() {
@@ -987,10 +861,6 @@ mod tests {
         assert_eq!(regions.len(), 1); // All merged into one
         assert_eq!(regions[0].width, 224);
     }
-
-    // -------------------------------------------------------------------------
-    // DamageDetector tests
-    // -------------------------------------------------------------------------
 
     #[test]
     fn test_detector_first_frame_full_damage() {
@@ -1125,10 +995,6 @@ mod tests {
         assert_eq!(damage[0], DamageRegion::full_frame(640, 480));
     }
 
-    // -------------------------------------------------------------------------
-    // Edge case tests
-    // -------------------------------------------------------------------------
-
     #[test]
     fn test_detector_odd_dimensions() {
         let mut detector = DamageDetector::with_defaults();
@@ -1180,10 +1046,6 @@ mod tests {
         // Pass wrong dimensions
         let _ = detector.detect(&frame, 800, 600);
     }
-
-    // -------------------------------------------------------------------------
-    // Tiles to regions tests
-    // -------------------------------------------------------------------------
 
     #[test]
     fn test_tiles_to_regions_single() {

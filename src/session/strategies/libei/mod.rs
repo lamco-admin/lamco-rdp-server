@@ -76,16 +76,11 @@ pub struct LibeiStrategy {
 }
 
 impl LibeiStrategy {
-    /// Create a new libei strategy
     pub fn new(portal_manager: Option<Arc<lamco_portal::PortalManager>>) -> Self {
         Self { portal_manager }
     }
 
-    /// Check if libei/EIS is available
-    ///
-    /// Verifies that Portal RemoteDesktop with ConnectToEIS support is available.
     pub async fn is_available() -> bool {
-        // Check if Portal RemoteDesktop is available
         match RemoteDesktop::new().await {
             Ok(rd) => {
                 // Try to check if ConnectToEIS is available
@@ -128,7 +123,6 @@ impl SessionStrategy for LibeiStrategy {
     async fn create_session(&self) -> Result<Arc<dyn SessionHandle>> {
         info!("🚀 libei: Creating session with Portal RemoteDesktop + EIS");
 
-        // Create Portal RemoteDesktop session
         let remote_desktop = RemoteDesktop::new()
             .await
             .context("Failed to create RemoteDesktop proxy")?;
@@ -140,7 +134,6 @@ impl SessionStrategy for LibeiStrategy {
             .await
             .context("Failed to create RemoteDesktop session")?;
 
-        // Select keyboard and pointer devices
         remote_desktop
             .select_devices(
                 &session,
@@ -153,7 +146,6 @@ impl SessionStrategy for LibeiStrategy {
 
         info!("✅ libei: Selected keyboard and pointer devices");
 
-        // Start the session (user approval if first time)
         remote_desktop
             .start(&session, None)
             .await
@@ -161,7 +153,6 @@ impl SessionStrategy for LibeiStrategy {
 
         info!("✅ libei: RemoteDesktop session started");
 
-        // Get EIS socket FD via ConnectToEIS
         info!("🔌 libei: Calling ConnectToEIS to get socket FD");
 
         let fd = remote_desktop
@@ -171,16 +162,13 @@ impl SessionStrategy for LibeiStrategy {
 
         info!("✅ libei: Received EIS socket FD");
 
-        // Create UnixStream from FD
         let stream = UnixStream::from(fd);
 
-        // Create EIS context
         let context =
             ei::Context::new(stream).context("Failed to create EIS context from socket")?;
 
         info!("🔑 libei: EIS context created, performing handshake");
 
-        // Perform handshake and get event stream (tokio-async)
         let mut events =
             EiEventStream::new(context.clone()).context("Failed to create EIS event stream")?;
 
@@ -194,7 +182,6 @@ impl SessionStrategy for LibeiStrategy {
 
         info!("✅ libei: EIS handshake complete, connection established");
 
-        // Create session handle with event-driven architecture
         let handle = Arc::new(LibeiSessionHandleImpl {
             portal_session: Arc::new(RwLock::new(session)),
             context: Arc::new(context),
@@ -208,7 +195,6 @@ impl SessionStrategy for LibeiStrategy {
             last_serial: Arc::new(Mutex::new(handshake_resp.serial)),
         });
 
-        // Spawn background task to handle EIS events
         let handle_clone = handle.clone();
         tokio::spawn(async move {
             if let Err(e) = handle_clone.event_loop().await {
@@ -296,7 +282,6 @@ impl LibeiSessionHandleImpl {
         Ok(())
     }
 
-    /// Handle individual EIS events
     async fn handle_event(&self, event: ei::Event) -> Result<()> {
         match event {
             ei::Event::Connection(_connection, request) => match request {
@@ -326,7 +311,6 @@ impl LibeiSessionHandleImpl {
                         debug!("[libei] Seat capability: {} (mask: {})", interface, mask);
                     }
                     ei::seat::Event::Done => {
-                        // Bind all available capabilities
                         let caps = data.capabilities.values().fold(0, |a, b| a | b);
                         seat.bind(caps);
                         let connection = self.connection.lock().await;
@@ -374,7 +358,6 @@ impl LibeiSessionHandleImpl {
                         debug!("[libei] Device interface: {}", interface_name);
                     }
                     ei::device::Event::Done => {
-                        // Device is ready - check what type it is
                         if let Some(device_type) = data.device_type {
                             match device_type {
                                 ei::device::DeviceType::Physical => {
@@ -383,7 +366,6 @@ impl LibeiSessionHandleImpl {
                                 }
                                 ei::device::DeviceType::Virtual => {
                                     // Virtual device - for RemoteDesktop (sender)
-                                    // Check if it has keyboard or pointer interfaces
                                     if data.interface::<ei::Keyboard>().is_some() {
                                         debug!("[libei] Found keyboard device");
                                         let mut kbd = self.keyboard_device.lock().await;
@@ -424,12 +406,10 @@ impl LibeiSessionHandleImpl {
         Ok(())
     }
 
-    /// Get current serial number
     async fn current_serial(&self) -> u32 {
         *self.last_serial.lock().await
     }
 
-    /// Get current timestamp in microseconds
     fn current_time_us() -> u64 {
         use std::time::{SystemTime, UNIX_EPOCH};
         SystemTime::now()
@@ -452,7 +432,6 @@ impl SessionHandle for LibeiSessionHandleImpl {
     }
 
     fn streams(&self) -> Vec<StreamInfo> {
-        // Return streams synchronously
         futures::executor::block_on(async { self.streams.lock().await.clone() })
     }
 
@@ -461,7 +440,6 @@ impl SessionHandle for LibeiSessionHandleImpl {
     }
 
     async fn notify_keyboard_keycode(&self, keycode: i32, pressed: bool) -> Result<()> {
-        // Get keyboard device
         let kbd_device_opt = {
             let kbd = self.keyboard_device.lock().await;
             kbd.clone()
@@ -469,7 +447,6 @@ impl SessionHandle for LibeiSessionHandleImpl {
 
         let device = kbd_device_opt.ok_or_else(|| anyhow!("Keyboard device not yet available"))?;
 
-        // Get device data to access keyboard interface
         let devices = self.devices.lock().await;
         let device_data = devices
             .get(&device)
@@ -481,8 +458,7 @@ impl SessionHandle for LibeiSessionHandleImpl {
 
         drop(devices);
 
-        // Send key event
-        // Note: EIS keycodes are offset by 8 from evdev (Linux kernel offset)
+        // EIS keycodes are offset by 8 from evdev (Linux kernel offset)
         let eis_keycode = (keycode - 8) as u32;
         let state = if pressed {
             ei::keyboard::KeyState::Press
@@ -492,12 +468,10 @@ impl SessionHandle for LibeiSessionHandleImpl {
 
         keyboard.key(eis_keycode, state);
 
-        // Frame the event
         let serial = self.current_serial().await;
         let time = Self::current_time_us();
         device.frame(serial, time);
 
-        // Flush to send
         self.context.flush()?;
 
         debug!(
@@ -509,7 +483,6 @@ impl SessionHandle for LibeiSessionHandleImpl {
     }
 
     async fn notify_pointer_motion_absolute(&self, stream_id: u32, x: f64, y: f64) -> Result<()> {
-        // Get pointer device
         let ptr_device_opt = {
             let ptr = self.pointer_device.lock().await;
             ptr.clone()
@@ -517,7 +490,6 @@ impl SessionHandle for LibeiSessionHandleImpl {
 
         let device = ptr_device_opt.ok_or_else(|| anyhow!("Pointer device not yet available"))?;
 
-        // Get device data to access pointer interface
         let devices = self.devices.lock().await;
         let device_data = devices
             .get(&device)
@@ -529,15 +501,12 @@ impl SessionHandle for LibeiSessionHandleImpl {
 
         drop(devices);
 
-        // Send motion event (x, y in logical pixels as f32)
         pointer_abs.motion_absolute(x as f32, y as f32);
 
-        // Frame the event
         let serial = self.current_serial().await;
         let time = Self::current_time_us();
         device.frame(serial, time);
 
-        // Flush to send
         self.context.flush()?;
 
         debug!(
@@ -549,7 +518,6 @@ impl SessionHandle for LibeiSessionHandleImpl {
     }
 
     async fn notify_pointer_button(&self, button: i32, pressed: bool) -> Result<()> {
-        // Get pointer device
         let ptr_device_opt = {
             let ptr = self.pointer_device.lock().await;
             ptr.clone()
@@ -557,7 +525,6 @@ impl SessionHandle for LibeiSessionHandleImpl {
 
         let device = ptr_device_opt.ok_or_else(|| anyhow!("Pointer device not yet available"))?;
 
-        // Get device data to access button interface
         let devices = self.devices.lock().await;
         let device_data = devices
             .get(&device)
@@ -569,7 +536,6 @@ impl SessionHandle for LibeiSessionHandleImpl {
 
         drop(devices);
 
-        // Send button event
         button_interface.button(
             button as u32,
             if pressed {
@@ -579,12 +545,10 @@ impl SessionHandle for LibeiSessionHandleImpl {
             },
         );
 
-        // Frame the event
         let serial = self.current_serial().await;
         let time = Self::current_time_us();
         device.frame(serial, time);
 
-        // Flush to send
         self.context.flush()?;
 
         debug!(
@@ -596,7 +560,6 @@ impl SessionHandle for LibeiSessionHandleImpl {
     }
 
     async fn notify_pointer_axis(&self, dx: f64, dy: f64) -> Result<()> {
-        // Get pointer device
         let ptr_device_opt = {
             let ptr = self.pointer_device.lock().await;
             ptr.clone()
@@ -604,7 +567,6 @@ impl SessionHandle for LibeiSessionHandleImpl {
 
         let device = ptr_device_opt.ok_or_else(|| anyhow!("Pointer device not yet available"))?;
 
-        // Get device data to access scroll interface
         let devices = self.devices.lock().await;
         let device_data = devices
             .get(&device)
@@ -615,8 +577,6 @@ impl SessionHandle for LibeiSessionHandleImpl {
             .ok_or_else(|| anyhow!("Scroll interface not found on device"))?;
 
         drop(devices);
-
-        // Send scroll events (convert f64 to f32 for reis API)
         if dx.abs() > 0.01 {
             scroll.scroll(dx as f32, 0.0);
         }
@@ -624,12 +584,10 @@ impl SessionHandle for LibeiSessionHandleImpl {
             scroll.scroll(0.0, dy as f32);
         }
 
-        // Frame the event
         let serial = self.current_serial().await;
         let time = Self::current_time_us();
         device.frame(serial, time);
 
-        // Flush to send
         self.context.flush()?;
 
         debug!("[libei] Pointer axis: dx={}, dy={}", dx, dy);

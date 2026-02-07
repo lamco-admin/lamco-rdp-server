@@ -21,6 +21,8 @@ pub struct ServerProcess {
     config_path: PathBuf,
     address: String,
     shutdown_flag: Arc<AtomicBool>,
+    /// If true, don't stop server when dropped (for "close GUI only" mode)
+    detached: bool,
 }
 
 /// Log line from server process
@@ -56,18 +58,14 @@ impl ServerProcess {
     ) -> Result<Self> {
         info!("Starting lamco-rdp-server process");
 
-        // Find the server binary
         let server_binary = find_server_binary()?;
         info!("Using server binary: {:?}", server_binary);
 
-        // Write config to a temporary file
         let config_path = write_temp_config(config)?;
         info!("Config written to: {:?}", config_path);
 
-        // Build the address string for display
         let address = config.server.listen_addr.clone();
 
-        // Spawn the server process
         let mut child = Command::new(&server_binary)
             .arg("--config")
             .arg(&config_path)
@@ -80,7 +78,6 @@ impl ServerProcess {
         let pid = child.id();
         info!("Server process started with PID: {}", pid);
 
-        // Capture stdout/stderr in background threads
         let shutdown_flag = Arc::new(AtomicBool::new(false));
 
         // Capture stderr (where tracing logs go)
@@ -130,25 +127,33 @@ impl ServerProcess {
             config_path,
             address,
             shutdown_flag,
+            detached: false,
         })
     }
 
-    /// Get the server's PID
+    /// Detach the server process so it keeps running when GUI exits
+    ///
+    /// After calling this, the server will NOT be stopped when the GUI closes.
+    pub fn detach(&mut self) {
+        info!(
+            "Detaching server process (PID: {}) - will continue running",
+            self.pid
+        );
+        self.detached = true;
+    }
+
     pub fn pid(&self) -> u32 {
         self.pid
     }
 
-    /// Get server uptime
     pub fn uptime(&self) -> Duration {
         self.start_time.elapsed()
     }
 
-    /// Get the listen address
     pub fn address(&self) -> &str {
         &self.address
     }
 
-    /// Check if the server process is still running
     pub fn is_running(&self) -> bool {
         // Try to get exit status without blocking
         match self.try_wait() {
@@ -172,26 +177,39 @@ impl ServerProcess {
 
     /// Stop the server gracefully
     ///
-    /// Sends SIGTERM first, then SIGKILL if needed
+    /// Sends SIGTERM first, then SIGKILL if needed.
+    /// Handles the case where the process has already exited gracefully.
     pub fn stop(&mut self) -> Result<()> {
         info!("Stopping server process (PID: {})", self.pid);
 
-        // Signal shutdown to log capture threads
         self.shutdown_flag.store(true, Ordering::Relaxed);
 
-        // Send SIGTERM for graceful shutdown
+        if !self.is_running() {
+            debug!("Server process already exited");
+            self.cleanup();
+            return Ok(());
+        }
+
         #[cfg(unix)]
         {
             use nix::sys::signal::{kill, Signal};
             use nix::unistd::Pid;
 
             let pid = Pid::from_raw(self.pid as i32);
-            if let Err(e) = kill(pid, Signal::SIGTERM) {
-                warn!("Failed to send SIGTERM: {}", e);
+            match kill(pid, Signal::SIGTERM) {
+                Ok(()) => debug!("SIGTERM sent to PID {}", self.pid),
+                Err(nix::errno::Errno::ESRCH) => {
+                    // Process doesn't exist - already exited
+                    debug!("Process {} already exited before SIGTERM", self.pid);
+                    self.cleanup();
+                    return Ok(());
+                }
+                Err(e) => {
+                    warn!("Failed to send SIGTERM: {}", e);
+                }
             }
         }
 
-        // Wait up to 5 seconds for graceful shutdown
         let deadline = Instant::now() + Duration::from_secs(5);
         while Instant::now() < deadline {
             if !self.is_running() {
@@ -202,10 +220,12 @@ impl ServerProcess {
             std::thread::sleep(Duration::from_millis(100));
         }
 
-        // Force kill if still running
         warn!("Server did not stop gracefully, sending SIGKILL");
         if let Err(e) = self.child.kill() {
-            error!("Failed to kill server process: {}", e);
+            // Ignore "No such process" error - process may have just exited
+            if !e.to_string().contains("No such process") {
+                error!("Failed to kill server process: {}", e);
+            }
         }
         let _ = self.child.wait();
 
@@ -226,6 +246,14 @@ impl ServerProcess {
 
 impl Drop for ServerProcess {
     fn drop(&mut self) {
+        if self.detached {
+            // Server was detached - let it keep running
+            info!(
+                "GUI closing, server (PID: {}) continues running in background",
+                self.pid
+            );
+            return;
+        }
         // Attempt graceful shutdown on drop
         self.shutdown_flag.store(true, Ordering::Relaxed);
         let _ = self.stop();
@@ -234,9 +262,19 @@ impl Drop for ServerProcess {
 
 /// Find the server binary in standard locations
 fn find_server_binary() -> Result<PathBuf> {
+    use crate::config::is_flatpak;
+
     // Check common locations in order of preference
 
-    // 1. Same directory as GUI binary
+    // 1. Flatpak-specific location (highest priority in Flatpak)
+    if is_flatpak() {
+        let flatpak_path = PathBuf::from("/app/bin/lamco-rdp-server");
+        if flatpak_path.exists() {
+            return Ok(flatpak_path);
+        }
+    }
+
+    // 2. Same directory as GUI binary
     if let Ok(current_exe) = std::env::current_exe() {
         if let Some(dir) = current_exe.parent() {
             let server_path = dir.join("lamco-rdp-server");
@@ -246,22 +284,24 @@ fn find_server_binary() -> Result<PathBuf> {
         }
     }
 
-    // 2. Development target directory
-    let dev_paths = [
-        "target/debug/lamco-rdp-server",
-        "target/release/lamco-rdp-server",
-        "../target/debug/lamco-rdp-server",
-        "../target/release/lamco-rdp-server",
-    ];
+    // 3. Development target directory (skip in Flatpak)
+    if !is_flatpak() {
+        let dev_paths = [
+            "target/debug/lamco-rdp-server",
+            "target/release/lamco-rdp-server",
+            "../target/debug/lamco-rdp-server",
+            "../target/release/lamco-rdp-server",
+        ];
 
-    for path in &dev_paths {
-        let path = PathBuf::from(path);
-        if path.exists() {
-            return Ok(path.canonicalize()?);
+        for path in &dev_paths {
+            let path = PathBuf::from(path);
+            if path.exists() {
+                return Ok(path.canonicalize()?);
+            }
         }
     }
 
-    // 3. System PATH
+    // 4. System PATH
     if let Ok(output) = Command::new("which").arg("lamco-rdp-server").output() {
         if output.status.success() {
             let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -271,22 +311,31 @@ fn find_server_binary() -> Result<PathBuf> {
         }
     }
 
-    // 4. Standard system locations
-    let system_paths = [
-        "/usr/bin/lamco-rdp-server",
-        "/usr/local/bin/lamco-rdp-server",
-        "/opt/lamco/bin/lamco-rdp-server",
-    ];
+    // 5. Standard system locations (skip in Flatpak - these are outside sandbox)
+    if !is_flatpak() {
+        let system_paths = [
+            "/usr/bin/lamco-rdp-server",
+            "/usr/local/bin/lamco-rdp-server",
+            "/opt/lamco/bin/lamco-rdp-server",
+        ];
 
-    for path in &system_paths {
-        let path = PathBuf::from(path);
-        if path.exists() {
-            return Ok(path);
+        for path in &system_paths {
+            let path = PathBuf::from(path);
+            if path.exists() {
+                return Ok(path);
+            }
         }
     }
 
+    let context = if is_flatpak() {
+        "Flatpak sandbox (/app/bin/)"
+    } else {
+        "same directory, target/, PATH, /usr/bin, /usr/local/bin"
+    };
+
     Err(anyhow!(
-        "Could not find lamco-rdp-server binary. Searched: same directory, target/, PATH, /usr/bin, /usr/local/bin"
+        "Could not find lamco-rdp-server binary. Searched: {}",
+        context
     ))
 }
 

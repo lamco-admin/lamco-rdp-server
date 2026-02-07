@@ -86,7 +86,6 @@ pub enum NvencPreset {
 }
 
 impl NvencPreset {
-    /// Convert from QualityPreset
     pub fn from_quality_preset(preset: QualityPreset) -> Self {
         match preset {
             QualityPreset::Speed => Self::P2,
@@ -95,7 +94,6 @@ impl NvencPreset {
         }
     }
 
-    /// Get the corresponding NVIDIA preset GUID
     fn to_guid(&self) -> GUID {
         match self {
             Self::P1 => NV_ENC_PRESET_P1_GUID,
@@ -126,7 +124,6 @@ pub enum NvencTuning {
 }
 
 impl NvencTuning {
-    /// Get tuning for quality preset
     pub fn from_quality_preset(preset: QualityPreset) -> Self {
         match preset {
             QualityPreset::Speed => Self::UltraLowLatency,
@@ -135,7 +132,6 @@ impl NvencTuning {
         }
     }
 
-    /// Convert to NVIDIA tuning info
     fn to_nvenc_tuning(&self) -> NV_ENC_TUNING_INFO {
         match self {
             Self::Default => NV_ENC_TUNING_INFO::NV_ENC_TUNING_INFO_HIGH_QUALITY,
@@ -299,21 +295,6 @@ impl Drop for NvencEncoder {
 }
 
 impl NvencEncoder {
-    /// Create a new NVENC encoder
-    ///
-    /// # Arguments
-    ///
-    /// * `config` - Hardware encoding configuration
-    /// * `width` - Initial frame width
-    /// * `height` - Initial frame height
-    /// * `preset` - Quality preset
-    ///
-    /// # Errors
-    ///
-    /// Returns error if:
-    /// - NVIDIA driver is not available
-    /// - NVENC is not supported on the GPU
-    /// - Encoder initialization fails
     pub fn new(
         _config: &HardwareEncodingConfig,
         width: u32,
@@ -542,7 +523,6 @@ impl NvencEncoder {
         })
     }
 
-    /// Extract SPS and PPS NAL units from Annex B bitstream
     fn extract_sps_pps(data: &[u8]) -> Option<Vec<u8>> {
         let mut sps_pps = Vec::new();
         let mut i = 0;
@@ -597,7 +577,6 @@ impl NvencEncoder {
         }
     }
 
-    /// Prepend cached SPS/PPS to P-frame data
     fn prepend_sps_pps(&self, frame_data: &[u8]) -> Vec<u8> {
         if let Some(ref sps_pps) = self.cached_sps_pps {
             let mut data = Vec::with_capacity(sps_pps.len() + frame_data.len());
@@ -777,7 +756,6 @@ impl HardwareEncoder for NvencEncoder {
     }
 }
 
-/// Check if NVIDIA driver is available
 pub fn is_nvidia_available() -> bool {
     use std::path::Path;
 
@@ -798,7 +776,6 @@ pub fn is_nvidia_available() -> bool {
     false
 }
 
-/// Get NVIDIA GPU info (name, driver version)
 #[allow(dead_code)]
 fn get_nvidia_info() -> Option<(String, String)> {
     // Read driver version from /proc

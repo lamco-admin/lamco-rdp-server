@@ -11,9 +11,7 @@
 //! - ITU-T G.711 specification
 //! - RFC 3551 (RTP Audio/Video Profile)
 
-/// μ-law compression bias constant
 const MULAW_BIAS: i16 = 0x84;
-/// μ-law clip value
 const MULAW_CLIP: i16 = 32635;
 
 /// G.711 μ-law Encoder
@@ -24,7 +22,6 @@ const MULAW_CLIP: i16 = 32635;
 pub struct MulawEncoder;
 
 impl MulawEncoder {
-    /// Create a new μ-law encoder
     pub fn new() -> Self {
         Self
     }
@@ -61,12 +58,10 @@ impl MulawEncoder {
         !encoded
     }
 
-    /// Encode a buffer of 16-bit PCM samples to μ-law
     pub fn encode(&self, pcm: &[i16]) -> Vec<u8> {
         pcm.iter().map(|&s| self.encode_sample(s)).collect()
     }
 
-    /// Find the exponent (segment) for the sample value
     #[inline]
     fn get_exponent(sample: i16) -> u8 {
         // Count leading zeros to find segment
@@ -86,18 +81,14 @@ impl MulawEncoder {
         }
     }
 
-    /// Decode a single μ-law sample back to 16-bit PCM
     #[inline]
     pub fn decode_sample(&self, ulaw: u8) -> i16 {
-        // Invert all bits
         let ulaw = !ulaw;
 
-        // Extract sign, exponent, mantissa
         let sign = ulaw & 0x80;
         let exponent = ((ulaw >> 4) & 0x07) as i16;
         let mantissa = (ulaw & 0x0F) as i16;
 
-        // Reconstruct magnitude
         let mut sample = ((mantissa << 3) + MULAW_BIAS) << exponent;
         sample -= MULAW_BIAS;
 
@@ -220,7 +211,6 @@ const ALAW_DECODE_TABLE: [i16; 256] = {
 };
 
 impl AlawEncoder {
-    /// Create a new A-law encoder
     pub fn new() -> Self {
         Self
     }
@@ -284,30 +274,22 @@ impl AlawEncoder {
         (sign | (seg << 4) | (mant & 0x0F)) ^ 0x55
     }
 
-    /// Encode a buffer of 16-bit PCM samples to A-law
     pub fn encode(&self, pcm: &[i16]) -> Vec<u8> {
         pcm.iter().map(|&s| self.encode_sample(s)).collect()
     }
 
-    /// Decode a single A-law sample back to 16-bit PCM
-    ///
-    /// Uses lookup table for optimal performance.
     #[inline]
     pub fn decode_sample(&self, alaw: u8) -> i16 {
         ALAW_DECODE_TABLE[alaw as usize]
     }
 }
 
-/// G.711 codec type
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum G711Variant {
-    /// μ-law (North America, Japan)
     Mulaw,
-    /// A-law (Europe, rest of world)
     Alaw,
 }
 
-/// Unified G.711 encoder that can use either variant
 #[derive(Debug, Clone)]
 pub enum G711Encoder {
     Mulaw(MulawEncoder),
@@ -315,7 +297,6 @@ pub enum G711Encoder {
 }
 
 impl G711Encoder {
-    /// Create a new G.711 encoder with the specified variant
     pub fn new(variant: G711Variant) -> Self {
         match variant {
             G711Variant::Mulaw => Self::Mulaw(MulawEncoder::new()),
@@ -323,7 +304,6 @@ impl G711Encoder {
         }
     }
 
-    /// Encode PCM samples to G.711
     pub fn encode(&self, pcm: &[i16]) -> Vec<u8> {
         match self {
             Self::Mulaw(enc) => enc.encode(pcm),
@@ -331,7 +311,6 @@ impl G711Encoder {
         }
     }
 
-    /// Get the variant
     pub fn variant(&self) -> G711Variant {
         match self {
             Self::Mulaw(_) => G711Variant::Mulaw,

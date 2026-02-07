@@ -92,13 +92,13 @@
 //! # Example
 //!
 //! ```no_run
-//! use wrd_server::multimon::{MonitorManager, MultiMonitorConfig};
+//! use wrd_server::multimon::{Monitors, MultiMonitorConfig};
 //! use wrd_server::portal::session::StreamInfo;
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! // Create monitor manager
 //! let config = MultiMonitorConfig::default();
-//! let manager = MonitorManager::new(config);
+//! let manager = Monitors::new(config);
 //!
 //! // Initialize from Portal streams
 //! let streams: Vec<StreamInfo> = vec![/* ... */];
@@ -133,42 +133,33 @@ mod layout;
 mod manager;
 
 pub use layout::{CoordinateSpace, Layout, LayoutCalculator, MonitorLayout, VirtualDesktop};
-pub use manager::{MonitorEvent, MonitorInfo, MonitorManager, MultiMonitorConfig};
+pub use manager::{MonitorEvent, MonitorInfo, Monitors, MultiMonitorConfig};
 
 use crate::multimon::layout::LayoutError;
 use thiserror::Error;
 
-/// Multi-monitor result type
 pub type Result<T> = std::result::Result<T, MultiMonitorError>;
 
-/// Multi-monitor error types
 #[derive(Error, Debug)]
 pub enum MultiMonitorError {
-    /// Layout calculation failed
     #[error("Layout calculation failed: {0}")]
     LayoutCalculation(String),
 
-    /// Monitor not found
     #[error("Monitor not found: {0}")]
     MonitorNotFound(u32),
 
-    /// Invalid configuration
     #[error("Invalid configuration: {0}")]
     InvalidConfiguration(String),
 
-    /// Coordinate transformation error
     #[error("Coordinate transformation error: {0}")]
     CoordinateTransformation(String),
 
-    /// Portal error
     #[error("Portal error: {0}")]
     Portal(String),
 
-    /// Layout error
     #[error("Layout error: {0}")]
     Layout(#[from] LayoutError),
 
-    /// IO error
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 }

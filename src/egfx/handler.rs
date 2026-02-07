@@ -78,10 +78,16 @@ pub struct LamcoGraphicsHandler {
     /// When true, AVC444 will be disabled even if the client supports it.
     /// This is set based on platform detection (e.g., RHEL 9 has AVC444 blur issues).
     force_avc420_only: bool,
+
+    /// Maximum frames in flight before backpressure
+    ///
+    /// Controls how many frames can be sent before waiting for acknowledgment.
+    /// Higher values improve throughput but increase latency under congestion.
+    /// Default: 3 frames
+    max_frames_in_flight: u32,
 }
 
 impl LamcoGraphicsHandler {
-    /// Create a new graphics handler
     pub fn new(width: u16, height: u16) -> Self {
         Self {
             width,
@@ -94,19 +100,10 @@ impl LamcoGraphicsHandler {
             negotiated_caps: std::sync::RwLock::new(None),
             shared_state: None,
             force_avc420_only: false,
+            max_frames_in_flight: 3, // Default
         }
     }
 
-    /// Create a new graphics handler with platform quirk awareness
-    ///
-    /// # Arguments
-    ///
-    /// * `width` - Initial surface width
-    /// * `height` - Initial surface height
-    /// * `force_avc420_only` - If true, disable AVC444 even if client supports it
-    ///
-    /// This constructor is used when platform detection has identified that
-    /// AVC444 produces visual artifacts (e.g., RHEL 9).
     pub fn with_quirks(width: u16, height: u16, force_avc420_only: bool) -> Self {
         Self {
             width,
@@ -119,14 +116,10 @@ impl LamcoGraphicsHandler {
             negotiated_caps: std::sync::RwLock::new(None),
             shared_state: None,
             force_avc420_only,
+            max_frames_in_flight: 3, // Default
         }
     }
 
-    /// Create a new graphics handler with shared state synchronization
-    ///
-    /// The shared state will be updated whenever handler callbacks are invoked,
-    /// allowing `EgfxFrameSender` to check EGFX readiness without locking
-    /// the `GraphicsPipelineServer`.
     pub fn with_shared_state(width: u16, height: u16, shared_state: SharedHandlerState) -> Self {
         Self {
             width,
@@ -139,30 +132,33 @@ impl LamcoGraphicsHandler {
             force_avc420_only: false,
             negotiated_caps: std::sync::RwLock::new(None),
             shared_state: Some(shared_state),
+            max_frames_in_flight: 3, // Default
         }
     }
 
-    /// Create a new graphics handler with shared state and platform quirk awareness
-    ///
-    /// This is the primary constructor for production use. It combines:
-    /// - Shared state synchronization for cross-task visibility
-    /// - Platform quirk awareness (e.g., force AVC420 on RHEL 9)
-    ///
-    /// # Arguments
-    ///
-    /// * `width` - Initial surface width
-    /// * `height` - Initial surface height
-    /// * `shared_state` - Shared state for EgfxFrameSender synchronization
-    /// * `force_avc420_only` - If true, disable AVC444 even if client supports it
     pub fn with_shared_state_and_quirks(
         width: u16,
         height: u16,
         shared_state: SharedHandlerState,
         force_avc420_only: bool,
     ) -> Self {
+        Self::with_config(width, height, shared_state, force_avc420_only, 3)
+    }
+
+    pub fn with_config(
+        width: u16,
+        height: u16,
+        shared_state: SharedHandlerState,
+        force_avc420_only: bool,
+        max_frames_in_flight: u32,
+    ) -> Self {
         if force_avc420_only {
             info!("EGFX handler: AVC444 disabled due to platform quirks (force_avc420_only)");
         }
+        info!(
+            "EGFX handler: max_frames_in_flight={}",
+            max_frames_in_flight
+        );
         Self {
             width,
             height,
@@ -174,6 +170,7 @@ impl LamcoGraphicsHandler {
             force_avc420_only,
             negotiated_caps: std::sync::RwLock::new(None),
             shared_state: Some(shared_state),
+            max_frames_in_flight,
         }
     }
 
@@ -216,28 +213,23 @@ impl LamcoGraphicsHandler {
         }
     }
 
-    /// Check if the handler is ready and AVC420 is enabled
     pub fn is_ready(&self) -> bool {
         self.ready.load(Ordering::Acquire)
     }
 
-    /// Check if H.264 (AVC420) encoding is available
     pub fn is_avc420_enabled(&self) -> bool {
         self.avc420_enabled.load(Ordering::Acquire)
     }
 
-    /// Get the primary surface ID
     pub fn primary_surface_id(&self) -> u16 {
         self.primary_surface_id.load(Ordering::Acquire)
     }
 
-    /// Update dimensions (e.g., on resize)
     pub fn set_dimensions(&mut self, width: u16, height: u16) {
         self.width = width;
         self.height = height;
     }
 
-    /// Get current dimensions
     pub fn dimensions(&self) -> (u16, u16) {
         (self.width, self.height)
     }
@@ -377,8 +369,8 @@ impl GraphicsPipelineHandler for LamcoGraphicsHandler {
     }
 
     fn max_frames_in_flight(&self) -> u32 {
-        // Allow 3 frames in flight for smooth streaming
-        3
+        // Use configured value for backpressure control
+        self.max_frames_in_flight
     }
 
     fn preferred_capabilities(&self) -> Vec<CapabilitySet> {
@@ -427,7 +419,6 @@ pub struct SharedGraphicsHandler {
 }
 
 impl SharedGraphicsHandler {
-    /// Create a new shared handler
     pub fn new(width: u16, height: u16) -> Self {
         Self {
             inner: Arc::new(std::sync::RwLock::new(LamcoGraphicsHandler::new(
@@ -436,17 +427,14 @@ impl SharedGraphicsHandler {
         }
     }
 
-    /// Get a clone of the inner Arc for querying state
     pub fn clone_inner(&self) -> Arc<std::sync::RwLock<LamcoGraphicsHandler>> {
         Arc::clone(&self.inner)
     }
 
-    /// Check if ready (convenience method)
     pub fn is_ready(&self) -> bool {
         self.inner.read().map(|h| h.is_ready()).unwrap_or(false)
     }
 
-    /// Check if AVC420 is enabled (convenience method)
     pub fn is_avc420_enabled(&self) -> bool {
         self.inner
             .read()

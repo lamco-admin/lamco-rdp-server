@@ -13,6 +13,45 @@ use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
+/// Check if running inside a Flatpak sandbox
+pub fn is_flatpak() -> bool {
+    // Check for FLATPAK_ID env var (set by Flatpak runtime)
+    std::env::var("FLATPAK_ID").is_ok()
+        // Also check for /.flatpak-info which exists in all Flatpak sandboxes
+        || std::path::Path::new("/.flatpak-info").exists()
+}
+
+pub fn get_cert_config_dir() -> PathBuf {
+    if is_flatpak() {
+        // Flatpak: use XDG paths which are mapped to ~/.var/app/<app-id>/
+        if let Some(config_dir) = dirs::config_dir() {
+            return config_dir;
+        }
+        // Fallback for Flatpak (shouldn't happen but be safe)
+        PathBuf::from("/app/config")
+    } else {
+        // Native: prefer user config if not root, otherwise /etc/
+        let uid = unsafe { libc::getuid() };
+        if uid == 0 {
+            // Running as root - use system directory
+            PathBuf::from("/etc/lamco-rdp-server")
+        } else {
+            // Running as user - use XDG config
+            dirs::config_dir()
+                .map(|d| d.join("lamco-rdp-server"))
+                .unwrap_or_else(|| PathBuf::from("/etc/lamco-rdp-server"))
+        }
+    }
+}
+
+pub fn default_cert_path() -> PathBuf {
+    get_cert_config_dir().join("cert.pem")
+}
+
+pub fn default_key_path() -> PathBuf {
+    get_cert_config_dir().join("key.pem")
+}
+
 pub mod types;
 
 // Use types from types.rs
@@ -20,6 +59,7 @@ use types::*;
 
 // Re-export types needed by other modules
 pub use types::AudioConfig;
+pub use types::GuiStateConfig;
 pub use types::HardwareEncodingConfig;
 pub use types::{CursorConfig, CursorPredictorConfig};
 
@@ -65,6 +105,10 @@ pub struct Config {
     /// Audio configuration (RDPSND)
     #[serde(default)]
     pub audio: AudioConfig,
+    /// GUI state configuration (persisted between sessions)
+    /// Optional - not required for server operation
+    #[serde(default)]
+    pub gui_state: GuiStateConfig,
 }
 
 impl Config {
@@ -89,18 +133,14 @@ impl Config {
                 use_portals: true,
             },
             security: SecurityConfig {
-                cert_path: PathBuf::from("/etc/lamco-rdp-server/cert.pem"),
-                key_path: PathBuf::from("/etc/lamco-rdp-server/key.pem"),
-                enable_nla: true,
-                auth_method: "pam".to_string(),
-                require_tls_13: true,
+                cert_path: default_cert_path(),
+                key_path: default_key_path(),
+                enable_nla: false,
+                auth_method: "none".to_string(),
+                require_tls_13: false,
             },
             video: VideoConfig {
-                encoder: "auto".to_string(),
-                vaapi_device: PathBuf::from("/dev/dri/renderD128"),
                 target_fps: 30,
-                bitrate: 4000,
-                damage_tracking: true,
                 cursor_mode: "metadata".to_string(),
             },
             video_pipeline: VideoPipelineConfig::default(),
@@ -114,6 +154,8 @@ impl Config {
                 max_size: 10485760, // 10 MB
                 rate_limit_ms: 200, // Max 5 events/second
                 allowed_types: vec![],
+                kde_syncselection_hint: false, // Disabled by default (experimental)
+                strategy_override: None,       // Automatic selection by default
             },
             multimon: MultiMonitorConfig {
                 enabled: true,
@@ -139,18 +181,44 @@ impl Config {
             advanced_video: AdvancedVideoConfig::default(),
             cursor: CursorConfig::default(),
             audio: AudioConfig::default(),
+            gui_state: GuiStateConfig::default(),
         })
+    }
+
+    /// Check if TLS certificates are configured and exist
+    ///
+    /// Returns `Ok(true)` if both cert and key exist,
+    /// `Ok(false)` if they don't exist (need to be generated),
+    /// `Err` if there's a more complex issue.
+    pub fn check_certificates(&self) -> Result<bool> {
+        let cert_exists = self.security.cert_path.exists();
+        let key_exists = self.security.key_path.exists();
+
+        match (cert_exists, key_exists) {
+            (true, true) => Ok(true),
+            (false, false) => Ok(false), // Neither exists - can generate
+            (true, false) => {
+                anyhow::bail!(
+                    "Certificate exists but private key is missing: {:?}",
+                    self.security.key_path
+                )
+            }
+            (false, true) => {
+                anyhow::bail!(
+                    "Private key exists but certificate is missing: {:?}",
+                    self.security.cert_path
+                )
+            }
+        }
     }
 
     /// Validate configuration
     pub fn validate(&self) -> Result<()> {
-        // Validate listen address
         self.server
             .listen_addr
             .parse::<SocketAddr>()
             .context("Invalid listen address")?;
 
-        // Validate cert paths exist
         if !self.security.cert_path.exists() {
             anyhow::bail!("Certificate not found: {:?}", self.security.cert_path);
         }
@@ -158,25 +226,16 @@ impl Config {
             anyhow::bail!("Private key not found: {:?}", self.security.key_path);
         }
 
-        // Validate encoder choice
-        match self.video.encoder.as_str() {
-            "vaapi" | "openh264" | "auto" => {}
-            _ => anyhow::bail!("Invalid encoder: {}", self.video.encoder),
-        }
-
-        // Validate cursor mode (video config - legacy)
         match self.video.cursor_mode.as_str() {
             "embedded" | "metadata" | "hidden" => {}
             _ => anyhow::bail!("Invalid cursor mode: {}", self.video.cursor_mode),
         }
 
-        // Validate cursor config (premium cursor strategies)
         match self.cursor.mode.as_str() {
             "metadata" | "painted" | "hidden" | "predictive" => {}
             _ => anyhow::bail!("Invalid cursor strategy mode: {}", self.cursor.mode),
         }
 
-        // Validate EGFX configuration
         match self.egfx.zgfx_compression.as_str() {
             "never" | "auto" | "always" => {}
             _ => anyhow::bail!(
@@ -190,7 +249,6 @@ impl Config {
             _ => anyhow::bail!("Invalid EGFX codec: {}", self.egfx.codec),
         }
 
-        // Validate damage tracking method
         match self.damage_tracking.method.as_str() {
             "pipewire" | "diff" | "hybrid" => {}
             _ => anyhow::bail!(
@@ -199,7 +257,6 @@ impl Config {
             ),
         }
 
-        // Validate hardware encoding quality preset
         match self.hardware_encoding.quality_preset.as_str() {
             "speed" | "balanced" | "quality" => {}
             _ => anyhow::bail!(
@@ -208,7 +265,6 @@ impl Config {
             ),
         }
 
-        // Validate QP ranges
         if self.egfx.qp_min > self.egfx.qp_max {
             anyhow::bail!(
                 "qp_min ({}) cannot be greater than qp_max ({})",
@@ -234,7 +290,6 @@ impl Config {
         if let Some(listen_addr) = listen {
             self.server.listen_addr = format!("{}:{}", listen_addr, port);
         } else {
-            // Just update port
             if let Ok(mut addr) = self.server.listen_addr.parse::<SocketAddr>() {
                 addr.set_port(port);
                 self.server.listen_addr = addr.to_string();
@@ -308,13 +363,6 @@ mod tests {
     fn test_config_validation_invalid_address() {
         let mut config = Config::default_config().unwrap();
         config.server.listen_addr = "invalid".to_string();
-        assert!(config.validate().is_err());
-    }
-
-    #[test]
-    fn test_config_validation_invalid_encoder() {
-        let mut config = Config::default_config().unwrap();
-        config.video.encoder = "invalid_encoder".to_string();
         assert!(config.validate().is_err());
     }
 

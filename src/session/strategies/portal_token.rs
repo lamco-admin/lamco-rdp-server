@@ -1,19 +1,36 @@
 //! Portal + Token Strategy Implementation
 //!
+//! **Execution Path:** Portal ScreenCast + Portal RemoteDesktop + Portal Clipboard
+//! **Status:** Active (v1.0.0+)
+//! **Platform:** Universal (Flatpak + Native, all compositors)
+//! **Session Type:** `PortalTokenStrategy`
+//!
 //! Uses XDG Portal with restore tokens for session persistence.
 //! This is the universal strategy that works across all desktop environments.
+//!
+//! # Architecture
+//!
+//! This strategy delegates to `PortalSessionFactory` for actual session creation.
+//! The factory handles:
+//! - Deployment-specific initialization quirks (Flatpak, native, etc.)
+//! - Clipboard manager lifecycle (SingleClipboardProxy quirk)
+//! - Retry logic after persistence rejection (GnomePersistenceRejected quirk)
+//! - Token loading/saving
+//!
+//! See: docs/analysis/SESSION-FACTORY-PLAN-20260128.md
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
-use crate::portal::PortalManager;
 use crate::services::ServiceRegistry;
+use crate::session::factory::{PortalSessionFactory, SessionFactory};
 use crate::session::strategy::{
     PipeWireAccess, SessionHandle, SessionStrategy, SessionType, StreamInfo,
 };
-use crate::session::TokenManager;
+use crate::session::Tokens;
 
 /// Portal session handle implementation
 ///
@@ -31,11 +48,11 @@ use crate::session::TokenManager;
 /// causing mouse queue overflow and input lag.
 pub struct PortalSessionHandleImpl {
     /// PipeWire file descriptor
-    pipewire_fd: i32,
+    pub(crate) pipewire_fd: i32,
     /// Stream information
-    streams: Vec<StreamInfo>,
+    pub(crate) streams: Vec<StreamInfo>,
     /// Remote desktop manager (for input injection)
-    remote_desktop: Arc<lamco_portal::RemoteDesktopManager>,
+    pub(crate) remote_desktop: Arc<lamco_portal::RemoteDesktopManager>,
     /// Session for input injection and clipboard
     /// Uses RwLock to allow concurrent input injection during clipboard operations
     pub(crate) session: Arc<
@@ -47,9 +64,11 @@ pub struct PortalSessionHandleImpl {
         >,
     >,
     /// Clipboard manager (for clipboard operations) - None on Portal v1
-    clipboard_manager: Option<Arc<lamco_portal::ClipboardManager>>,
+    pub(crate) clipboard_manager: Option<Arc<lamco_portal::ClipboardManager>>,
     /// Session type
-    session_type: SessionType,
+    pub(crate) session_type: SessionType,
+    /// Session validity flag - set to false when Portal session is destroyed
+    pub(crate) session_valid: Arc<AtomicBool>,
 }
 
 impl PortalSessionHandleImpl {
@@ -74,6 +93,49 @@ impl PortalSessionHandleImpl {
             session,
             clipboard_manager,
             session_type: SessionType::Portal,
+            session_valid: Arc::new(AtomicBool::new(true)),
+        }
+    }
+
+    /// Close Portal session explicitly
+    ///
+    /// # Lifecycle
+    ///
+    /// Portal sessions should be closed explicitly via D-Bus Close() call.
+    /// ashpd::Session does NOT have Drop implementation, so sessions leak
+    /// in the Portal daemon if not closed.
+    ///
+    /// This method:
+    /// 1. Marks session as invalid (prevents new operations)
+    /// 2. Calls Portal Close() via D-Bus
+    /// 3. Logs success/failure
+    ///
+    /// # Errors
+    ///
+    /// Returns error if Portal Close() call fails, but session is marked
+    /// invalid regardless.
+    ///
+    /// # TODO
+    ///
+    /// Remove when ashpd adds Session Drop implementation (upstream PR pending)
+    pub async fn close_portal_session(&self) -> Result<()> {
+        info!("Closing Portal session explicitly");
+
+        // Mark session as invalid first (prevent new operations)
+        self.session_valid.store(false, Ordering::Release);
+
+        let session_guard = self.session.read().await;
+
+        match session_guard.close().await {
+            Ok(_) => {
+                info!("Portal session closed successfully");
+                Ok(())
+            }
+            Err(e) => {
+                warn!("Portal session close failed: {}", e);
+                // Don't fail - session is invalid anyway
+                Ok(())
+            }
         }
     }
 }
@@ -93,39 +155,123 @@ impl SessionHandle for PortalSessionHandleImpl {
     }
 
     async fn notify_keyboard_keycode(&self, keycode: i32, pressed: bool) -> Result<()> {
-        // Use read() for concurrent input injection - doesn't block clipboard operations
+        if !self.session_valid.load(Ordering::Relaxed) {
+            return Err(anyhow!(
+                "Portal session destroyed - cannot send keyboard event"
+            ));
+        }
+
         let session = self.session.read().await;
-        self.remote_desktop
+        match self
+            .remote_desktop
             .notify_keyboard_keycode(&session, keycode, pressed)
             .await
-            .context("Failed to inject keyboard keycode via Portal")
+        {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                let error_msg = format!("{}", e);
+                if error_msg.contains("non-existing session")
+                    || error_msg.contains("non existing session")
+                {
+                    error!("❌ Portal: Session destroyed during keyboard event");
+                    self.session_valid.store(false, Ordering::Relaxed);
+                    warn!("🔒 Portal session marked as invalid");
+                    Err(anyhow!("Portal session destroyed: {}", e))
+                } else {
+                    Err(e).context("Failed to inject keyboard keycode via Portal")
+                }
+            }
+        }
     }
 
     async fn notify_pointer_motion_absolute(&self, stream_id: u32, x: f64, y: f64) -> Result<()> {
-        // Use read() for concurrent input injection - doesn't block clipboard operations
+        if !self.session_valid.load(Ordering::Relaxed) {
+            return Err(anyhow!(
+                "Portal session destroyed - cannot send pointer motion"
+            ));
+        }
+
         let session = self.session.read().await;
-        self.remote_desktop
+        match self
+            .remote_desktop
             .notify_pointer_motion_absolute(&session, stream_id, x, y)
             .await
-            .context("Failed to inject pointer motion via Portal")
+        {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                let error_msg = format!("{}", e);
+                if error_msg.contains("non-existing session")
+                    || error_msg.contains("non existing session")
+                {
+                    error!("❌ Portal: Session destroyed during pointer motion");
+                    self.session_valid.store(false, Ordering::Relaxed);
+                    warn!("🔒 Portal session marked as invalid");
+                    Err(anyhow!("Portal session destroyed: {}", e))
+                } else {
+                    Err(e).context("Failed to inject pointer motion via Portal")
+                }
+            }
+        }
     }
 
     async fn notify_pointer_button(&self, button: i32, pressed: bool) -> Result<()> {
-        // Use read() for concurrent input injection - doesn't block clipboard operations
+        if !self.session_valid.load(Ordering::Relaxed) {
+            return Err(anyhow!(
+                "Portal session destroyed - cannot send pointer button"
+            ));
+        }
+
         let session = self.session.read().await;
-        self.remote_desktop
+        match self
+            .remote_desktop
             .notify_pointer_button(&session, button, pressed)
             .await
-            .context("Failed to inject pointer button via Portal")
+        {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                let error_msg = format!("{}", e);
+                if error_msg.contains("non-existing session")
+                    || error_msg.contains("non existing session")
+                {
+                    error!("❌ Portal: Session destroyed during pointer button");
+                    self.session_valid.store(false, Ordering::Relaxed);
+                    warn!("🔒 Portal session marked as invalid");
+                    Err(anyhow!("Portal session destroyed: {}", e))
+                } else {
+                    Err(e).context("Failed to inject pointer button via Portal")
+                }
+            }
+        }
     }
 
     async fn notify_pointer_axis(&self, dx: f64, dy: f64) -> Result<()> {
-        // Use read() for concurrent input injection - doesn't block clipboard operations
+        if !self.session_valid.load(Ordering::Relaxed) {
+            return Err(anyhow!(
+                "Portal session destroyed - cannot send pointer axis"
+            ));
+        }
+
         let session = self.session.read().await;
-        self.remote_desktop
+        match self
+            .remote_desktop
             .notify_pointer_axis(&session, dx, dy)
             .await
-            .context("Failed to inject pointer axis via Portal")
+        {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                let error_msg = format!("{}", e);
+                if error_msg.contains("non-existing session")
+                    || error_msg.contains("non existing session")
+                {
+                    error!("❌ Portal: Session destroyed during pointer axis");
+                    self.session_valid.store(false, Ordering::Relaxed);
+                    warn!("🔒 Portal session marked as invalid");
+                    Err(anyhow!("Portal session destroyed: {}", e))
+                } else {
+                    Err(e).context("Failed to inject pointer axis via Portal")
+                }
+            }
+        }
     }
 
     fn portal_clipboard(&self) -> Option<crate::session::strategy::ClipboardComponents> {
@@ -142,22 +288,28 @@ impl SessionHandle for PortalSessionHandleImpl {
 ///
 /// This strategy uses the XDG Portal with restore tokens for session persistence.
 /// Works across all desktop environments with portal v4+.
+///
+/// # Implementation
+///
+/// Delegates to `PortalSessionFactory` which handles:
+/// - Deployment-specific quirks (Flatpak, native, systemd)
+/// - Clipboard lifecycle management
+/// - Retry logic after persistence rejection
+/// - Token storage
 pub struct PortalTokenStrategy {
+    /// The underlying session factory
+    factory: PortalSessionFactory,
+    /// Service registry reference for capability queries
     service_registry: Arc<ServiceRegistry>,
-    token_manager: Arc<TokenManager>,
 }
 
 impl PortalTokenStrategy {
-    /// Create a new Portal + Token strategy
-    ///
-    /// # Arguments
-    ///
-    /// * `service_registry` - For checking capabilities
-    /// * `token_manager` - For loading/saving tokens
-    pub fn new(service_registry: Arc<ServiceRegistry>, token_manager: Arc<TokenManager>) -> Self {
+    pub fn new(service_registry: Arc<ServiceRegistry>, token_manager: Arc<Tokens>) -> Self {
+        let factory = PortalSessionFactory::new(service_registry.clone(), token_manager);
+
         Self {
+            factory,
             service_registry,
-            token_manager,
         }
     }
 }
@@ -179,171 +331,18 @@ impl SessionStrategy for PortalTokenStrategy {
     }
 
     async fn create_session(&self) -> Result<Arc<dyn SessionHandle>> {
-        info!("Creating session using Portal + Token strategy");
+        info!("Creating session using Portal + Token strategy (via SessionFactory)");
 
-        // Load existing token (may be None on first run)
-        let restore_token = self
-            .token_manager
-            .load_token("default")
-            .await
-            .context("Failed to load restore token")?;
-
-        if let Some(ref token) = restore_token {
+        let quirks = self.factory.quirks();
+        if !quirks.is_empty() {
             info!(
-                "Loaded restore token ({} chars), will attempt restoration",
-                token.len()
+                "Active initialization quirks: {:?}",
+                quirks.iter().map(|q| q.name()).collect::<Vec<_>>()
             );
-        } else {
-            info!("No restore token found, permission dialog will appear");
         }
 
-        // Configure portal with token
-        let mut portal_config = lamco_portal::PortalConfig::default();
-        portal_config.restore_token = restore_token.clone();
-
-        // Some portals reject persistence for RemoteDesktop sessions
-        // Start with ExplicitlyRevoked (default), but if that fails, we'll retry with DoNot
-        // persist_mode is already ExplicitlyRevoked in default
-
-        debug!(
-            "Portal config: persist_mode={:?}, has_token={}",
-            portal_config.persist_mode,
-            portal_config.restore_token.is_some()
-        );
-
-        // Create portal manager
-        let portal_manager = Arc::new(
-            PortalManager::new(portal_config)
-                .await
-                .context("Failed to create Portal manager")?,
-        );
-
-        // Create session (may or may not show dialog depending on token validity)
-        let session_id = format!("lamco-rdp-{}", uuid::Uuid::new_v4());
-
-        // Try to create session - if persistence is rejected, retry without it
-        // Track which manager was actually used (for accessing remote_desktop later)
-        let (portal_handle, new_token, pre_created_clipboard_mgr, active_manager) =
-            match portal_manager
-                .create_session(session_id.clone(), None)
-                .await
-            {
-                Ok(result) => (result.0, result.1, None, portal_manager.clone()),
-                Err(e) => {
-                    let error_msg = format!("{:#}", e);
-
-                    // Log the actual error for debugging
-                    warn!("Portal session creation failed: {}", error_msg);
-
-                    // Check if error is about persistence rejection
-                    if error_msg.contains("cannot persist") || error_msg.contains("InvalidArgument")
-                    {
-                        warn!("Persistence rejected - retrying without persistence");
-                        warn!("Note: Session will not persist across restarts");
-
-                        // Create new portal manager without persistence
-                        let mut no_persist_config = lamco_portal::PortalConfig::default();
-                        no_persist_config.persist_mode = ashpd::desktop::PersistMode::DoNot;
-                        no_persist_config.restore_token = None;
-
-                        let no_persist_manager = Arc::new(
-                            PortalManager::new(no_persist_config)
-                                .await
-                                .context("Failed to create Portal manager without persistence")?,
-                        );
-
-                        // Create clipboard manager only if supported (Portal RemoteDesktop v2+)
-                        // On Portal v1 (RHEL 9), clipboard isn't available - skip it
-                        let clipboard_mgr = match lamco_portal::ClipboardManager::new().await {
-                            Ok(mgr) => {
-                                info!("Clipboard manager created for non-persistent session");
-                                Some(Arc::new(mgr))
-                            }
-                            Err(e) => {
-                                warn!("Clipboard not available (Portal v1?): {}", e);
-                                None
-                            }
-                        };
-
-                        let result = no_persist_manager
-                            .create_session(
-                                session_id.clone(),
-                                clipboard_mgr.as_ref().map(|c| c.as_ref()),
-                            )
-                            .await
-                            .context("Failed to create portal session (non-persistent)")?;
-
-                        (result.0, result.1, clipboard_mgr, no_persist_manager)
-                    } else {
-                        // Different error, propagate it
-                        return Err(e).context("Failed to create portal session");
-                    }
-                }
-            };
-
-        // Save new token if received
-        if let Some(ref token) = new_token {
-            info!("Received new restore token from portal, saving...");
-            self.token_manager
-                .save_token("default", token)
-                .await
-                .context("Failed to save new restore token")?;
-            info!("✅ New restore token saved successfully");
-        } else if restore_token.is_some() {
-            info!("No new token returned (existing token may have been used successfully)");
-        } else {
-            warn!("⚠️  Portal did not return restore token (portal v3 or below?)");
-        }
-
-        // Extract fields from portal_handle
-        let pipewire_fd = portal_handle.pipewire_fd();
-        let portal_streams = portal_handle.streams();
-        let streams: Vec<StreamInfo> = portal_streams
-            .iter()
-            .map(|s| StreamInfo {
-                node_id: s.node_id,
-                width: s.size.0,
-                height: s.size.1,
-                position_x: s.position.0,
-                position_y: s.position.1,
-            })
-            .collect();
-
-        // Move session out of portal_handle
-        let session = portal_handle.session;
-
-        // Use the clipboard manager from non-persistent retry if it exists,
-        // otherwise try to create one (may fail on Portal v1)
-        let clipboard_manager = if let Some(clipboard_mgr) = pre_created_clipboard_mgr {
-            info!("Using clipboard manager from non-persistent session retry");
-            Some(clipboard_mgr)
-        } else {
-            // Try to create clipboard manager - will fail on Portal v1 (no clipboard support)
-            match lamco_portal::ClipboardManager::new().await {
-                Ok(mgr) => {
-                    info!("Portal clipboard manager created for session");
-                    Some(Arc::new(mgr))
-                }
-                Err(e) => {
-                    warn!("Clipboard not available on this Portal version: {}", e);
-                    None
-                }
-            }
-        };
-
-        // Wrap in our handle type with input injection and clipboard support
-        let handle = PortalSessionHandleImpl {
-            pipewire_fd,
-            streams,
-            remote_desktop: active_manager.remote_desktop().clone(),
-            session: Arc::new(tokio::sync::RwLock::new(session)),
-            clipboard_manager,
-            session_type: SessionType::Portal,
-        };
-
-        info!("Portal session created successfully with input injection and clipboard support");
-
-        Ok(Arc::new(handle))
+        // Delegate to factory - it handles all quirk logic
+        self.factory.create_session().await
     }
 
     async fn cleanup(&self, _session: &dyn SessionHandle) -> Result<()> {

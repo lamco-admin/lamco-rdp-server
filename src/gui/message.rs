@@ -5,20 +5,19 @@
 use std::path::PathBuf;
 
 use crate::config::Config;
-use crate::gui::state::{DetectedCapabilities, GpuInfo, ServerStatus, Tab, ValidationResult};
+use crate::gui::server_connection::ConnectionMode;
+use crate::gui::state::{
+    DetectedCapabilities, GpuInfo, ServerStatus, Tab, TabCategory, ValidationResult,
+};
 
 /// Main application message type
 #[derive(Debug, Clone)]
 pub enum Message {
-    // =========================================================================
-    // Tab Navigation
-    // =========================================================================
     /// Switch to a different tab
     TabSelected(Tab),
+    /// Select a category (switches to first tab in that category)
+    CategorySelected(TabCategory),
 
-    // =========================================================================
-    // Server Configuration (4 fields)
-    // =========================================================================
     /// Listen address IP changed
     ServerListenAddrChanged(String),
     /// Listen address port changed
@@ -30,9 +29,6 @@ pub enum Message {
     /// Use XDG Portals toggled
     ServerUsePortalsToggled(bool),
 
-    // =========================================================================
-    // Security Configuration (5 fields)
-    // =========================================================================
     /// Certificate path changed
     SecurityCertPathChanged(String),
     /// Browse for certificate file
@@ -66,29 +62,11 @@ pub enum Message {
     /// Require TLS 1.3 toggled
     SecurityRequireTls13Toggled(bool),
 
-    // =========================================================================
-    // Video Configuration (6 fields)
-    // =========================================================================
-    /// Video encoder changed
-    VideoEncoderChanged(String),
-    /// VA-API device changed
-    VideoVaapiDeviceChanged(String),
     /// Target FPS changed (slider)
     VideoTargetFpsChanged(u32),
-    /// Bitrate changed (slider)
-    VideoBitrateChanged(u32),
-    /// Damage tracking toggled
-    VideoDamageTrackingToggled(bool),
     /// Cursor mode changed
     VideoCursorModeChanged(String),
-    /// Detect GPUs button clicked
-    VideoDetectGpus,
-    /// GPUs detected
-    VideoGpusDetected(Vec<GpuInfo>),
 
-    // =========================================================================
-    // Video Pipeline Configuration (16 fields across 3 sub-structs)
-    // =========================================================================
     /// Toggle video pipeline section expanded
     VideoPipelineToggleExpanded,
 
@@ -115,9 +93,6 @@ pub enum Message {
     ConverterDamageThresholdChanged(f32),
     ConverterEnableStatisticsToggled(bool),
 
-    // =========================================================================
-    // Input Configuration (3 fields)
-    // =========================================================================
     /// Use libei toggled
     InputUseLibeiToggled(bool),
     /// Keyboard layout changed
@@ -125,9 +100,6 @@ pub enum Message {
     /// Enable touch toggled
     InputEnableTouchToggled(bool),
 
-    // =========================================================================
-    // Clipboard Configuration (4 fields)
-    // =========================================================================
     /// Clipboard enabled toggled
     ClipboardEnabledToggled(bool),
     /// Max clipboard size changed
@@ -139,9 +111,6 @@ pub enum Message {
     /// Clipboard preset selected
     ClipboardPresetSelected(ClipboardPreset),
 
-    // =========================================================================
-    // Audio Configuration (6 fields)
-    // =========================================================================
     /// Audio enabled toggled
     AudioEnabledToggled(bool),
     /// Audio codec changed
@@ -155,17 +124,13 @@ pub enum Message {
     /// OPUS bitrate changed (in kbps, stored as bps)
     AudioOpusBitrateChanged(String),
 
-    // =========================================================================
-    // Multi-Monitor Configuration (2 fields)
-    // =========================================================================
     /// Multi-monitor enabled toggled
     MultimonEnabledToggled(bool),
     /// Max monitors changed
     MultimonMaxMonitorsChanged(String),
+    /// Multi-monitor preset selected
+    MultimonPresetSelected(MultimonPreset),
 
-    // =========================================================================
-    // Performance Configuration (6 fields + 2 sub-structs = 18 fields total)
-    // =========================================================================
     /// Performance preset selected
     PerformancePresetSelected(PerformancePreset),
 
@@ -193,9 +158,6 @@ pub enum Message {
     LatencyBalancedThresholdChanged(f32),
     LatencyQualityThresholdChanged(f32),
 
-    // =========================================================================
-    // Logging Configuration (3 fields)
-    // =========================================================================
     /// Log level changed
     LoggingLevelChanged(String),
     /// Log directory changed
@@ -209,9 +171,6 @@ pub enum Message {
     /// Clear log directory (set to None)
     LoggingClearLogDir,
 
-    // =========================================================================
-    // EGFX Configuration (23 fields)
-    // =========================================================================
     /// EGFX enabled toggled
     EgfxEnabledToggled(bool),
     /// EGFX quality preset selected
@@ -245,9 +204,6 @@ pub enum Message {
     EgfxAvc444AuxChangeThresholdChanged(f32),
     EgfxAvc444ForceAuxIdrToggled(bool),
 
-    // =========================================================================
-    // Damage Tracking Configuration (7 fields)
-    // =========================================================================
     /// Toggle damage tracking section expanded
     DamageTrackingToggleExpanded,
     /// Damage tracking preset selected
@@ -261,9 +217,6 @@ pub enum Message {
     DamageTrackingMergeDistanceChanged(String),
     DamageTrackingMinRegionAreaChanged(String),
 
-    // =========================================================================
-    // Hardware Encoding Configuration (6 fields)
-    // =========================================================================
     /// Toggle hardware encoding section expanded
     HardwareEncodingToggleExpanded,
 
@@ -274,20 +227,16 @@ pub enum Message {
     HardwareEncodingQualityPresetChanged(String),
     HardwareEncodingPreferNvencToggled(bool),
 
-    // =========================================================================
-    // Display Configuration (4 fields)
-    // =========================================================================
     /// Toggle display section expanded
     DisplayToggleExpanded,
+    /// Toggle multimon sub-section expanded
+    MultimonToggleExpanded,
 
     DisplayAllowResizeToggled(bool),
     DisplayAllowedResolutionsChanged(String),
     DisplayDpiAwareToggled(bool),
     DisplayAllowRotationToggled(bool),
 
-    // =========================================================================
-    // Advanced Video Configuration (4 fields)
-    // =========================================================================
     /// Toggle advanced video section expanded
     AdvancedVideoToggleExpanded,
 
@@ -296,9 +245,9 @@ pub enum Message {
     AdvancedVideoIntraRefreshIntervalChanged(String),
     AdvancedVideoEnableAdaptiveQualityToggled(bool),
 
-    // =========================================================================
-    // Cursor Configuration (5 fields + sub-struct)
-    // =========================================================================
+    /// Toggle logging section expanded
+    LoggingToggleExpanded,
+
     /// Toggle cursor section expanded
     CursorToggleExpanded,
     /// Toggle predictor sub-section expanded
@@ -318,9 +267,6 @@ pub enum Message {
     PredictorMinVelocityThresholdChanged(String),
     PredictorStopConvergenceRateChanged(f32),
 
-    // =========================================================================
-    // File Operations
-    // =========================================================================
     /// Load configuration from file
     LoadConfig,
     /// Browse for config file
@@ -335,50 +281,54 @@ pub enum Message {
     SaveConfigAs,
     /// Configuration saved
     ConfigSaved(Result<(), String>),
+    /// Restore all settings to defaults
+    RestoreDefaults,
+    /// Defaults restored
+    DefaultsRestored(Result<Config, String>),
 
-    // =========================================================================
-    // Server Control
-    // =========================================================================
-    /// Start server
+    /// Start server (tries D-Bus first, falls back to spawn)
     StartServer,
-    /// Stop server
+    /// Stop server (disconnects from D-Bus or stops process)
     StopServer,
     /// Restart server
     RestartServer,
+    /// Try to connect to existing D-Bus server
+    TryDbusConnect,
+    /// D-Bus connection result
+    DbusConnectResult(Result<(), String>),
     /// Server status updated (from IPC)
     ServerStatusUpdated(ServerStatus),
     /// Server process started (contains PID)
     ServerStarted(u32),
+    /// Server connected via D-Bus (no PID, service mode)
+    ServerConnectedDbus,
     /// Server process exited
     ServerExited(Option<i32>),
     /// Server log line received
     ServerLogReceived(String, crate::gui::state::LogLevel),
     /// Server start failed
     ServerStartFailed(String),
+    /// Connection mode changed
+    ConnectionModeChanged(ConnectionMode),
 
-    // =========================================================================
-    // Validation
-    // =========================================================================
     /// Validate current configuration
     ValidateConfig,
     /// Validation completed
     ValidationComplete(ValidationResult),
 
-    // =========================================================================
-    // Capabilities & Service Registry
-    // =========================================================================
     /// Refresh capability detection
     RefreshCapabilities,
     /// Capabilities detected
     CapabilitiesDetected(Result<DetectedCapabilities, String>),
+    /// Detect available GPUs for hardware encoding
+    VideoDetectGpus,
+    /// GPUs detected
+    GpusDetected(Vec<GpuInfo>),
     /// Export capabilities to file
     ExportCapabilities,
     /// Capabilities exported
     CapabilitiesExported(Result<PathBuf, String>),
 
-    // =========================================================================
-    // Log Viewer
-    // =========================================================================
     /// New log line received
     LogLineReceived(String),
     /// Clear log buffer
@@ -390,9 +340,6 @@ pub enum Message {
     /// Export logs to file
     ExportLogs,
 
-    // =========================================================================
-    // UI State
-    // =========================================================================
     /// Show info message
     ShowInfo(String),
     /// Show warning message
@@ -403,20 +350,32 @@ pub enum Message {
     DismissMessage(usize),
     /// Toggle expert mode globally
     ToggleExpertMode,
+    /// Toggle close behavior (close GUI only vs stop server)
+    ToggleCloseStopsServer(bool),
     /// Window close requested
     WindowCloseRequested,
     /// Confirm discard changes dialog
     ConfirmDiscardChanges,
+    /// Save changes and exit
+    SaveAndExit,
     /// Cancel discard changes dialog
     CancelDiscardChanges,
 
-    // =========================================================================
-    // Tick / Async Updates
-    // =========================================================================
     /// Periodic tick for updates (e.g., log tail, status poll)
     Tick,
     /// Poll server logs from background process
     PollServerLogs,
+
+    /// Check certificates on startup
+    CheckCertificates,
+    /// First-run: generate self-signed certificates
+    FirstRunGenerateCerts,
+    /// First-run: user will provide their own certificates
+    FirstRunProvideCerts,
+    /// First-run: dismiss the dialog (don't generate)
+    FirstRunDismiss,
+    /// First-run certificate generation completed
+    FirstRunCertsGenerated(Result<(), String>),
 }
 
 /// Clipboard preset configurations
@@ -510,6 +469,33 @@ impl std::fmt::Display for DamageTrackingPreset {
             Self::TextWork => write!(f, "Text Work"),
             Self::General => write!(f, "General"),
             Self::Video => write!(f, "Video"),
+        }
+    }
+}
+
+/// Multi-monitor preset configurations
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MultimonPreset {
+    /// Single monitor only
+    Single,
+    /// Dual monitor setup
+    Dual,
+    /// Triple monitor setup
+    Triple,
+    /// Quad monitor setup (max for most RDP clients)
+    Quad,
+    /// Custom (user-defined)
+    Custom,
+}
+
+impl std::fmt::Display for MultimonPreset {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Single => write!(f, "Single Monitor"),
+            Self::Dual => write!(f, "Dual Monitors"),
+            Self::Triple => write!(f, "Triple Monitors"),
+            Self::Quad => write!(f, "Quad Monitors"),
+            Self::Custom => write!(f, "Custom"),
         }
     }
 }

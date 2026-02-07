@@ -18,7 +18,7 @@
 //!   ├─> libei/EIS (wlroots via Portal, Flatpak-compatible)
 //!   └─> wlr-direct (wlroots native, no Flatpak)
 //!
-//! TokenManager
+//! Tokens
 //!   ├─> Flatpak Secret Portal (Flatpak deployment)
 //!   ├─> TPM 2.0 (systemd + TPM hardware)
 //!   ├─> Secret Service (GNOME Keyring, KWallet, KeePassXC)
@@ -35,7 +35,7 @@
 //! let (storage_method, _, _) = detect_credential_storage(&deployment).await?;
 //!
 //! // Create token manager
-//! let token_manager = TokenManager::new(storage_method).await?;
+//! let token_manager = Tokens::new(storage_method).await?;
 //!
 //! // Try to load existing token
 //! let restore_token = token_manager.load_token("default").await?;
@@ -65,13 +65,13 @@
 //! See: docs/architecture/SESSION-PERSISTENCE-ARCHITECTURE.md
 
 pub mod credentials;
+pub mod factory;
 pub mod flatpak_secret;
 pub mod secret_service;
 pub mod strategy;
 pub mod token_manager;
 pub mod tpm_store;
 
-// Strategy implementations
 pub mod strategies {
     pub mod mutter_direct;
     pub mod portal_token;
@@ -94,14 +94,18 @@ pub mod strategies {
     pub use libei::{LibeiSessionHandleImpl, LibeiStrategy};
 }
 
-// Re-exports for convenience
 pub use credentials::{
     detect_credential_storage, detect_deployment_context, CredentialStorageMethod,
     DeploymentContext, EncryptionType,
 };
-pub use flatpak_secret::FlatpakSecretManager;
+pub use factory::{
+    select_session_factory, InitQuirk, InitQuirkRegistry, PortalSessionFactory,
+    SessionCreationError, SessionCreationFailure, SessionCreationState, SessionFactory,
+    SessionFactoryCapabilities, SessionStrategyType,
+};
+pub use flatpak_secret::FlatpakSecrets;
 pub use secret_service::AsyncSecretServiceClient;
 pub use strategies::SessionStrategySelector;
 pub use strategy::{PipeWireAccess, SessionConfig, SessionHandle, SessionStrategy, SessionType};
-pub use token_manager::TokenManager;
+pub use token_manager::Tokens;
 pub use tpm_store::AsyncTpmCredentialStore;

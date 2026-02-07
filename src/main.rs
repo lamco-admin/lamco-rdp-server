@@ -4,7 +4,7 @@
 
 use anyhow::Result;
 use clap::Parser;
-use tracing::info;
+use tracing::{info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use lamco_rdp_server::config::Config;
@@ -78,14 +78,37 @@ pub struct Args {
     /// and other components. Helpful for troubleshooting setup issues.
     #[arg(long)]
     pub diagnose: bool,
+
+    /// Run as D-Bus service
+    ///
+    /// Registers the management interface on the session bus (or system bus
+    /// with --system). The GUI and other tools can connect to manage the
+    /// server remotely. Enables:
+    /// - Status queries via D-Bus properties
+    /// - Configuration management via D-Bus methods
+    /// - Real-time notifications via D-Bus signals
+    #[arg(long)]
+    pub dbus_service: bool,
+
+    /// Use system bus instead of session bus (requires root or polkit)
+    ///
+    /// Only valid with --dbus-service. For system-level services managed
+    /// by systemd as a system unit.
+    #[arg(long)]
+    pub system: bool,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
 
-    // Initialize logging
-    init_logging(&args)?;
+    // Load configuration first (needed for logging settings)
+    // Silently fall back to defaults if config doesn't exist yet
+    let config = Config::load(&args.config)
+        .unwrap_or_else(|_| Config::default_config().expect("Default config should always work"));
+
+    // Initialize logging (uses config.logging, CLI args override)
+    init_logging(&args, &config.logging)?;
 
     info!("════════════════════════════════════════════════════════");
     info!("  lamco-rdp-server v{}", env!("CARGO_PKG_VERSION"));
@@ -128,33 +151,81 @@ async fn main() -> Result<()> {
         return grant_permission_flow().await;
     }
 
-    // Log startup diagnostics
-    lamco_rdp_server::utils::log_startup_diagnostics();
+    lamco_rdp_server::runtime::log_startup_diagnostics();
 
-    // Load configuration
-    let config = Config::load(&args.config).or_else(|e| {
-        tracing::warn!("Failed to load config: {}, using defaults", e);
-        Config::default_config()
-    })?;
-
-    // Override config with CLI args
+    // Apply CLI overrides to config (config already loaded above for logging)
     let config = config.with_overrides(args.listen.clone(), args.port);
 
     info!("Configuration loaded successfully");
     tracing::debug!("Config: {:?}", config);
 
+    let _dbus_connection = if args.dbus_service {
+        info!("Starting D-Bus management interface");
+        let state = lamco_rdp_server::dbus::new_shared_state();
+
+        {
+            let mut s = state.write().await;
+            s.config_path = args.config.clone();
+        }
+
+        match lamco_rdp_server::dbus::start_service(args.system, state).await {
+            Ok(conn) => {
+                info!(
+                    "D-Bus service registered: {}",
+                    if args.system {
+                        lamco_rdp_server::dbus::SYSTEM_SERVICE_NAME
+                    } else {
+                        lamco_rdp_server::dbus::SERVICE_NAME
+                    }
+                );
+                Some(conn)
+            }
+            Err(e) => {
+                tracing::error!("Failed to start D-Bus service: {}", e);
+                return Err(anyhow::anyhow!("D-Bus service failed: {}", e));
+            }
+        }
+    } else {
+        None
+    };
+
     info!("Initializing server");
     let server = match LamcoRdpServer::new(config).await {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("{}", lamco_rdp_server::utils::format_user_error(&e));
+            eprintln!("{}", lamco_rdp_server::runtime::format_user_error(&e));
             return Err(e);
         }
     };
 
     info!("Starting server");
+
+    // Get shutdown channels BEFORE run() consumes the server.
+    // Quit event closes the active RDP connection gracefully (TLS CloseNotify).
+    // Broadcast breaks the outer accept loop and stops clipboard/PipeWire tasks.
+    let shutdown_sender = server.shutdown_sender();
+    let shutdown_broadcast = server.shutdown_broadcast();
+
+    tokio::spawn(async move {
+        if let Ok(()) = tokio::signal::ctrl_c().await {
+            warn!("═══════════════════════════════════════════════════════════");
+            warn!("  Ctrl-C received - Initiating graceful shutdown");
+            warn!("═══════════════════════════════════════════════════════════");
+            warn!("Shutdown sequence:");
+            warn!("  1. Stop accepting new connections");
+            warn!("  2. Shutdown clipboard manager");
+            warn!("  3. Shutdown PipeWire thread");
+            warn!("  4. Close Portal session");
+            warn!("═══════════════════════════════════════════════════════════");
+            let _ = shutdown_sender.send(ironrdp_server::ServerEvent::Quit(
+                "Ctrl-C received".to_string(),
+            ));
+            let _ = shutdown_broadcast.send(());
+        }
+    });
+
     if let Err(e) = server.run().await {
-        eprintln!("{}", lamco_rdp_server::utils::format_user_error(&e));
+        eprintln!("{}", lamco_rdp_server::runtime::format_user_error(&e));
         return Err(e);
     }
 
@@ -164,7 +235,6 @@ async fn main() -> Result<()> {
 
 /// Show detected capabilities
 async fn show_capabilities(format: &str) -> Result<()> {
-    // Probe capabilities
     let caps = lamco_rdp_server::compositor::probe_capabilities()
         .await
         .unwrap_or_else(|e| {
@@ -172,15 +242,12 @@ async fn show_capabilities(format: &str) -> Result<()> {
             std::process::exit(1);
         });
 
-    // Deployment and credential storage
     let deployment = lamco_rdp_server::session::detect_deployment_context();
     let (storage_method, encryption, accessible) =
         lamco_rdp_server::session::detect_credential_storage(&deployment).await;
 
-    // OS release info
     let os_release = lamco_rdp_server::compositor::detect_os_release();
 
-    // Kernel version
     let kernel_version = std::fs::read_to_string("/proc/version")
         .ok()
         .and_then(|v| v.split_whitespace().nth(2).map(String::from))
@@ -215,16 +282,13 @@ fn output_capabilities_json(
 ) {
     use serde_json::json;
 
-    // Distribution string
     let distribution = os_release
         .as_ref()
         .map(|os| format!("{} {}", os.pretty_name, os.version_id))
         .unwrap_or_else(|| "Unknown".to_string());
 
-    // Build services array based on capabilities
     let mut services = Vec::new();
 
-    // Screen capture service
     services.push(json!({
         "id": "screen_capture",
         "name": "Screen Capture",
@@ -254,7 +318,6 @@ fn output_capabilities_json(
         "notes": []
     }));
 
-    // Clipboard
     let clipboard_level = if caps.portal.supports_clipboard {
         "best_effort"
     } else {
@@ -269,7 +332,6 @@ fn output_capabilities_json(
         "notes": if caps.portal.version < 46 { vec!["File transfer requires Portal v46+"] } else { vec![] }
     }));
 
-    // Audio (not yet implemented)
     services.push(json!({
         "id": "audio",
         "name": "Audio Playback",
@@ -279,7 +341,34 @@ fn output_capabilities_json(
         "notes": ["Not yet implemented"]
     }));
 
-    // Count service levels
+    // PAM Authentication - unavailable in Flatpak sandbox
+    let pam_available = !matches!(
+        deployment,
+        lamco_rdp_server::session::DeploymentContext::Flatpak
+    );
+    services.push(json!({
+        "id": "PamAuthentication",
+        "name": "PAM Authentication",
+        "level": if pam_available { "guaranteed" } else { "unavailable" },
+        "wayland_source": null,
+        "rdp_capability": "NLA",
+        "notes": if pam_available {
+            vec![]
+        } else {
+            vec!["PAM blocked by Flatpak sandbox"]
+        }
+    }));
+
+    // No Authentication - always available
+    services.push(json!({
+        "id": "NoAuthentication",
+        "name": "No Authentication",
+        "level": "guaranteed",
+        "wayland_source": null,
+        "rdp_capability": null,
+        "notes": ["Always available, no password required"]
+    }));
+
     let guaranteed = services
         .iter()
         .filter(|s| s["level"] == "guaranteed")
@@ -294,7 +383,6 @@ fn output_capabilities_json(
         .filter(|s| s["level"] == "unavailable")
         .count();
 
-    // Build quirks array
     let quirks: Vec<serde_json::Value> = caps
         .profile
         .quirks
@@ -319,7 +407,6 @@ fn output_capabilities_json(
         Some("bitmap")
     };
 
-    // Deployment context string
     let (deployment_str, linger) = match deployment {
         lamco_rdp_server::session::DeploymentContext::Native => ("native", None),
         lamco_rdp_server::session::DeploymentContext::Flatpak => ("flatpak", None),
@@ -446,7 +533,7 @@ async fn show_persistence_status() -> Result<()> {
     let (storage_method, encryption, accessible) =
         lamco_rdp_server::session::detect_credential_storage(&deployment).await;
 
-    let token_manager = lamco_rdp_server::session::TokenManager::new(storage_method).await?;
+    let token_manager = lamco_rdp_server::session::Tokens::new(storage_method).await?;
 
     let has_token = token_manager.load_token("default").await?.is_some();
 
@@ -480,7 +567,7 @@ async fn clear_tokens() -> Result<()> {
     let (storage_method, _, _) =
         lamco_rdp_server::session::detect_credential_storage(&deployment).await;
 
-    let token_manager = lamco_rdp_server::session::TokenManager::new(storage_method).await?;
+    let token_manager = lamco_rdp_server::session::Tokens::new(storage_method).await?;
 
     token_manager.delete_token("default").await?;
 
@@ -505,10 +592,8 @@ async fn grant_permission_flow() -> Result<()> {
     println!("When the dialog appears, click 'Allow' to grant permission.");
     println!();
 
-    // Load config (use defaults if not found)
     let config = Config::default_config()?;
 
-    // Create server (this will trigger permission dialog)
     info!("Creating server to obtain permission...");
     let _server = LamcoRdpServer::new(config).await?;
 
@@ -585,7 +670,7 @@ async fn run_diagnostics() -> Result<()> {
 
     // Test 7: Token availability
     print!("[  ] Restore token... ");
-    let token_manager = lamco_rdp_server::session::TokenManager::new(method).await?;
+    let token_manager = lamco_rdp_server::session::Tokens::new(method).await?;
     if token_manager.load_token("default").await?.is_some() {
         println!("✅ Available");
     } else {
@@ -610,28 +695,77 @@ async fn run_diagnostics() -> Result<()> {
     Ok(())
 }
 
-fn init_logging(args: &Args) -> Result<()> {
-    use std::fs::File;
+fn init_logging(
+    args: &Args,
+    logging_config: &lamco_rdp_server::config::types::LoggingConfig,
+) -> Result<()> {
+    use std::fs::{self, File};
 
-    let log_level = match args.verbose {
-        0 => "info",
-        1 => "debug",
-        _ => "trace",
+    // CLI -v flag overrides config
+    let log_level = if args.verbose > 0 {
+        match args.verbose {
+            1 => "debug",
+            _ => "trace",
+        }
+    } else {
+        match logging_config.level.as_str() {
+            "trace" | "debug" | "info" | "warn" | "error" => logging_config.level.as_str(),
+            _ => "info", // Invalid value, fallback to info
+        }
     };
 
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-        // Enable lamco crates at requested level, IronRDP protocol at info (debug logs raw packets!)
-        // ironrdp_cliprdr/egfx/dvc at debug for channel troubleshooting
+        // Logging levels by crate:
+        // - lamco_* crates: User-controlled via -v flag or config
+        // - ironrdp_cliprdr/egfx/dvc/server: Same as lamco (channel troubleshooting)
+        // - ironrdp (main): Forced to info (debug logs raw packets - very verbose!)
+        // - ashpd: Same as lamco for portal debugging
+        // - zbus: info level for D-Bus troubleshooting without flooding
+        // - Everything else: warn
         tracing_subscriber::EnvFilter::new(format!(
-            "lamco={level},ironrdp_cliprdr={level},ironrdp_egfx={level},ironrdp_dvc={level},ironrdp_server={level},ironrdp=info,ashpd=info,warn",
+            "lamco={level},lamco_portal={level},lamco_rdp={level},lamco_video={level},\
+             ironrdp_cliprdr={level},ironrdp_egfx={level},ironrdp_dvc={level},ironrdp_server={level},\
+             ironrdp=info,ashpd={level},zbus=info,warn",
             level = log_level
         ))
     });
 
-    // If log file is specified, write to both stdout and file
-    if let Some(log_file_path) = &args.log_file {
-        let file = File::create(log_file_path)?;
+    // CLI --log-file overrides config.log_dir
+    let log_file_path: Option<String> = if let Some(cli_path) = &args.log_file {
+        Some(cli_path.clone())
+    } else if let Some(log_dir) = &logging_config.log_dir {
+        if let Err(e) = fs::create_dir_all(log_dir) {
+            eprintln!("Warning: Cannot create log directory {:?}: {}", log_dir, e);
+            None
+        } else {
+            let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
+            Some(
+                log_dir
+                    .join(format!("lamco-rdp-server-{}.log", timestamp))
+                    .display()
+                    .to_string(),
+            )
+        }
+    } else {
+        None
+    };
 
+    // If log file is specified, write to both stdout and file
+    // Gracefully fall back to stdout-only if file creation fails (e.g. read-only filesystem in Flatpak)
+    let log_file = log_file_path
+        .as_ref()
+        .and_then(|path| match File::create(path) {
+            Ok(f) => Some((f, path.clone())),
+            Err(e) => {
+                eprintln!(
+                    "Warning: Cannot create log file {:?}: {} — logging to console only",
+                    path, e
+                );
+                None
+            }
+        });
+
+    if let Some((file, ref log_file_path)) = log_file {
         match args.log_format.as_str() {
             "json" => {
                 tracing_subscriber::registry()
@@ -683,7 +817,6 @@ fn init_logging(args: &Args) -> Result<()> {
         }
         info!("Logging to file: {}", log_file_path);
     } else {
-        // Stdout only
         match args.log_format.as_str() {
             "json" => {
                 tracing_subscriber::registry()

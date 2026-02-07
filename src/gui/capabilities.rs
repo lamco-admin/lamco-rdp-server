@@ -13,10 +13,8 @@ use crate::gui::state::{
 
 /// Detect system capabilities by running the server binary
 pub fn detect_capabilities() -> Result<DetectedCapabilities, String> {
-    // Find the server binary
     let server_binary = find_server_binary()?;
 
-    // Run with --show-capabilities --format=json
     let output = Command::new(&server_binary)
         .arg("--show-capabilities")
         .arg("--format=json")
@@ -30,7 +28,6 @@ pub fn detect_capabilities() -> Result<DetectedCapabilities, String> {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    // Parse JSON output
     parse_capabilities_json(&stdout)
 }
 
@@ -64,7 +61,6 @@ fn parse_capabilities_json(json_str: &str) -> Result<DetectedCapabilities, Strin
     let json: serde_json::Value =
         serde_json::from_str(json_str).map_err(|e| format!("Failed to parse JSON: {}", e))?;
 
-    // Extract system information
     let system = json
         .get("system")
         .ok_or("Missing 'system' section in capabilities")?;
@@ -92,7 +88,6 @@ fn parse_capabilities_json(json_str: &str) -> Result<DetectedCapabilities, Strin
         .unwrap_or("Unknown")
         .to_string();
 
-    // Extract portal information
     let portals = json.get("portals").unwrap_or(&serde_json::Value::Null);
 
     let portal_version = portals.get("version").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
@@ -118,7 +113,6 @@ fn parse_capabilities_json(json_str: &str) -> Result<DetectedCapabilities, Strin
         .and_then(|v| v.as_u64())
         .map(|v| v as u32);
 
-    // Extract deployment context
     let deployment = json.get("deployment").unwrap_or(&serde_json::Value::Null);
 
     let deployment_context = parse_deployment_context(
@@ -136,7 +130,6 @@ fn parse_capabilities_json(json_str: &str) -> Result<DetectedCapabilities, Strin
             .unwrap_or("/run/user/1000"),
     );
 
-    // Extract quirks
     let quirks = json
         .get("quirks")
         .and_then(|v| v.as_array())
@@ -157,7 +150,6 @@ fn parse_capabilities_json(json_str: &str) -> Result<DetectedCapabilities, Strin
         })
         .unwrap_or_default();
 
-    // Extract persistence info
     let persistence = json.get("persistence").unwrap_or(&serde_json::Value::Null);
 
     let persistence_strategy = persistence
@@ -176,14 +168,12 @@ fn parse_capabilities_json(json_str: &str) -> Result<DetectedCapabilities, Strin
         })
         .unwrap_or_default();
 
-    // Extract services
     let services: Vec<ServiceInfo> = json
         .get("services")
         .and_then(|v| v.as_array())
         .map(|arr| arr.iter().filter_map(parse_service_info).collect())
         .unwrap_or_default();
 
-    // Count service levels
     let guaranteed_count = services
         .iter()
         .filter(|s| s.level == ServiceLevel::Guaranteed)
@@ -201,7 +191,6 @@ fn parse_capabilities_json(json_str: &str) -> Result<DetectedCapabilities, Strin
         .filter(|s| s.level == ServiceLevel::Unavailable)
         .count();
 
-    // Extract performance hints
     let hints = json.get("hints").unwrap_or(&serde_json::Value::Null);
 
     let recommended_fps = hints
@@ -218,6 +207,10 @@ fn parse_capabilities_json(json_str: &str) -> Result<DetectedCapabilities, Strin
         .get("zero_copy")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+
+    // Derive available auth methods from services
+    // PAM is available if PamAuthentication service is at least Degraded level
+    let available_auth_methods = derive_auth_methods(&services);
 
     Ok(DetectedCapabilities {
         compositor_name,
@@ -242,6 +235,7 @@ fn parse_capabilities_json(json_str: &str) -> Result<DetectedCapabilities, Strin
         recommended_fps,
         recommended_codec,
         zero_copy_available,
+        available_auth_methods,
         detected_at: SystemTime::now(),
     })
 }
@@ -258,6 +252,29 @@ fn parse_deployment_context(context: &str, linger: Option<bool>) -> DeploymentCo
         "initd" | "init.d" => DeploymentContext::InitD,
         _ => DeploymentContext::Unknown,
     }
+}
+
+/// Derive available authentication methods from services list
+///
+/// Checks PamAuthentication service level to determine if PAM is available.
+/// "none" is always available and is the default (listed first).
+fn derive_auth_methods(services: &[ServiceInfo]) -> Vec<String> {
+    let mut methods = Vec::new();
+
+    // "none" is always available and is the default
+    methods.push("none".to_string());
+
+    // Check if PAM authentication is available (at least Degraded level)
+    let pam_available = services.iter().any(|s| {
+        (s.id == "PamAuthentication" || s.id == "pam_authentication")
+            && s.level != ServiceLevel::Unavailable
+    });
+
+    if pam_available {
+        methods.push("pam".to_string());
+    }
+
+    methods
 }
 
 /// Parse a single service info from JSON
@@ -312,7 +329,6 @@ pub fn export_capabilities(
 ) -> Result<(), String> {
     let json = capabilities_to_json(caps)?;
 
-    // Ensure parent directory exists
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("Failed to create directory: {}", e))?;
@@ -374,6 +390,9 @@ fn capabilities_to_json(caps: &DetectedCapabilities) -> Result<String, String> {
             "recommended_fps": caps.recommended_fps,
             "recommended_codec": caps.recommended_codec,
             "zero_copy": caps.zero_copy_available,
+        },
+        "authentication": {
+            "available_methods": caps.available_auth_methods,
         },
         "detected_at": format!("{:?}", caps.detected_at),
     });
@@ -452,6 +471,7 @@ pub fn detect_capabilities_mock() -> DetectedCapabilities {
         recommended_fps: Some(30),
         recommended_codec: Some("avc420".to_string()),
         zero_copy_available: true,
+        available_auth_methods: vec!["pam".to_string(), "none".to_string()],
         detected_at: SystemTime::now(),
     }
 }

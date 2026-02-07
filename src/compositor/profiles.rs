@@ -72,6 +72,23 @@ pub enum Quirk {
     /// - RHEL 9.x (Portal v1, GNOME 40)
     /// - Any system with Portal < version 2
     ClipboardUnavailable,
+
+    /// Portal clipboard operations crash xdg-desktop-portal-kde
+    ///
+    /// This quirk is set for KDE Plasma when Klipper is active. The portal's
+    /// clipboard handling crashes in QMimeData::data() during Wayland callbacks,
+    /// likely due to race conditions with Klipper's aggressive ownership takeover.
+    ///
+    /// When this quirk is present, clipboard is disabled until Klipper cooperation
+    /// mode is implemented (v1.3.0+). The crash occurs in portal-kde, not our code,
+    /// but our SetSelection operations trigger it.
+    ///
+    /// Known affected platforms:
+    /// - KDE Plasma 6.x with Klipper enabled
+    /// - KDE Plasma 5.x with Klipper enabled
+    ///
+    /// See: docs/analysis/KDE-PORTAL-CLIPBOARD-CRASH-ANALYSIS.md
+    KdePortalClipboardUnstable,
 }
 
 impl Quirk {
@@ -92,6 +109,9 @@ impl Quirk {
             Self::ColorSpaceQuirk => "Color space may be incorrect",
             Self::Avc444Unreliable => "AVC444 codec produces artifacts (use AVC420)",
             Self::ClipboardUnavailable => "Clipboard sync not available (Portal v1)",
+            Self::KdePortalClipboardUnstable => {
+                "Portal clipboard crashes on KDE (Klipper cooperation pending)"
+            }
         }
     }
 }
@@ -227,6 +247,27 @@ impl CompositorProfile {
             .map(|major| major >= 6)
             .unwrap_or(false);
 
+        // Build quirks list
+        let mut quirks = if is_plasma6 {
+            vec![]
+        } else {
+            vec![Quirk::MultiMonitorPositionQuirk]
+        };
+
+        // v1.3.0: Klipper cooperation mode implemented - clipboard enabled
+        // Cooperation strategy works WITH Klipper via bidirectional D-Bus sync
+        // instead of fighting for ownership. See docs/decisions/CLIPBOARD-KDE-STRATEGIC-DECISION.md
+        //
+        // Old behavior (v1.2.11): Clipboard disabled due to crashes
+        // New behavior (v1.3.0): Cooperation mode handles Klipper interaction
+        //
+        // quirks.push(Quirk::KdePortalClipboardUnstable);  // REMOVED - cooperation handles this
+
+        tracing::info!(
+            "KDE Plasma {} detected - clipboard enabled with cooperation mode",
+            version.unwrap_or("unknown")
+        );
+
         Self {
             compositor: CompositorType::Kde {
                 version: version.map(String::from),
@@ -242,11 +283,7 @@ impl CompositorProfile {
             recommended_buffer_type: BufferType::DmaBuf,
             supports_damage_hints: is_plasma6, // Plasma 6 has improved damage
             supports_explicit_sync: is_plasma6,
-            quirks: if is_plasma6 {
-                vec![]
-            } else {
-                vec![Quirk::MultiMonitorPositionQuirk]
-            },
+            quirks,
             recommended_fps_cap: 30,
             portal_timeout_ms: 30000,
         }

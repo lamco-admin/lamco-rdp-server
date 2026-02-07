@@ -60,12 +60,10 @@ impl MutterSessionManager {
     pub async fn new() -> Result<Self> {
         info!("Initializing Mutter session manager");
 
-        // Connect to session D-Bus
         let connection = zbus::Connection::session()
             .await
             .context("Failed to connect to D-Bus session")?;
 
-        // Verify Mutter APIs are available
         if !super::is_mutter_api_available().await {
             return Err(anyhow!(
                 "Mutter ScreenCast and RemoteDesktop APIs not available"
@@ -95,7 +93,6 @@ impl MutterSessionManager {
     ) -> Result<MutterSessionHandle> {
         info!("Creating Mutter session (ScreenCast + RemoteDesktop)");
 
-        // Create ScreenCast session
         let screencast_proxy = MutterScreenCast::new(&self.connection).await?;
 
         let sc_properties = HashMap::new();
@@ -109,11 +106,9 @@ impl MutterSessionManager {
             screencast_session_path
         );
 
-        // Create session proxy
         let session_proxy =
             MutterScreenCastSession::new(&self.connection, screencast_session_path.clone()).await?;
 
-        // Record monitor or virtual screen
         let stream_path = if let Some(connector) = monitor_connector {
             info!("Recording monitor: {}", connector);
 
@@ -128,7 +123,6 @@ impl MutterSessionManager {
         } else {
             info!("Recording virtual monitor (headless mode)");
 
-            // For virtual monitor, we can specify resolution
             let mut properties = HashMap::new();
             properties.insert("cursor-mode".to_string(), Value::new(2u32));
             // Could add: width, height for virtual monitor
@@ -159,7 +153,6 @@ impl MutterSessionManager {
 
         info!("Mutter ScreenCast session started successfully");
 
-        // Wait for PipeWireStreamAdded signal with timeout
         use futures_util::stream::StreamExt;
         let node_id =
             match tokio::time::timeout(tokio::time::Duration::from_secs(5), signal_stream.next())
@@ -194,7 +187,6 @@ impl MutterSessionManager {
             position_y: params.position_y.unwrap_or(0),
         };
 
-        // Log dimension source
         if params.width.is_none() || params.height.is_none() {
             info!(
                 "Stream dimensions not provided by Mutter, using defaults: {}x{}",
@@ -212,7 +204,6 @@ impl MutterSessionManager {
             stream_info.node_id
         );
 
-        // Create RemoteDesktop session for input injection
         let rd_proxy = MutterRemoteDesktop::new(&self.connection).await?;
 
         // RemoteDesktop CreateSession takes NO arguments on this GNOME version
@@ -226,7 +217,6 @@ impl MutterSessionManager {
             rd_session_path
         );
 
-        // Start RemoteDesktop session
         let rd_session_proxy =
             MutterRemoteDesktopSession::new(&self.connection, rd_session_path.clone()).await?;
 
@@ -237,7 +227,6 @@ impl MutterSessionManager {
 
         info!("Mutter RemoteDesktop session started successfully");
 
-        // Create session handle
         let handle = MutterSessionHandle {
             screencast_session: screencast_session_path,
             remote_desktop_session: rd_session_path,
@@ -279,12 +268,10 @@ impl MutterSessionHandle {
     pub async fn stop(&self) -> Result<()> {
         info!("Stopping Mutter sessions");
 
-        // Stop ScreenCast
         if let Ok(sc_session) = self.screencast_session().await {
             sc_session.stop().await.ok();
         }
 
-        // Stop RemoteDesktop
         if let Ok(rd_session) = self.remote_desktop_session().await {
             rd_session.stop().await.ok();
         }

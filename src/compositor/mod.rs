@@ -69,7 +69,6 @@ pub fn is_wayland_session() -> bool {
             .unwrap_or(false)
 }
 
-/// Get the current Wayland display name
 pub fn wayland_display() -> Option<String> {
     std::env::var("WAYLAND_DISPLAY").ok()
 }

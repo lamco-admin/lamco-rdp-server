@@ -108,51 +108,34 @@ enum SecretServiceBackend {
     KeePassXC,
 }
 
-/// Detect deployment context
-///
-/// Automatically determines how the application is being run:
-/// - Flatpak sandbox
-/// - systemd user service
-/// - systemd system service
-/// - initd/OpenRC
-/// - Native package
 pub fn detect_deployment_context() -> DeploymentContext {
     debug!("Detecting deployment context...");
 
-    // Check if running in Flatpak
     if Path::new("/.flatpak-info").exists() {
         info!("Detected Flatpak deployment");
         return DeploymentContext::Flatpak;
     }
 
-    // Check if running as systemd service
+    // systemd sets INVOCATION_ID for all units
     if let Ok(_invocation_id) = std::env::var("INVOCATION_ID") {
-        // systemd sets INVOCATION_ID for all units
-
-        // Check if user or system service
+        // XDG_RUNTIME_DIR distinguishes user vs system service
         if std::env::var("XDG_RUNTIME_DIR").is_ok() {
-            // User service has XDG_RUNTIME_DIR
-
-            // Check if linger is enabled
             let linger_enabled = check_linger_enabled();
 
             info!("Detected systemd user service (linger: {})", linger_enabled);
             return DeploymentContext::SystemdUser { linger_enabled };
         } else {
-            // System service lacks user environment
             info!("Detected systemd system service");
             return DeploymentContext::SystemdSystem;
         }
     }
 
-    // Check for systemd presence (even if not running as service)
     if Path::new("/run/systemd/system").exists() {
         debug!("systemd available but not running as service");
         // Running directly, not as service
         return DeploymentContext::Native;
     }
 
-    // Check for OpenRC
     if Path::new("/run/openrc").exists() {
         info!("Detected OpenRC init system");
         return DeploymentContext::InitD;
@@ -163,11 +146,9 @@ pub fn detect_deployment_context() -> DeploymentContext {
     DeploymentContext::Native
 }
 
-/// Check if loginctl enable-linger is active for current user
 fn check_linger_enabled() -> bool {
     let uid = unsafe { libc::getuid() };
 
-    // Try to get username
     let username = std::env::var("USER")
         .or_else(|_| std::env::var("LOGNAME"))
         .unwrap_or_else(|_| uid.to_string());
@@ -177,8 +158,6 @@ fn check_linger_enabled() -> bool {
     Path::new(&linger_path).exists()
 }
 
-/// Detect best available credential storage method
-///
 /// Returns: (storage method, encryption type, is accessible)
 pub async fn detect_credential_storage(
     deployment: &DeploymentContext,
@@ -247,7 +226,6 @@ pub async fn detect_credential_storage(
     )
 }
 
-/// Flatpak-specific credential storage detection
 async fn detect_flatpak_credential_storage() -> (CredentialStorageMethod, EncryptionType, bool) {
     debug!("Detecting Flatpak credential storage...");
 
@@ -271,11 +249,9 @@ async fn detect_flatpak_credential_storage() -> (CredentialStorageMethod, Encryp
     )
 }
 
-/// Check if TPM 2.0 is available via systemd-creds
 fn check_tpm2_available() -> Result<bool> {
     debug!("Checking for TPM 2.0 availability...");
 
-    // Check via systemd-creds has-tpm2 (systemd 250+)
     let output = Command::new("systemd-creds")
         .arg("has-tpm2")
         .output()
@@ -288,9 +264,7 @@ fn check_tpm2_available() -> Result<bool> {
     Ok(has_tpm)
 }
 
-/// Check if systemd-creds is accessible
 fn check_systemd_creds_accessible() -> bool {
-    // Try to run systemd-creds --help
     Command::new("systemd-creds")
         .arg("--help")
         .output()
@@ -298,7 +272,6 @@ fn check_systemd_creds_accessible() -> bool {
         .unwrap_or(false)
 }
 
-/// Detect Secret Service backend
 async fn detect_secret_service() -> Result<SecretServiceBackend> {
     debug!("Detecting Secret Service backend...");
 
@@ -306,7 +279,6 @@ async fn detect_secret_service() -> Result<SecretServiceBackend> {
         .await
         .context("Failed to connect to D-Bus session")?;
 
-    // Check if Secret Service is available
     let proxy = zbus::fdo::DBusProxy::new(&connection)
         .await
         .context("Failed to create D-Bus proxy")?;
@@ -323,7 +295,6 @@ async fn detect_secret_service() -> Result<SecretServiceBackend> {
         return Err(anyhow!("Secret Service not available on D-Bus"));
     }
 
-    // Detect which backend is providing it
     if names.iter().any(|n| n.starts_with("org.gnome.keyring")) {
         debug!("Detected GNOME Keyring");
         Ok(SecretServiceBackend::GnomeKeyring)
@@ -340,26 +311,19 @@ async fn detect_secret_service() -> Result<SecretServiceBackend> {
     }
 }
 
-/// Check if Secret Service is unlocked and accessible
 async fn check_secret_service_unlocked() -> bool {
-    // Use the actual Secret Service client to check
     use super::secret_service::AsyncSecretServiceClient;
 
     match AsyncSecretServiceClient::connect().await {
-        Ok(client) => {
-            // Try a simple operation to verify it's unlocked
-            // If locked, this will fail
-            tokio::task::spawn_blocking(move || {
-                super::secret_service::check_secret_service_unlocked()
-            })
-            .await
-            .unwrap_or(false)
-        }
+        Ok(client) => tokio::task::spawn_blocking(move || {
+            super::secret_service::check_secret_service_unlocked()
+        })
+        .await
+        .unwrap_or(false),
         Err(_) => false,
     }
 }
 
-/// Check if Flatpak Secret Portal is available
 async fn check_flatpak_secret_portal_available() -> bool {
     debug!("Checking for Flatpak Secret Portal...");
 

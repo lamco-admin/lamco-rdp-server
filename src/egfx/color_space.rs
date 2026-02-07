@@ -218,17 +218,6 @@ impl ColorSpaceConfig {
         matrix_coeff: MatrixCoefficients::BT709,
     };
 
-    /// Auto-select configuration based on resolution and compatibility mode
-    ///
-    /// # Arguments
-    ///
-    /// * `width` - Frame width in pixels
-    /// * `height` - Frame height in pixels
-    /// * `openh264_compat` - If true, use OpenH264-compatible settings
-    ///
-    /// # Returns
-    ///
-    /// Appropriate ColorSpaceConfig for the given parameters
     pub fn auto_select(width: u32, height: u32, openh264_compat: bool) -> Self {
         if openh264_compat {
             // Always use OpenH264-compatible for consistency with AVC420
@@ -242,14 +231,6 @@ impl ColorSpaceConfig {
         }
     }
 
-    /// Create from string configuration values
-    ///
-    /// # Arguments
-    ///
-    /// * `color_space` - "auto", "openh264", "bt709", "bt601", "srgb"
-    /// * `color_range` - "auto", "limited", "full"
-    /// * `width` - Frame width for auto selection
-    /// * `height` - Frame height for auto selection
     pub fn from_config(color_space: &str, color_range: &str, width: u32, height: u32) -> Self {
         let base = match color_space.to_lowercase().as_str() {
             "openh264" => Self::OPENH264_COMPATIBLE,
@@ -293,13 +274,11 @@ impl ColorSpaceConfig {
         self.matrix_coeff as u8
     }
 
-    /// Check if this config uses limited range
     #[inline]
     pub const fn is_limited_range(&self) -> bool {
         matches!(self.range, ColorRange::Limited)
     }
 
-    /// Get a human-readable description
     pub fn description(&self) -> String {
         let matrix_name = match self.matrix {
             ColorMatrix::BT601 => "BT.601",

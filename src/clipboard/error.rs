@@ -1,5 +1,9 @@
 //! Clipboard Error Types
 //!
+//! **Execution Path:** N/A (error type definitions)
+//! **Status:** Active (v1.0.0+)
+//! **Platform:** Universal
+//!
 //! Server-specific error handling for the clipboard synchronization module.
 //!
 //! This module extends the base errors from [`lamco_clipboard_core::ClipboardError`]
@@ -64,7 +68,6 @@ pub enum ClipboardError {
 }
 
 impl ClipboardError {
-    /// Create from IO error
     pub fn io(e: std::io::Error) -> Self {
         Self::Core(CoreClipboardError::Io(e))
     }
@@ -94,7 +97,6 @@ pub enum ErrorType {
 /// Classify error for recovery strategy selection
 pub fn classify_error(error: &ClipboardError) -> ErrorType {
     match error {
-        // Server-specific errors
         ClipboardError::PortalError(_) | ClipboardError::DBus(_) => ErrorType::Portal,
         ClipboardError::InvalidState(_) => ErrorType::State,
         ClipboardError::ChannelSend | ClipboardError::ChannelReceive => ErrorType::Communication,
@@ -104,38 +106,30 @@ pub fn classify_error(error: &ClipboardError) -> ErrorType {
         ClipboardError::NotInitialized => ErrorType::State,
         ClipboardError::Unknown(_) => ErrorType::Unknown,
 
-        // Core library errors (wrapped)
         ClipboardError::Core(core_err) => classify_core_error(core_err),
     }
 }
 
-/// Classify core library errors
 fn classify_core_error(error: &CoreClipboardError) -> ErrorType {
     match error {
-        // Format conversion errors
         CoreClipboardError::UnsupportedFormat(_) | CoreClipboardError::FormatConversion(_) => {
             ErrorType::FormatConversion
         }
 
-        // Image conversion errors (always present in library)
         CoreClipboardError::ImageDecode(_) | CoreClipboardError::ImageEncode(_) => {
             ErrorType::FormatConversion
         }
 
-        // Data validation errors
         CoreClipboardError::InvalidUtf8
         | CoreClipboardError::InvalidUtf16
         | CoreClipboardError::DataSizeExceeded { .. } => ErrorType::DataValidation,
 
-        // Transfer errors
         CoreClipboardError::TransferTimeout(_) | CoreClipboardError::TransferCancelled => {
             ErrorType::Transfer
         }
 
-        // Backend errors
         CoreClipboardError::Backend(_) => ErrorType::Communication,
 
-        // Loop detection
         CoreClipboardError::LoopDetected => ErrorType::Loop,
 
         // Catch-all for any other variants
@@ -164,7 +158,6 @@ pub struct ErrorContext {
 }
 
 impl ErrorContext {
-    /// Create new error context
     pub fn new() -> Self {
         Self {
             format_id: None,
@@ -175,31 +168,26 @@ impl ErrorContext {
         }
     }
 
-    /// Set format ID
     pub fn with_format_id(mut self, id: u32) -> Self {
         self.format_id = Some(id);
         self
     }
 
-    /// Set MIME type
     pub fn with_mime_type(mut self, mime_type: impl Into<String>) -> Self {
         self.mime_type = Some(mime_type.into());
         self
     }
 
-    /// Set data size
     pub fn with_data_size(mut self, size: usize) -> Self {
         self.data_size = Some(size);
         self
     }
 
-    /// Set attempt number
     pub fn with_attempt(mut self, attempt: u32) -> Self {
         self.attempt = attempt;
         self
     }
 
-    /// Set details
     pub fn with_details(mut self, details: impl Into<String>) -> Self {
         self.details = details.into();
         self
@@ -265,7 +253,6 @@ impl Default for RetryConfig {
 }
 
 impl RetryConfig {
-    /// Calculate delay for given attempt
     pub fn delay_for_attempt(&self, attempt: u32) -> std::time::Duration {
         let delay = self.initial_delay_ms * (self.backoff_multiplier as u64).pow(attempt);
         let delay = delay.min(self.max_delay_ms);
@@ -293,7 +280,6 @@ pub fn recovery_action(error: &ClipboardError, context: &ErrorContext) -> Recove
         }
 
         ErrorType::DataValidation => {
-            // Check for DataSizeExceeded from core errors
             if let ClipboardError::Core(CoreClipboardError::DataSizeExceeded { actual, max }) =
                 error
             {

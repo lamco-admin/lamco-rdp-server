@@ -90,7 +90,6 @@ pub enum RdpCapability {
 }
 
 impl RdpCapability {
-    /// Create EGFX capability with AVC420 only
     pub fn egfx_avc420() -> Self {
         Self::EgfxCodec {
             avc444: false,
@@ -100,7 +99,6 @@ impl RdpCapability {
         }
     }
 
-    /// Create EGFX capability with full codec support
     pub fn egfx_full() -> Self {
         Self::EgfxCodec {
             avc444: true,
@@ -110,7 +108,6 @@ impl RdpCapability {
         }
     }
 
-    /// Create cursor channel with metadata support
     pub fn cursor_metadata() -> Self {
         Self::CursorChannel {
             metadata: true,
@@ -119,7 +116,6 @@ impl RdpCapability {
         }
     }
 
-    /// Create cursor channel without metadata (painted only)
     pub fn cursor_painted() -> Self {
         Self::CursorChannel {
             metadata: false,
@@ -128,7 +124,6 @@ impl RdpCapability {
         }
     }
 
-    /// Create input capability
     pub fn input_full() -> Self {
         Self::InputCapability {
             keyboard: true,
@@ -138,7 +133,6 @@ impl RdpCapability {
         }
     }
 
-    /// Create clipboard capability
     pub fn clipboard_standard(max_size: u64) -> Self {
         Self::ClipboardExtended {
             file_copy: false,
@@ -151,7 +145,6 @@ impl RdpCapability {
         }
     }
 
-    /// Get short name for logging
     pub fn short_name(&self) -> &'static str {
         match self {
             Self::EgfxCodec { .. } => "egfx",

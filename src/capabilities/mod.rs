@@ -21,14 +21,14 @@
 //! # Usage
 //!
 //! ```ignore
-//! use lamco_rdp_server::capabilities::CapabilityManager;
+//! use lamco_rdp_server::capabilities::Capabilities;
 //!
 //! // Initialize at startup
-//! CapabilityManager::initialize().await?;
+//! Capabilities::initialize().await?;
 //!
 //! // Check capabilities
-//! let mgr = CapabilityManager::global();
-//! let state = mgr.read().await;
+//! let caps = Capabilities::global();
+//! let state = caps.read().await;
 //!
 //! if state.state.minimum_viable.can_operate_server() {
 //!     // Start server
@@ -50,13 +50,12 @@ pub use fallback::{
     AllStrategiesFailed, AttemptResult, FallbackChain, FallbackStrategy, InstantiationError,
     ProbeError, StrategyProbe,
 };
-pub use manager::CapabilityManager;
+pub use manager::Capabilities;
 pub use state::{
     BlockingIssue, Degradation, MinimumViableConfig, ServiceLevel, Subsystem, SystemCapabilities,
     UserImpact,
 };
 
-// Re-export probe results
 pub use probes::{
     DisplayCapabilities, EncodingCapabilities, InputCapabilities, NetworkCapabilities,
     RenderingCapabilities, RenderingRecommendation, StorageCapabilities,

@@ -37,7 +37,6 @@ pub enum SystemHealth {
 }
 
 impl SystemHealth {
-    /// Get emoji representation
     pub fn emoji(&self) -> &'static str {
         match self {
             Self::Healthy => "💚",
@@ -76,12 +75,10 @@ pub struct Recommendation {
     pub benefit: String,
 }
 
-/// Run comprehensive diagnostics
 pub fn run_diagnostics(caps: &SystemCapabilities) -> DiagnosticReport {
     let mut subsystems = Vec::new();
     let mut recommendations = Vec::new();
 
-    // Display subsystem
     let display_report = SubsystemReport {
         subsystem: Subsystem::Display,
         service_level: caps.display.service_level,
@@ -124,7 +121,6 @@ pub fn run_diagnostics(caps: &SystemCapabilities) -> DiagnosticReport {
         });
     }
 
-    // Encoding subsystem
     let encoding_report = SubsystemReport {
         subsystem: Subsystem::Encoding,
         service_level: caps.encoding.service_level,
@@ -164,7 +160,6 @@ pub fn run_diagnostics(caps: &SystemCapabilities) -> DiagnosticReport {
         });
     }
 
-    // Input subsystem
     let input_report = SubsystemReport {
         subsystem: Subsystem::Input,
         service_level: caps.input.service_level,
@@ -183,7 +178,6 @@ pub fn run_diagnostics(caps: &SystemCapabilities) -> DiagnosticReport {
     };
     subsystems.push(input_report);
 
-    // Storage subsystem
     let storage_report = SubsystemReport {
         subsystem: Subsystem::Storage,
         service_level: caps.storage.service_level,
@@ -202,7 +196,6 @@ pub fn run_diagnostics(caps: &SystemCapabilities) -> DiagnosticReport {
     };
     subsystems.push(storage_report);
 
-    // Rendering subsystem
     let rendering_report = SubsystemReport {
         subsystem: Subsystem::Rendering,
         service_level: caps.rendering.service_level,
@@ -254,7 +247,6 @@ pub fn run_diagnostics(caps: &SystemCapabilities) -> DiagnosticReport {
         }
     }
 
-    // Network subsystem
     let network_report = SubsystemReport {
         subsystem: Subsystem::Network,
         service_level: caps.network.service_level,
@@ -272,7 +264,6 @@ pub fn run_diagnostics(caps: &SystemCapabilities) -> DiagnosticReport {
     };
     subsystems.push(network_report);
 
-    // Determine overall health
     let health = if caps.blocking_issues.is_empty() && caps.degradations.is_empty() {
         SystemHealth::Healthy
     } else if caps.blocking_issues.is_empty() {
@@ -283,7 +274,6 @@ pub fn run_diagnostics(caps: &SystemCapabilities) -> DiagnosticReport {
         SystemHealth::Critical
     };
 
-    // Sort recommendations by priority
     recommendations.sort_by(|a, b| b.priority.cmp(&a.priority));
 
     DiagnosticReport {
@@ -296,7 +286,6 @@ pub fn run_diagnostics(caps: &SystemCapabilities) -> DiagnosticReport {
 }
 
 impl DiagnosticReport {
-    /// Format as human-readable text
     pub fn format_text(&self) -> String {
         let mut output = String::new();
 

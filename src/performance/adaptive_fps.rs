@@ -35,7 +35,6 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 use tracing::debug;
 
-/// Configuration for adaptive FPS controller
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdaptiveFpsConfig {
     /// Enable adaptive FPS (false = fixed FPS)
@@ -119,7 +118,6 @@ impl Default for AdaptiveFpsConfig {
     }
 }
 
-/// Damage ratio sample with timestamp
 #[derive(Debug, Clone, Copy)]
 pub struct DamageRatio {
     /// Ratio of damaged pixels (0.0 - 1.0)
@@ -128,7 +126,6 @@ pub struct DamageRatio {
     pub timestamp: Instant,
 }
 
-/// Activity level classification
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActivityLevel {
     /// Screen is static (< low_threshold damage)
@@ -142,7 +139,6 @@ pub enum ActivityLevel {
 }
 
 impl ActivityLevel {
-    /// Get FPS multiplier for this activity level
     pub fn fps_multiplier(&self) -> f32 {
         match self {
             Self::Static => 0.0, // Use min_fps
@@ -158,46 +154,28 @@ impl ActivityLevel {
 /// Tracks screen activity and dynamically adjusts target FPS
 /// to optimize bandwidth and CPU usage.
 pub struct AdaptiveFpsController {
-    /// Configuration
     config: AdaptiveFpsConfig,
-
-    /// Current target FPS
     current_fps: u32,
-
-    /// Current activity level
     activity_level: ActivityLevel,
-
-    /// Recent damage history
     damage_history: VecDeque<DamageRatio>,
-
-    /// Last frame capture time
     last_frame_time: Instant,
-
-    /// Frames at current activity level (for ramp smoothing)
+    /// For ramp smoothing between activity levels
     frames_at_level: usize,
-
-    /// Statistics
     stats: AdaptiveFpsStats,
 }
 
-/// Statistics for monitoring
 #[derive(Debug, Clone, Default)]
 pub struct AdaptiveFpsStats {
-    /// Total frames processed
     pub frames_processed: u64,
-    /// Frames skipped due to FPS throttling
     pub frames_skipped: u64,
-    /// Time spent at each activity level
     pub time_at_static: Duration,
     pub time_at_low: Duration,
     pub time_at_medium: Duration,
     pub time_at_high: Duration,
-    /// Last activity level change
     pub last_level_change: Option<Instant>,
 }
 
 impl AdaptiveFpsController {
-    /// Create a new adaptive FPS controller
     pub fn new(config: AdaptiveFpsConfig) -> Self {
         let current_fps = if config.enabled {
             config.max_fps
@@ -216,9 +194,7 @@ impl AdaptiveFpsController {
         }
     }
 
-    /// Update with new frame damage information
-    ///
-    /// Call this after damage detection for each frame.
+    /// Call after damage detection for each frame.
     pub fn update(&mut self, damage_ratio: f32) {
         if !self.config.enabled {
             return;
@@ -226,21 +202,17 @@ impl AdaptiveFpsController {
 
         let now = Instant::now();
 
-        // Add to history
         self.damage_history.push_back(DamageRatio {
             ratio: damage_ratio,
             timestamp: now,
         });
 
-        // Limit history size
         while self.damage_history.len() > self.config.history_size {
             self.damage_history.pop_front();
         }
 
-        // Calculate average damage
         let avg_damage = self.average_damage();
 
-        // Determine target activity level
         let target_level = if avg_damage > self.config.high_activity_threshold {
             ActivityLevel::High
         } else if avg_damage > self.config.medium_activity_threshold {
@@ -251,7 +223,6 @@ impl AdaptiveFpsController {
             ActivityLevel::Static
         };
 
-        // Apply ramping for smooth transitions
         let new_level = self.apply_ramping(target_level);
 
         if new_level != self.activity_level {
@@ -265,7 +236,6 @@ impl AdaptiveFpsController {
             self.frames_at_level = 0;
         }
 
-        // Update time-at-level stats
         if let Some(last_change) = self.stats.last_level_change {
             let elapsed = now.duration_since(last_change);
             match self.activity_level {
@@ -279,15 +249,11 @@ impl AdaptiveFpsController {
         self.activity_level = new_level;
         self.frames_at_level += 1;
 
-        // Calculate target FPS based on activity level
         self.current_fps = self.calculate_target_fps();
 
         self.stats.frames_processed += 1;
     }
 
-    /// Check if we should capture this frame based on current FPS
-    ///
-    /// Returns `true` if enough time has elapsed since last frame.
     pub fn should_capture_frame(&mut self) -> bool {
         if !self.config.enabled {
             // When disabled, always capture at max FPS timing
@@ -312,32 +278,26 @@ impl AdaptiveFpsController {
         }
     }
 
-    /// Get current target FPS
     pub fn current_fps(&self) -> u32 {
         self.current_fps
     }
 
-    /// Get current activity level
     pub fn activity_level(&self) -> ActivityLevel {
         self.activity_level
     }
 
-    /// Get statistics
     pub fn stats(&self) -> &AdaptiveFpsStats {
         &self.stats
     }
 
-    /// Reset statistics
     pub fn reset_stats(&mut self) {
         self.stats = AdaptiveFpsStats::default();
     }
 
-    /// Check if adaptive FPS is enabled
     pub fn is_enabled(&self) -> bool {
         self.config.enabled
     }
 
-    /// Enable/disable adaptive FPS at runtime
     pub fn set_enabled(&mut self, enabled: bool) {
         self.config.enabled = enabled;
         if !enabled {
@@ -372,7 +332,6 @@ impl AdaptiveFpsController {
         // Slow ramp-down (don't drop FPS too quickly)
         if target_level < self.activity_level {
             if self.frames_at_level >= self.config.ramp_down_frames {
-                // Decrease one level at a time
                 return match self.activity_level {
                     ActivityLevel::High => ActivityLevel::Medium,
                     ActivityLevel::Medium => ActivityLevel::Low,
@@ -382,7 +341,6 @@ impl AdaptiveFpsController {
             }
         }
 
-        // Stay at current level
         self.activity_level
     }
 

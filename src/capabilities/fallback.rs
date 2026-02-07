@@ -23,7 +23,6 @@ pub struct StrategyProbe {
 }
 
 impl StrategyProbe {
-    /// Create a viable probe result
     pub fn viable(reason: impl Into<String>) -> Self {
         Self {
             is_viable: true,
@@ -32,7 +31,6 @@ impl StrategyProbe {
         }
     }
 
-    /// Create a non-viable probe result
     pub fn not_viable(reason: impl Into<String>) -> Self {
         Self {
             is_viable: false,
@@ -41,7 +39,6 @@ impl StrategyProbe {
         }
     }
 
-    /// Add details to the probe result
     pub fn with_details(mut self, details: impl Into<String>) -> Self {
         self.details = Some(details.into());
         self
@@ -106,7 +103,6 @@ pub enum InstantiationError {
 /// a fallback chain.
 #[async_trait]
 pub trait FallbackStrategy<T>: Send + Sync {
-    /// Human-readable name for this strategy
     fn name(&self) -> &str;
 
     /// Quick check if this strategy might work (fast, no I/O)
@@ -123,12 +119,9 @@ pub trait FallbackStrategy<T>: Send + Sync {
     /// is viable.
     async fn probe(&self) -> Result<StrategyProbe, ProbeError>;
 
-    /// Instantiate the strategy for use
-    ///
-    /// This creates the actual instance after probing succeeds.
+    /// Called after probing succeeds to create the concrete instance.
     async fn instantiate(&self) -> Result<T, InstantiationError>;
 
-    /// Service level this strategy provides
     fn service_level(&self) -> ServiceLevel;
 }
 
@@ -146,14 +139,12 @@ pub struct AttemptResult {
 }
 
 impl AttemptResult {
-    /// Get duration as Duration type
     pub fn duration(&self) -> Duration {
         Duration::from_millis(self.duration_ms)
     }
 }
 
 impl AttemptResult {
-    /// Create a successful attempt result
     pub fn success(name: impl Into<String>, duration: Duration) -> Self {
         Self {
             strategy_name: name.into(),
@@ -163,7 +154,6 @@ impl AttemptResult {
         }
     }
 
-    /// Create a failed attempt result
     pub fn failure(name: impl Into<String>, error: impl Into<String>, duration: Duration) -> Self {
         Self {
             strategy_name: name.into(),
@@ -185,7 +175,6 @@ pub struct AllStrategiesFailed {
 }
 
 impl AllStrategiesFailed {
-    /// Format a detailed report of all failures
     pub fn detailed_report(&self) -> String {
         let mut report = String::new();
         report.push_str(&format!("All {} strategies failed:\n", self.count));
@@ -217,7 +206,6 @@ pub struct FallbackChain<T> {
 }
 
 impl<T> FallbackChain<T> {
-    /// Create a new fallback chain
     pub fn new() -> Self {
         Self {
             strategies: Vec::new(),
@@ -226,7 +214,6 @@ impl<T> FallbackChain<T> {
         }
     }
 
-    /// Add a strategy to the chain
     pub fn add<S: FallbackStrategy<T> + 'static>(mut self, strategy: S) -> Self {
         self.strategies.push(Box::new(strategy));
         self
@@ -241,7 +228,6 @@ impl<T> FallbackChain<T> {
         self.selected_index = None;
 
         for (i, strategy) in self.strategies.iter().enumerate() {
-            // Quick candidate check
             if !strategy.is_candidate() {
                 self.attempts.push(AttemptResult::failure(
                     strategy.name(),
@@ -253,26 +239,22 @@ impl<T> FallbackChain<T> {
 
             let start = Instant::now();
 
-            // Probe the strategy
             match strategy.probe().await {
-                Ok(probe) if probe.is_viable => {
-                    // Try to instantiate
-                    match strategy.instantiate().await {
-                        Ok(instance) => {
-                            self.selected_index = Some(i);
-                            self.attempts
-                                .push(AttemptResult::success(strategy.name(), start.elapsed()));
-                            return Ok((instance, strategy.service_level()));
-                        }
-                        Err(e) => {
-                            self.attempts.push(AttemptResult::failure(
-                                strategy.name(),
-                                format!("Instantiation failed: {}", e),
-                                start.elapsed(),
-                            ));
-                        }
+                Ok(probe) if probe.is_viable => match strategy.instantiate().await {
+                    Ok(instance) => {
+                        self.selected_index = Some(i);
+                        self.attempts
+                            .push(AttemptResult::success(strategy.name(), start.elapsed()));
+                        return Ok((instance, strategy.service_level()));
                     }
-                }
+                    Err(e) => {
+                        self.attempts.push(AttemptResult::failure(
+                            strategy.name(),
+                            format!("Instantiation failed: {}", e),
+                            start.elapsed(),
+                        ));
+                    }
+                },
                 Ok(probe) => {
                     self.attempts.push(AttemptResult::failure(
                         strategy.name(),
@@ -296,17 +278,14 @@ impl<T> FallbackChain<T> {
         })
     }
 
-    /// Get all attempts (for diagnostics)
     pub fn attempts(&self) -> &[AttemptResult] {
         &self.attempts
     }
 
-    /// Get selected strategy index
     pub fn selected_index(&self) -> Option<usize> {
         self.selected_index
     }
 
-    /// Get selected strategy name
     pub fn selected_name(&self) -> Option<&str> {
         self.selected_index
             .and_then(|i| self.strategies.get(i))

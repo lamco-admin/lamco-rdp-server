@@ -238,6 +238,16 @@ where
     row(buttons).spacing(8).into()
 }
 
+/// Simple help text displayed in muted style
+pub fn help_text<'a>(text_content: &'a str) -> Element<'a, Message> {
+    text(format!("ⓘ {}", text_content))
+        .size(12)
+        .style(|_theme| text::Style {
+            color: Some(theme::colors::TEXT_MUTED),
+        })
+        .into()
+}
+
 pub fn info_box<'a>(text_content: &'a str) -> Element<'a, Message> {
     container(
         row![text("ⓘ").size(16), text(text_content).size(13),]
@@ -336,6 +346,98 @@ pub fn vertical_spacing(height: f32) -> iced::widget::Space {
 
 pub fn horizontal_spacing(width: f32) -> iced::widget::Space {
     space().width(width)
+}
+
+/// Creates a labeled row with a "pending implementation" indicator.
+/// The widget is shown but with muted styling and a note that it needs wiring.
+/// Use for config options that exist in the GUI but aren't yet connected to the server.
+pub fn labeled_row_pending<'a>(
+    label: &'a str,
+    label_width: f32,
+    widget: Element<'a, Message>,
+) -> Element<'a, Message> {
+    column![
+        row![
+            text(label)
+                .width(Length::Fixed(label_width))
+                .style(|_theme| text::Style {
+                    color: Some(theme::colors::TEXT_MUTED),
+                }),
+            container(widget).style(|_theme| container::Style {
+                // Slightly transparent to indicate disabled state
+                ..Default::default()
+            }),
+        ]
+        .spacing(10)
+        .align_y(Alignment::Center),
+        row![
+            space().width(label_width),
+            text("⚠ Not yet wired to server")
+                .size(11)
+                .style(|_theme| text::Style {
+                    color: Some(theme::colors::WARNING.scale_alpha(0.7)),
+                }),
+        ],
+    ]
+    .spacing(2)
+    .into()
+}
+
+/// Creates a labeled row with custom pending message.
+pub fn labeled_row_pending_with_note<'a>(
+    label: &'a str,
+    label_width: f32,
+    widget: Element<'a, Message>,
+    note: &'a str,
+) -> Element<'a, Message> {
+    column![
+        row![
+            text(label)
+                .width(Length::Fixed(label_width))
+                .style(|_theme| text::Style {
+                    color: Some(theme::colors::TEXT_MUTED),
+                }),
+            widget,
+        ]
+        .spacing(10)
+        .align_y(Alignment::Center),
+        row![
+            space().width(label_width),
+            text(format!("⚠ {}", note))
+                .size(11)
+                .style(|_theme| text::Style {
+                    color: Some(theme::colors::WARNING.scale_alpha(0.7)),
+                }),
+        ],
+    ]
+    .spacing(2)
+    .into()
+}
+
+/// Toggle switch with pending implementation note.
+pub fn toggle_pending_with_note<'a>(
+    label: &'a str,
+    value: bool,
+    on_toggle: impl Fn(bool) -> Message + 'a,
+    note: &'a str,
+) -> Element<'a, Message> {
+    column![
+        row![
+            text(label).width(Length::Fill).style(|_theme| text::Style {
+                color: Some(theme::colors::TEXT_MUTED),
+            }),
+            toggler(value).on_toggle(on_toggle),
+        ]
+        .spacing(10)
+        .align_y(Alignment::Center),
+        text(format!("⚠ {}", note))
+            .size(11)
+            .style(|_theme| text::Style {
+                color: Some(theme::colors::WARNING.scale_alpha(0.7)),
+            }),
+    ]
+    .spacing(2)
+    .into()
 }
 
 /// iced lacks native multi-line input; wraps single-line as temporary workaround.

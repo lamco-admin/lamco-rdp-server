@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use tracing::{debug, info, warn};
 
-use super::utils::{
+use super::environment::{
     detect_display_server, detect_virtualization, run_command, DisplayServer, VirtualizationType,
 };
 use crate::capabilities::state::ServiceLevel;
@@ -105,15 +105,12 @@ pub enum RenderingRecommendation {
 pub struct RenderingProbe;
 
 impl RenderingProbe {
-    /// Probe rendering capabilities
     pub async fn probe() -> RenderingCapabilities {
         info!("Probing rendering capabilities...");
 
-        // 1. Check display server
         let display_server = detect_display_server();
         debug!("Display server: {:?}", display_server);
 
-        // 2. Detect virtualization
         let virtualization = {
             let v = detect_virtualization();
             if v == VirtualizationType::None {
@@ -124,15 +121,12 @@ impl RenderingProbe {
         };
         debug!("Virtualization: {:?}", virtualization);
 
-        // 3. Check GPU availability
         let (gpu_available, gpu_info) = Self::probe_gpu();
         debug!("GPU available: {}, info: {:?}", gpu_available, gpu_info);
 
-        // 4. Check software rendering
         let software_available = Self::check_software_rendering();
         debug!("Software rendering available: {}", software_available);
 
-        // 5. Test wgpu if display available
         let wgpu_supported = if display_server.is_some() {
             Self::test_wgpu_compatibility().await
         } else {
@@ -140,7 +134,6 @@ impl RenderingProbe {
         };
         debug!("wgpu supported: {}", wgpu_supported);
 
-        // 6. Determine recommendation
         let (recommendation, fallback_reason) = Self::determine_recommendation(
             display_server.as_ref(),
             virtualization.as_ref(),
@@ -150,7 +143,6 @@ impl RenderingProbe {
             gpu_info.as_ref(),
         );
 
-        // 7. Compute service level
         let service_level = match &recommendation {
             RenderingRecommendation::UseGpu { .. } => ServiceLevel::Full,
             RenderingRecommendation::UseSoftware { .. } => ServiceLevel::Fallback,
@@ -176,20 +168,17 @@ impl RenderingProbe {
     }
 
     fn probe_gpu() -> (bool, Option<GpuInfo>) {
-        // Check /dev/dri exists
         if !Path::new("/dev/dri").exists() {
             debug!("No /dev/dri - no GPU available");
             return (false, None);
         }
 
-        // Try glxinfo first (most detailed)
         if let Ok(output) = run_command("glxinfo", &["-B"]) {
             if let Some(info) = Self::parse_glxinfo(&output) {
                 return (true, Some(info));
             }
         }
 
-        // Try lspci
         if let Ok(output) = run_command("lspci", &[]) {
             for line in output.lines() {
                 if line.contains("VGA") || line.contains("3D") || line.contains("Display") {
@@ -283,10 +272,6 @@ impl RenderingProbe {
     }
 
     fn check_software_rendering() -> bool {
-        // Check if llvmpipe/softpipe is available
-        // Mesa software renderers should always be present on Linux
-
-        // Try to detect llvmpipe via glxinfo
         if let Ok(output) = run_command("glxinfo", &["-B"]) {
             if output.contains("llvmpipe")
                 || output.contains("softpipe")
@@ -296,7 +281,6 @@ impl RenderingProbe {
             }
         }
 
-        // Check for Mesa DRI drivers (heuristic)
         if Path::new("/usr/lib/x86_64-linux-gnu/dri").exists()
             || Path::new("/usr/lib64/dri").exists()
             || Path::new("/usr/lib/dri").exists()
@@ -304,63 +288,46 @@ impl RenderingProbe {
             return true;
         }
 
-        // Check for GALLIUM_DRIVER environment variable support
-        // Assume available - Mesa is almost always present on modern Linux
+        // Mesa is almost always present on modern Linux
         true
     }
 
     async fn test_wgpu_compatibility() -> bool {
-        // This is a lightweight test that checks if wgpu can initialize
-        // We don't create a window, just check adapter availability
-
+        // Lightweight heuristic -- no window created, just adapter availability
         #[cfg(feature = "gui")]
         {
             use std::time::Duration;
 
-            // Use spawn_blocking to avoid blocking the async runtime
             let result = tokio::time::timeout(Duration::from_secs(5), async {
                 tokio::task::spawn_blocking(|| {
-                    // Try to enumerate adapters synchronously
-                    // This avoids issues with async wgpu initialization
-
-                    // Check if LIBGL_ALWAYS_SOFTWARE is set
-                    // If so, assume software rendering works
                     if std::env::var("LIBGL_ALWAYS_SOFTWARE").is_ok() {
                         return true;
                     }
 
-                    // Try to detect if wgpu would work by checking for DRI
-                    // This is a heuristic - actual wgpu init might still fail
                     let has_dri = Path::new("/dev/dri/card0").exists()
                         || Path::new("/dev/dri/renderD128").exists();
 
                     if !has_dri {
-                        // No DRI devices, wgpu likely won't work with hardware
                         return false;
                     }
 
-                    // For VMs, check if we have a real GPU or just virtio/qxl
                     if let Ok(output) = run_command("lspci", &[]) {
                         let lower = output.to_lowercase();
                         if (lower.contains("vga")
                             || lower.contains("3d")
                             || lower.contains("display"))
                         {
-                            // Check for virtual GPUs that don't support wgpu well
                             if lower.contains("virtio")
                                 || lower.contains("qxl")
                                 || lower.contains("cirrus")
                                 || lower.contains("bochs")
                             {
-                                // Virtual GPU - wgpu likely won't work without software fallback
                                 return false;
                             }
-                            // Real GPU present
                             return true;
                         }
                     }
 
-                    // Default to assuming it works if we can't determine
                     true
                 })
                 .await
@@ -391,7 +358,6 @@ impl RenderingProbe {
         software_available: bool,
         gpu_info: Option<&GpuInfo>,
     ) -> (RenderingRecommendation, Option<String>) {
-        // No display server = no GUI
         if display_server.is_none() {
             return (
                 RenderingRecommendation::NoGui {
@@ -402,10 +368,8 @@ impl RenderingProbe {
             );
         }
 
-        // Check for virtual GPU that won't work with wgpu
         let is_virtual_gpu = gpu_info.map(|g| g.is_virtual).unwrap_or(false);
 
-        // VM without proper GPU - use software rendering
         if let Some(virt) = virtualization {
             if !wgpu_supported || is_virtual_gpu {
                 if software_available {
@@ -435,7 +399,6 @@ impl RenderingProbe {
             }
         }
 
-        // GPU available and wgpu works
         if gpu_available && wgpu_supported && !is_virtual_gpu {
             return (
                 RenderingRecommendation::UseGpu {
@@ -448,7 +411,6 @@ impl RenderingProbe {
             );
         }
 
-        // GPU available but wgpu doesn't work (driver issues?)
         if gpu_available && !wgpu_supported {
             if software_available {
                 return (
@@ -462,7 +424,6 @@ impl RenderingProbe {
             }
         }
 
-        // No GPU at all
         if !gpu_available {
             if software_available {
                 return (
@@ -474,7 +435,6 @@ impl RenderingProbe {
             }
         }
 
-        // Nothing works
         (
             RenderingRecommendation::NoGui {
                 reason: "No GPU and no software rendering available".into(),

@@ -228,7 +228,6 @@ pub struct LevelConstraints {
 }
 
 impl LevelConstraints {
-    /// Create constraints for given resolution
     pub fn new(width: u16, height: u16) -> Self {
         let mbs = ((width as u32 + 15) / 16) * ((height as u32 + 15) / 16);
         Self {
@@ -238,23 +237,19 @@ impl LevelConstraints {
         }
     }
 
-    /// Get macroblocks count
     pub const fn macroblocks(&self) -> u32 {
         self.macroblocks
     }
 
-    /// Calculate maximum FPS for a given level
     pub fn max_fps_for_level(&self, level: H264Level) -> f32 {
         let max_mbs_per_sec = level.effective_max_mbs_per_sec(self.macroblocks);
         (max_mbs_per_sec as f32) / (self.macroblocks as f32)
     }
 
-    /// Recommend minimum level for target FPS
     pub fn recommend_level(&self, target_fps: f32) -> H264Level {
         H264Level::for_config(self.width, self.height, target_fps)
     }
 
-    /// Validate that configuration meets level constraints
     pub fn validate(&self, fps: f32, level: H264Level) -> Result<(), ConstraintViolation> {
         // Check frame size constraint
         if self.macroblocks > level.max_frame_macroblocks() {

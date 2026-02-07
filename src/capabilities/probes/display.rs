@@ -54,7 +54,6 @@ pub struct PortalInfo {
 pub struct DisplayProbe;
 
 impl DisplayProbe {
-    /// Probe display capabilities
     pub async fn probe() -> DisplayCapabilities {
         info!("Probing display capabilities...");
 
@@ -62,7 +61,6 @@ impl DisplayProbe {
         let portal = Self::probe_portal().await;
         let quirks = Self::detect_quirks(&compositor);
 
-        // Determine service level
         let (service_level, degradation_reason, unavailable_reason) =
             Self::determine_service_level(&portal, &quirks);
 
@@ -82,7 +80,6 @@ impl DisplayProbe {
     }
 
     fn detect_compositor() -> CompositorInfo {
-        // Check XDG_CURRENT_DESKTOP
         let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
         let session_type = std::env::var("XDG_SESSION_TYPE").unwrap_or_default();
 
@@ -114,21 +111,79 @@ impl DisplayProbe {
     }
 
     async fn probe_portal() -> PortalInfo {
-        // TODO: Actually query D-Bus for portal version and capabilities
-        // For now, make reasonable assumptions based on environment
+        if let Some(info) = Self::query_portal_version_dbus().await {
+            debug!("Portal version detected via D-Bus: v{}", info.version);
+            return info;
+        }
 
+        Self::probe_portal_from_environment()
+    }
+
+    async fn query_portal_version_dbus() -> Option<PortalInfo> {
+        use zbus::Connection;
+
+        let connection = Connection::session().await.ok()?;
+
+        let message = connection
+            .call_method(
+                Some("org.freedesktop.portal.Desktop"),
+                "/org/freedesktop/portal/desktop",
+                Some("org.freedesktop.DBus.Properties"),
+                "Get",
+                &("org.freedesktop.portal.RemoteDesktop", "version"),
+            )
+            .await
+            .ok()?;
+
+        let version: u32 = message
+            .body()
+            .deserialize::<zbus::zvariant::OwnedValue>()
+            .ok()?
+            .try_into()
+            .ok()?;
+
+        debug!("RemoteDesktop Portal version from D-Bus: {}", version);
+
+        // Version 2+ supports clipboard (added in Portal v2)
+        // Version 4+ supports restore tokens
+        let supports_clipboard = version >= 2;
+        let supports_restore_tokens = version >= 4;
+
+        Some(PortalInfo {
+            version,
+            supports_screencast: true,
+            supports_remote_desktop: true,
+            supports_clipboard,
+            supports_restore_tokens,
+        })
+    }
+
+    fn probe_portal_from_environment() -> PortalInfo {
         let desktop = std::env::var("XDG_CURRENT_DESKTOP")
             .unwrap_or_default()
             .to_lowercase();
 
-        // Estimate portal version based on desktop environment
+        // Modern Flatpak runtimes have Portal v2+
+        let is_flatpak =
+            std::env::var("FLATPAK_ID").is_ok() || std::path::Path::new("/.flatpak-info").exists();
+
         // GNOME 44+ and KDE 5.27+ have portal v4 with clipboard support
-        let (version, supports_clipboard, supports_restore_tokens) = if desktop.contains("gnome") {
+        let (version, supports_clipboard, supports_restore_tokens) = if is_flatpak {
+            // Flatpak with org.freedesktop.Platform 24.08+ has Portal v2+ clipboard support
+            // Assume modern Flatpak = modern portal (v4)
+            debug!("Flatpak detected, assuming Portal v4 with clipboard support");
+            (4, true, true)
+        } else if desktop.contains("gnome") {
             // Modern GNOME likely has v4+
             (4, true, true)
         } else if desktop.contains("kde") || desktop.contains("plasma") {
             // Modern KDE likely has v4+
             (4, true, true)
+        } else if desktop.is_empty() {
+            // Unknown desktop but we're in a graphical session
+            // Try optimistic approach - assume Portal v2 with clipboard
+            debug!("Unknown desktop environment, assuming Portal v2 with clipboard");
+            (2, true, false)
         } else {
             // Assume older portal for other desktops
             (1, false, false)
@@ -173,13 +228,11 @@ impl DisplayProbe {
     fn detect_quirks(compositor: &CompositorInfo) -> Vec<String> {
         let mut quirks = Vec::new();
 
-        // RHEL 9 quirk
         if Self::is_rhel9() {
             quirks.push("rhel9_portal_v1".into());
             quirks.push("no_clipboard".into());
         }
 
-        // Compositor-specific quirks
         match compositor.compositor_type.as_str() {
             "mutter" => {
                 // GNOME/Mutter specific quirks would go here
@@ -188,7 +241,6 @@ impl DisplayProbe {
                 // KDE/KWin specific quirks would go here
             }
             "wlroots" => {
-                // wlroots-based compositor quirks
                 quirks.push("wlr_screencopy".into());
             }
             _ => {}
@@ -201,7 +253,6 @@ impl DisplayProbe {
         portal: &PortalInfo,
         quirks: &[String],
     ) -> (ServiceLevel, Option<String>, Option<String>) {
-        // Check for critical failures
         if !portal.supports_screencast {
             return (
                 ServiceLevel::Unavailable,
@@ -218,7 +269,6 @@ impl DisplayProbe {
             );
         }
 
-        // Check for degradations
         if quirks.contains(&"no_clipboard".to_string()) {
             return (
                 ServiceLevel::Degraded,

@@ -83,25 +83,23 @@ impl WlrState {
 /// wlr-direct strategy implementation
 ///
 /// Provides input injection via native Wayland protocols for wlroots compositors.
-pub struct WlrDirectStrategy;
+pub struct WlrDirectStrategy {
+    /// Keyboard layout from config (e.g., "us", "de", "auto")
+    keyboard_layout: String,
+}
 
 impl WlrDirectStrategy {
-    /// Create a new wlr-direct strategy
     pub fn new() -> Self {
-        Self
+        Self {
+            keyboard_layout: "auto".to_string(),
+        }
     }
 
-    /// Check if wlr-direct protocols are available
-    ///
-    /// This checks:
-    /// 1. Wayland connection is possible (WAYLAND_DISPLAY set)
-    /// 2. Required protocols are advertised by the compositor
-    ///
-    /// # Returns
-    ///
-    /// `true` if wlr-direct can be used, `false` otherwise
+    pub fn with_keyboard_layout(keyboard_layout: String) -> Self {
+        Self { keyboard_layout }
+    }
+
     pub async fn is_available() -> bool {
-        // Try to connect to Wayland
         let conn = match Connection::connect_to_env() {
             Ok(conn) => conn,
             Err(e) => {
@@ -110,7 +108,6 @@ impl WlrDirectStrategy {
             }
         };
 
-        // Try to bind protocols
         match bind_protocols(&conn) {
             Ok(_) => {
                 debug!("[wlr_direct] All required protocols available");
@@ -149,19 +146,17 @@ impl SessionStrategy for WlrDirectStrategy {
     async fn create_session(&self) -> Result<Arc<dyn SessionHandle>> {
         info!("🚀 wlr_direct: Creating session with native Wayland protocols");
 
-        // Connect to Wayland compositor
         let conn = Connection::connect_to_env()
             .context("Failed to connect to Wayland display. Ensure WAYLAND_DISPLAY is set.")?;
 
         info!("🔌 wlr_direct: Connected to Wayland display");
 
-        // Bind to protocols and create virtual devices
-        let (keyboard, pointer, event_queue) = bind_protocols_and_create_devices(&conn)
-            .context("Failed to bind protocols and create virtual devices")?;
+        let (keyboard, pointer, event_queue) =
+            bind_protocols_and_create_devices(&conn, &self.keyboard_layout)
+                .context("Failed to bind protocols and create virtual devices")?;
 
         info!("✅ wlr_direct: Virtual keyboard and pointer created successfully");
 
-        // Create session handle
         let handle = WlrSessionHandleImpl {
             connection: conn,
             event_queue: Mutex::new(event_queue),
@@ -359,18 +354,17 @@ impl SessionHandle for WlrSessionHandleImpl {
 /// Uses registry_queue_init to enumerate globals and bind to required protocols.
 fn bind_protocols_and_create_devices(
     conn: &Connection,
+    keyboard_layout: &str,
 ) -> Result<(
     VirtualKeyboard,
     VirtualPointer,
     wayland_client::EventQueue<WlrState>,
 )> {
-    // Initialize registry and event queue
     let (globals, mut event_queue) =
         registry_queue_init::<WlrState>(conn).context("Failed to initialize Wayland registry")?;
 
     let qh = event_queue.handle();
 
-    // Bind to virtual keyboard manager
     let keyboard_manager: ZwpVirtualKeyboardManagerV1 = globals.bind(&qh, 1..=1, ()).context(
         "Failed to bind zwp_virtual_keyboard_manager_v1. \
              Compositor does not support virtual keyboard protocol.",
@@ -378,7 +372,6 @@ fn bind_protocols_and_create_devices(
 
     debug!("[wlr_direct] Bound zwp_virtual_keyboard_manager_v1");
 
-    // Bind to virtual pointer manager
     let pointer_manager: ZwlrVirtualPointerManagerV1 = globals.bind(&qh, 1..=2, ()).context(
         "Failed to bind zwlr_virtual_pointer_manager_v1. \
              Compositor does not support wlr virtual pointer protocol (requires wlroots 0.12+).",
@@ -386,21 +379,18 @@ fn bind_protocols_and_create_devices(
 
     debug!("[wlr_direct] Bound zwlr_virtual_pointer_manager_v1");
 
-    // Bind to seat (use first available seat)
     let seat: WlSeat = globals
         .bind(&qh, 1..=8, ())
         .context("Failed to bind wl_seat. No seat available.")?;
 
     debug!("[wlr_direct] Bound wl_seat");
 
-    // Create virtual devices
-    let keyboard = VirtualKeyboard::new(&keyboard_manager, &seat, &qh)
+    let keyboard = VirtualKeyboard::new(&keyboard_manager, &seat, &qh, keyboard_layout)
         .context("Failed to create virtual keyboard")?;
 
     let pointer = VirtualPointer::new(&pointer_manager, &seat, &qh)
         .context("Failed to create virtual pointer")?;
 
-    // Roundtrip to complete protocol setup
     event_queue
         .roundtrip(&mut WlrState::new())
         .context("Failed to complete Wayland roundtrip for protocol setup")?;
@@ -413,7 +403,6 @@ fn bind_protocols(conn: &Connection) -> Result<()> {
     let (globals, _event_queue) =
         registry_queue_init::<WlrState>(conn).context("Failed to initialize Wayland registry")?;
 
-    // Check for required protocols by attempting to bind
     let has_keyboard = globals.contents().with_list(|list| {
         list.iter()
             .any(|global| global.interface == "zwp_virtual_keyboard_manager_v1")

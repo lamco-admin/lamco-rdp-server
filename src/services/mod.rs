@@ -39,6 +39,7 @@
 //! registry.log_summary();
 //! ```
 
+pub mod clipboard_manager;
 mod rdp_capabilities;
 mod registry;
 mod service;
@@ -46,6 +47,7 @@ mod translation;
 mod wayland_features;
 
 // Re-export main types
+pub use clipboard_manager::{DetectedSystemClipboardManager, SystemClipboardManagerKind};
 pub use rdp_capabilities::RdpCapability;
 pub use registry::ServiceRegistry;
 pub use service::{AdvertisedService, PerformanceHints, ServiceId, ServiceLevel};

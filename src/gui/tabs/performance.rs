@@ -73,7 +73,7 @@ pub fn view_performance_tab(state: &AppState) -> Element<'_, Message> {
             "0 = Auto-detect CPU cores, or specify 1-16",
         ),
         space().height(12.0),
-        widgets::labeled_row_with_help(
+        widgets::labeled_row_pending_with_note(
             "Network Threads:",
             150.0,
             widgets::number_input(
@@ -82,10 +82,10 @@ pub fn view_performance_tab(state: &AppState) -> Element<'_, Message> {
                 80.0,
                 Message::PerformanceNetworkThreadsChanged,
             ),
-            "0 = Auto-detect, or specify 1-8",
+            "Tokio runtime uses default multi-threaded executor",
         ),
         space().height(12.0),
-        widgets::labeled_row_with_help(
+        widgets::labeled_row_pending_with_note(
             "Buffer Pool Size:",
             150.0,
             widgets::number_input(
@@ -94,14 +94,14 @@ pub fn view_performance_tab(state: &AppState) -> Element<'_, Message> {
                 80.0,
                 Message::PerformanceBufferPoolSizeChanged,
             ),
-            "Frame buffers for pipelining",
+            "Frame buffer pool not yet implemented",
         ),
         space().height(12.0),
-        widgets::toggle_with_help(
+        widgets::toggle_pending_with_note(
             "Enable Zero-Copy Operations",
             state.config.performance.zero_copy,
-            "DMA-BUF zero-copy when supported (lower CPU usage)",
             Message::PerformanceZeroCopyToggled,
+            "DMA-BUF path requires hardware encoding integration",
         ),
         space().height(20.0),
         // Adaptive FPS section

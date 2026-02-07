@@ -35,31 +35,16 @@ impl MetricsCollector {
         }
     }
 
-    /// Increment a counter
-    ///
-    /// # Arguments
-    /// * `name` - Counter name
-    /// * `value` - Amount to increment by (default 1)
     pub fn increment_counter(&self, name: &str, value: u64) {
         let mut counters = self.counters.write();
         *counters.entry(name.to_string()).or_insert(0) += value;
     }
 
-    /// Set a gauge value
-    ///
-    /// # Arguments
-    /// * `name` - Gauge name
-    /// * `value` - Current value
     pub fn set_gauge(&self, name: &str, value: f64) {
         let mut gauges = self.gauges.write();
         gauges.insert(name.to_string(), value);
     }
 
-    /// Record a histogram value
-    ///
-    /// # Arguments
-    /// * `name` - Histogram name
-    /// * `value` - Value to record
     pub fn record_histogram(&self, name: &str, value: f64) {
         let mut histograms = self.histograms.write();
         histograms

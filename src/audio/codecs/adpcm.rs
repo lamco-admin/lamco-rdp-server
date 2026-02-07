@@ -12,10 +12,8 @@
 //! - IMA ADPCM specification
 //! - Microsoft WAVE format documentation
 
-/// Step size index table - determines how to adjust step size after each sample
 const INDEX_TABLE: [i8; 16] = [-1, -1, -1, -1, 2, 4, 6, 8, -1, -1, -1, -1, 2, 4, 6, 8];
 
-/// Step size table - 89 possible step sizes for quantization
 const STEP_SIZE_TABLE: [i16; 89] = [
     7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45, 50, 55, 60, 66,
     73, 80, 88, 97, 107, 118, 130, 143, 157, 173, 190, 209, 230, 253, 279, 307, 337, 371, 408, 449,
@@ -24,12 +22,9 @@ const STEP_SIZE_TABLE: [i16; 89] = [
     10442, 11487, 12635, 13899, 15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794, 32767,
 ];
 
-/// ADPCM channel state
 #[derive(Debug, Clone)]
 pub struct AdpcmChannelState {
-    /// Predicted sample value
     predictor: i16,
-    /// Step size index into STEP_SIZE_TABLE
     step_index: u8,
 }
 
@@ -40,7 +35,6 @@ impl Default for AdpcmChannelState {
 }
 
 impl AdpcmChannelState {
-    /// Create a new ADPCM channel state
     pub fn new() -> Self {
         Self {
             predictor: 0,
@@ -48,41 +42,30 @@ impl AdpcmChannelState {
         }
     }
 
-    /// Reset the channel state
     pub fn reset(&mut self) {
         self.predictor = 0;
         self.step_index = 0;
     }
 
-    /// Get current predictor value (for block headers)
     pub fn predictor(&self) -> i16 {
         self.predictor
     }
 
-    /// Get current step index (for block headers)
     pub fn step_index(&self) -> u8 {
         self.step_index
     }
 
-    /// Set state from block header
     pub fn set_state(&mut self, predictor: i16, step_index: u8) {
         self.predictor = predictor;
         self.step_index = step_index.min(88);
     }
 }
 
-/// IMA ADPCM Encoder
-///
-/// Encodes 16-bit PCM to 4-bit ADPCM. Supports mono and stereo encoding.
 #[derive(Debug, Clone)]
 pub struct AdpcmEncoder {
-    /// Left channel state (or mono)
     left: AdpcmChannelState,
-    /// Right channel state (stereo only)
     right: AdpcmChannelState,
-    /// Number of channels (1 = mono, 2 = stereo)
     channels: usize,
-    /// Samples per block (determines block size)
     samples_per_block: usize,
 }
 
@@ -93,12 +76,6 @@ impl Default for AdpcmEncoder {
 }
 
 impl AdpcmEncoder {
-    /// Create a new ADPCM encoder
-    ///
-    /// # Arguments
-    ///
-    /// * `channels` - Number of audio channels (1 or 2)
-    /// * `samples_per_block` - Samples per channel per block (typically 1017 for stereo)
     pub fn new(channels: usize, samples_per_block: usize) -> Self {
         assert!(
             channels == 1 || channels == 2,
@@ -113,7 +90,6 @@ impl AdpcmEncoder {
         }
     }
 
-    /// Get block size in bytes for the configured samples_per_block
     pub fn block_size(&self) -> usize {
         // Block header: 4 bytes per channel
         // Data: 4 bits per sample, (samples_per_block - 1) samples per channel
@@ -124,26 +100,20 @@ impl AdpcmEncoder {
         header_size + data_size
     }
 
-    /// Reset encoder state
     pub fn reset(&mut self) {
         self.left.reset();
         self.right.reset();
     }
 
-    /// Encode a single sample to 4-bit ADPCM nibble
     #[inline]
     fn encode_sample(state: &mut AdpcmChannelState, sample: i16) -> u8 {
         let step = STEP_SIZE_TABLE[state.step_index as usize];
 
-        // Compute difference from predicted sample
         let diff = sample.saturating_sub(state.predictor);
-
-        // Determine sign bit
         let sign = if diff < 0 { 8u8 } else { 0u8 };
         let mut diff = diff.abs();
 
-        // Quantize the difference using standard IMA ADPCM algorithm
-        // This uses a successive approximation approach
+        // Successive approximation quantization
         let mut nibble = 0u8;
         let mut delta = step;
 
@@ -161,7 +131,6 @@ impl AdpcmEncoder {
             nibble |= 1;
         }
 
-        // Apply sign
         nibble |= sign;
 
         // Update predictor using the decoded value (to match decoder)
@@ -182,25 +151,14 @@ impl AdpcmEncoder {
             state.predictor = state.predictor.saturating_add(diff_decoded);
         }
 
-        // Clamp predictor
         state.predictor = state.predictor.clamp(-32768, 32767);
 
-        // Update step index
         let index_delta = INDEX_TABLE[nibble as usize];
         state.step_index = (state.step_index as i8 + index_delta).clamp(0, 88) as u8;
 
         nibble
     }
 
-    /// Encode a block of PCM samples to ADPCM
-    ///
-    /// # Arguments
-    ///
-    /// * `pcm` - Input PCM samples (interleaved if stereo)
-    ///
-    /// # Returns
-    ///
-    /// Encoded ADPCM block with header
     pub fn encode_block(&mut self, pcm: &[i16]) -> Vec<u8> {
         let samples_per_channel = pcm.len() / self.channels;
         let mut output = Vec::with_capacity(self.block_size());
@@ -230,23 +188,19 @@ impl AdpcmEncoder {
         } else {
             // Stereo encoding
             if pcm.len() >= 2 {
-                // Block header for left channel
                 self.left.predictor = pcm[0];
                 output.extend_from_slice(&self.left.predictor.to_le_bytes());
                 output.push(self.left.step_index);
                 output.push(0);
 
-                // Block header for right channel
                 self.right.predictor = pcm[1];
                 output.extend_from_slice(&self.right.predictor.to_le_bytes());
                 output.push(self.right.step_index);
                 output.push(0);
 
-                // Encode remaining samples (interleaved)
                 // ADPCM stores 8 samples (4 per channel) as a group
                 let mut sample_idx = 2; // Skip first sample (in header)
                 while sample_idx < pcm.len() {
-                    // Encode 4 left samples
                     let mut left_nibbles = [0u8; 4];
                     for j in 0..4 {
                         let idx = sample_idx + j * 2;
@@ -259,7 +213,6 @@ impl AdpcmEncoder {
                     output.push(left_nibbles[0] | (left_nibbles[1] << 4));
                     output.push(left_nibbles[2] | (left_nibbles[3] << 4));
 
-                    // Encode 4 right samples
                     let mut right_nibbles = [0u8; 4];
                     for j in 0..4 {
                         let idx = sample_idx + 1 + j * 2;
@@ -280,15 +233,6 @@ impl AdpcmEncoder {
         output
     }
 
-    /// Encode multiple blocks of PCM samples
-    ///
-    /// # Arguments
-    ///
-    /// * `pcm` - Input PCM samples (interleaved if stereo)
-    ///
-    /// # Returns
-    ///
-    /// Vec of encoded ADPCM blocks
     pub fn encode(&mut self, pcm: &[i16]) -> Vec<u8> {
         let samples_per_block_total = self.samples_per_block * self.channels;
         let mut output = Vec::new();
@@ -301,9 +245,6 @@ impl AdpcmEncoder {
     }
 }
 
-/// IMA ADPCM Decoder
-///
-/// Decodes 4-bit ADPCM back to 16-bit PCM.
 #[derive(Debug, Clone)]
 pub struct AdpcmDecoder {
     left: AdpcmChannelState,
@@ -312,7 +253,6 @@ pub struct AdpcmDecoder {
 }
 
 impl AdpcmDecoder {
-    /// Create a new ADPCM decoder
     pub fn new(channels: usize) -> Self {
         Self {
             left: AdpcmChannelState::new(),
@@ -321,12 +261,10 @@ impl AdpcmDecoder {
         }
     }
 
-    /// Decode a single 4-bit nibble to 16-bit sample
     #[inline]
     fn decode_sample(state: &mut AdpcmChannelState, nibble: u8) -> i16 {
         let step = STEP_SIZE_TABLE[state.step_index as usize];
 
-        // Calculate difference
         let mut diff = step >> 3;
         if nibble & 4 != 0 {
             diff += step;
@@ -338,37 +276,30 @@ impl AdpcmDecoder {
             diff += step >> 2;
         }
 
-        // Apply sign and update predictor
         if nibble & 8 != 0 {
             state.predictor = state.predictor.saturating_sub(diff);
         } else {
             state.predictor = state.predictor.saturating_add(diff);
         }
 
-        // Clamp predictor
         state.predictor = state.predictor.clamp(-32768, 32767);
 
-        // Update step index
         let index_delta = INDEX_TABLE[nibble as usize];
         state.step_index = (state.step_index as i8 + index_delta).clamp(0, 88) as u8;
 
         state.predictor
     }
 
-    /// Decode an ADPCM block to PCM
     pub fn decode_block(&mut self, data: &[u8]) -> Vec<i16> {
         let mut output = Vec::new();
 
         if self.channels == 1 {
-            // Mono decoding
             if data.len() >= 4 {
-                // Parse header
                 let predictor = i16::from_le_bytes([data[0], data[1]]);
                 let step_index = data[2];
                 self.left.set_state(predictor, step_index);
                 output.push(predictor);
 
-                // Decode samples
                 for &byte in &data[4..] {
                     let sample1 = Self::decode_sample(&mut self.left, byte & 0x0F);
                     let sample2 = Self::decode_sample(&mut self.left, byte >> 4);
@@ -377,9 +308,7 @@ impl AdpcmDecoder {
                 }
             }
         } else {
-            // Stereo decoding
             if data.len() >= 8 {
-                // Parse headers
                 let left_predictor = i16::from_le_bytes([data[0], data[1]]);
                 let left_step = data[2];
                 self.left.set_state(left_predictor, left_step);
@@ -391,22 +320,18 @@ impl AdpcmDecoder {
                 output.push(left_predictor);
                 output.push(right_predictor);
 
-                // Decode interleaved samples
                 let mut idx = 8;
                 while idx + 4 <= data.len() {
-                    // Decode 4 left samples
                     let l1 = Self::decode_sample(&mut self.left, data[idx] & 0x0F);
                     let l2 = Self::decode_sample(&mut self.left, data[idx] >> 4);
                     let l3 = Self::decode_sample(&mut self.left, data[idx + 1] & 0x0F);
                     let l4 = Self::decode_sample(&mut self.left, data[idx + 1] >> 4);
 
-                    // Decode 4 right samples
                     let r1 = Self::decode_sample(&mut self.right, data[idx + 2] & 0x0F);
                     let r2 = Self::decode_sample(&mut self.right, data[idx + 2] >> 4);
                     let r3 = Self::decode_sample(&mut self.right, data[idx + 3] & 0x0F);
                     let r4 = Self::decode_sample(&mut self.right, data[idx + 3] >> 4);
 
-                    // Interleave output
                     output.extend_from_slice(&[l1, r1, l2, r2, l3, r3, l4, r4]);
 
                     idx += 4;

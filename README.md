@@ -169,6 +169,42 @@ Releases are managed through the lamco-admin pipeline:
 
 See lamco-admin for detailed pipeline documentation.
 
+## Troubleshooting
+
+### First Connection Fails, Second Succeeds
+
+**Symptom**: The first RDP connection attempt fails with "connection reset by peer" or error 0x904, but the second connection succeeds.
+
+**Cause**: This is expected TLS certificate behavior, not a bug. The RDP client initially rejects the server's self-signed certificate as untrusted. The client then reconnects accepting the certificate, and the second connection succeeds.
+
+**Resolution**: This is normal operation. The certificate acceptance is cached by the client for future connections.
+
+### Clipboard Not Working (Flatpak)
+
+**Symptom**: Clipboard sync doesn't work when running as Flatpak.
+
+**Cause**: Portal clipboard support requires Portal RemoteDesktop v2 or higher. Older Portal versions (v1, found on RHEL 9 and some older distributions) don't expose the clipboard API.
+
+**Resolution**:
+- Upgrade to a distribution with Portal v2+ (GNOME 44+, KDE Plasma 5.27+)
+- For RHEL 9, clipboard is not available in Portal mode
+
+### "Unknown (not in Wayland session?)" in Diagnostics
+
+**Symptom**: Server logs show "Compositor: Unknown (not in Wayland session?)"
+
+**Cause**: The `XDG_CURRENT_DESKTOP` environment variable is not set, which can happen inside Flatpak sandboxes.
+
+**Resolution**: This is usually cosmetic. The server now queries D-Bus directly for Portal version to determine clipboard support, bypassing environment variable detection.
+
+### Permission Dialog Appears Every Time
+
+**Symptom**: The screen sharing permission dialog appears on every server start.
+
+**Cause**: Some Portal backends (notably GNOME's) don't support session persistence for RemoteDesktop sessions. This is a deliberate policy, not a bug.
+
+**Resolution**: This is expected behavior on GNOME. The server automatically detects this and continues without persistence.
+
 ## License
 
 `lamco-rdp-server` is licensed under the **Business Source License 1.1 (BSL)**.

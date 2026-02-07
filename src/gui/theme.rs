@@ -496,3 +496,103 @@ pub fn text_input_style(_theme: &Theme, status: text_input::Status) -> text_inpu
         },
     }
 }
+
+/// Category dropdown button style
+pub fn category_button_style(
+    is_active: bool,
+    is_open: bool,
+) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |_theme: &Theme, status: button::Status| {
+        let bg_color = if is_open {
+            colors::SURFACE_LIGHT
+        } else if is_active {
+            colors::SURFACE
+        } else {
+            Color::TRANSPARENT
+        };
+
+        let text_color = if is_active || is_open {
+            colors::PRIMARY
+        } else {
+            colors::TEXT_SECONDARY
+        };
+
+        let base = button::Style {
+            background: Some(Background::Color(bg_color)),
+            text_color,
+            border: Border {
+                color: if is_open {
+                    colors::PRIMARY
+                } else if is_active {
+                    colors::BORDER_LIGHT
+                } else {
+                    Color::TRANSPARENT
+                },
+                width: if is_open || is_active { 1.0 } else { 0.0 },
+                radius: 6.0.into(),
+            },
+            shadow: Shadow::default(),
+            snap: false,
+        };
+
+        match status {
+            button::Status::Active => base,
+            button::Status::Hovered => button::Style {
+                background: Some(Background::Color(colors::SURFACE_LIGHT)),
+                text_color: colors::PRIMARY_LIGHT,
+                border: Border {
+                    color: colors::PRIMARY,
+                    width: 1.0,
+                    ..base.border
+                },
+                ..base
+            },
+            button::Status::Pressed => button::Style {
+                background: Some(Background::Color(colors::SURFACE)),
+                text_color: colors::PRIMARY,
+                ..base
+            },
+            button::Status::Disabled => base,
+        }
+    }
+}
+
+/// Dropdown menu item style
+pub fn dropdown_item_style(is_selected: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |_theme: &Theme, status: button::Status| {
+        let base = button::Style {
+            background: Some(Background::Color(if is_selected {
+                colors::SURFACE_LIGHT
+            } else {
+                Color::TRANSPARENT
+            })),
+            text_color: if is_selected {
+                colors::PRIMARY
+            } else {
+                colors::TEXT_PRIMARY
+            },
+            border: Border {
+                color: Color::TRANSPARENT,
+                width: 0.0,
+                radius: 4.0.into(),
+            },
+            shadow: Shadow::default(),
+            snap: false,
+        };
+
+        match status {
+            button::Status::Active => base,
+            button::Status::Hovered => button::Style {
+                background: Some(Background::Color(colors::SURFACE_LIGHT)),
+                text_color: colors::PRIMARY_LIGHT,
+                ..base
+            },
+            button::Status::Pressed => button::Style {
+                background: Some(Background::Color(colors::SURFACE_DARK)),
+                text_color: colors::PRIMARY,
+                ..base
+            },
+            button::Status::Disabled => base,
+        }
+    }
+}

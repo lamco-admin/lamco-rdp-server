@@ -130,7 +130,6 @@ pub struct CursorPredictor {
 }
 
 impl CursorPredictor {
-    /// Create a new cursor predictor
     pub fn new(config: PredictorConfig) -> Self {
         Self {
             history: VecDeque::with_capacity(config.history_size),

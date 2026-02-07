@@ -39,22 +39,15 @@ pub struct SecurityConfig {
 }
 
 /// Video encoding configuration
+///
+/// Note: Encoder selection and bitrate are configured in their respective sections:
+/// - Hardware encoding: `hardware_encoding.*`
+/// - Bitrate: `egfx.h264_bitrate`
+/// - Damage tracking: `damage_tracking.*`
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VideoConfig {
-    /// Video encoder to use ("vaapi", "openh264", "auto")
-    pub encoder: String,
-
-    /// VAAPI device path
-    pub vaapi_device: PathBuf,
-
     /// Target frames per second
     pub target_fps: u32,
-
-    /// Video bitrate in kbps
-    pub bitrate: u32,
-
-    /// Enable damage tracking for efficient updates
-    pub damage_tracking: bool,
 
     /// Cursor rendering mode ("embedded", "metadata", "hidden")
     pub cursor_mode: String,
@@ -89,6 +82,38 @@ pub struct ClipboardConfig {
 
     /// Allowed MIME types (empty = all types allowed)
     pub allowed_types: Vec<String>,
+
+    /// [EXPERIMENTAL] Include x-kde-syncselection hint for Klipper
+    ///
+    /// When enabled on KDE Plasma, adds "application/x-kde-syncselection"
+    /// to SetSelection calls. This MIME type causes Klipper to skip the
+    /// clipboard data entirely, preventing takeover.
+    ///
+    /// ⚠️  WARNING: This MIME type is intended for Klipper's INTERNAL use only
+    /// (syncing selection to clipboard). Using it externally may:
+    /// - Prevent Klipper features (URL actions, clipboard history)
+    /// - Interfere with KDE's selection/clipboard synchronization
+    /// - Break in future Plasma versions without warning
+    ///
+    /// RECOMMENDED: Leave disabled (false) and use re-announce mitigation instead.
+    /// Only enable for testing or if re-announce doesn't work.
+    ///
+    /// Default: false (disabled)
+    #[serde(default)]
+    pub kde_syncselection_hint: bool,
+
+    /// Strategy override (expert mode)
+    ///
+    /// If set, overrides automatic strategy selection from service registry.
+    /// Valid values:
+    /// - "portal-standard" - Standard Portal API (no mitigation)
+    /// - "portal-klipper-cooperation" - Work WITH Klipper via D-Bus sync
+    /// - "portal-with-manager" - Conservative manager detection
+    /// - "direct-data-control" - Direct protocol (not yet implemented)
+    ///
+    /// Default: None (automatic selection based on environment)
+    #[serde(default)]
+    pub strategy_override: Option<String>,
 }
 
 fn default_rate_limit_ms() -> u64 {
@@ -1006,6 +1031,76 @@ impl Default for AudioConfig {
             channels: default_audio_channels(),
             frame_ms: default_audio_frame_ms(),
             opus_bitrate: default_opus_bitrate(),
+        }
+    }
+}
+
+/// GUI state configuration (persisted between sessions)
+///
+/// Stores UI preferences that should persist across GUI restarts.
+/// This is optional and not required for server operation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GuiStateConfig {
+    /// Enable expert mode (shows advanced options)
+    #[serde(default)]
+    pub expert_mode: bool,
+
+    /// EGFX expert mode (shows all EGFX parameters)
+    #[serde(default)]
+    pub egfx_expert_mode: bool,
+
+    /// Expanded section states
+    #[serde(default)]
+    pub video_pipeline_expanded: bool,
+    #[serde(default = "default_true")]
+    pub adaptive_fps_expanded: bool,
+    #[serde(default = "default_true")]
+    pub latency_expanded: bool,
+    #[serde(default = "default_true")]
+    pub damage_tracking_expanded: bool,
+    #[serde(default = "default_true")]
+    pub hardware_encoding_expanded: bool,
+    #[serde(default = "default_true")]
+    pub display_expanded: bool,
+    #[serde(default)]
+    pub advanced_video_expanded: bool,
+    #[serde(default = "default_true")]
+    pub cursor_expanded: bool,
+    #[serde(default)]
+    pub cursor_predictor_expanded: bool,
+
+    /// Log viewer preferences
+    #[serde(default = "default_true")]
+    pub log_auto_scroll: bool,
+    #[serde(default = "default_log_filter")]
+    pub log_filter_level: String,
+
+    /// Close behavior: true = closing GUI stops server (default), false = GUI closes but server keeps running
+    #[serde(default = "default_true")]
+    pub close_stops_server: bool,
+}
+
+fn default_log_filter() -> String {
+    "info".to_string()
+}
+
+impl Default for GuiStateConfig {
+    fn default() -> Self {
+        Self {
+            expert_mode: false,
+            egfx_expert_mode: false,
+            video_pipeline_expanded: false,
+            adaptive_fps_expanded: true,
+            latency_expanded: true,
+            damage_tracking_expanded: true,
+            hardware_encoding_expanded: true,
+            display_expanded: true,
+            advanced_video_expanded: false,
+            cursor_expanded: true,
+            cursor_predictor_expanded: false,
+            log_auto_scroll: true,
+            log_filter_level: "info".to_string(),
+            close_stops_server: true,
         }
     }
 }

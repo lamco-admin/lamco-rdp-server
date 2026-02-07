@@ -90,6 +90,13 @@ pub struct EncoderConfig {
     /// Maximum QP value (default: 51, range 0-51)
     /// Higher = worse quality, smaller frames
     pub qp_max: u8,
+
+    /// Number of encoder threads (default: 0 = auto)
+    /// OpenH264 will use this for slice-based parallelism
+    /// 0 = auto-detect based on CPU cores
+    /// 1 = single-threaded
+    /// >1 = fixed number of threads
+    pub encoder_threads: u16,
 }
 
 impl Default for EncoderConfig {
@@ -100,15 +107,15 @@ impl Default for EncoderConfig {
             enable_skip_frame: true,
             width: None,
             height: None,
-            color_space: None, // Encoder-specific default
-            qp_min: 0,         // OpenH264 default
-            qp_max: 51,        // OpenH264 default
+            color_space: None,  // Encoder-specific default
+            qp_min: 0,          // OpenH264 default
+            qp_max: 51,         // OpenH264 default
+            encoder_threads: 0, // Auto-detect
         }
     }
 }
 
 impl EncoderConfig {
-    /// Create config for specific resolution
     pub fn for_resolution(width: u16, height: u16) -> Self {
         Self {
             width: Some(width),
@@ -117,7 +124,6 @@ impl EncoderConfig {
         }
     }
 
-    /// Create config for high quality encoding
     pub fn high_quality() -> Self {
         Self {
             bitrate_kbps: 10000,
@@ -144,7 +150,6 @@ impl EncoderConfig {
         }
     }
 
-    /// Create config for low bandwidth
     pub fn low_bandwidth() -> Self {
         Self {
             bitrate_kbps: 1000,
@@ -180,13 +185,6 @@ impl EncoderConfig {
 /// - **Annex B input**: `[0x00 0x00 0x00 0x01][NAL]` or `[0x00 0x00 0x01][NAL]`
 /// - **AVC output**: `[4-byte big-endian length][NAL]`
 ///
-/// # Arguments
-///
-/// * `annex_b_data` - H.264 bitstream in Annex B format
-///
-/// # Returns
-///
-/// H.264 bitstream in AVC length-prefixed format
 #[deprecated(note = "MS-RDPEGFX requires Annex B, not AVC. Use Annex B format directly.")]
 pub fn annex_b_to_avc(annex_b_data: &[u8]) -> Vec<u8> {
     let mut output = Vec::with_capacity(annex_b_data.len());
@@ -421,14 +419,6 @@ impl Avc420Encoder {
         );
     }
 
-    /// Create a new H.264 encoder
-    ///
-    /// # Arguments
-    ///
-    /// * `config` - Encoder configuration
-    ///
-    /// Note: If width/height are provided in config, H.264 level will be set automatically.
-    /// Otherwise, level will be set on first frame based on actual dimensions.
     pub fn new(config: EncoderConfig) -> EncoderResult<Self> {
         // Calculate appropriate H.264 level if dimensions provided
         let level = config
@@ -436,14 +426,13 @@ impl Avc420Encoder {
             .zip(config.height)
             .map(|(w, h)| super::h264_level::H264Level::for_config(w, h, config.max_fps));
 
-        // Configure OpenH264 encoder
         let mut encoder_config = OpenH264Config::new()
             .bitrate(BitRate::from_bps(config.bitrate_kbps * 1000))
             .max_frame_rate(FrameRate::from_hz(config.max_fps))
             .skip_frames(config.enable_skip_frame)
-            .usage_type(UsageType::ScreenContentRealTime);
+            .usage_type(UsageType::ScreenContentRealTime)
+            .num_threads(config.encoder_threads);
 
-        // Set level if we know dimensions
         if let Some(level) = level {
             encoder_config = encoder_config.level(level.to_openh264_level());
             debug!(
@@ -470,19 +459,6 @@ impl Avc420Encoder {
         })
     }
 
-    /// Encode a BGRA frame to H.264
-    ///
-    /// # Arguments
-    ///
-    /// * `bgra_data` - Raw BGRA pixel data (4 bytes per pixel)
-    /// * `width` - Frame width in pixels (must be multiple of 2)
-    /// * `height` - Frame height in pixels (must be multiple of 2)
-    /// * `timestamp_ms` - Frame timestamp in milliseconds
-    ///
-    /// # Returns
-    ///
-    /// Encoded H.264 frame, or None if the encoder produced no output
-    /// (can happen with frame skipping)
     pub fn encode_bgra(
         &mut self,
         bgra_data: &[u8],
@@ -504,7 +480,6 @@ impl Avc420Encoder {
             )));
         }
 
-        // Create BGRA source and convert to YUV420
         // OpenH264 handles the color conversion internally
         let bgra_source = BgraSliceU8::new(bgra_data, (width as usize, height as usize));
         let yuv = YUVBuffer::from_rgb_source(bgra_source);
@@ -515,13 +490,11 @@ impl Avc420Encoder {
             .encode(&yuv)
             .map_err(|e| EncoderError::EncodeFailed(format!("OpenH264 encode failed: {:?}", e)))?;
 
-        // Convert bitstream to Vec<u8> (Annex B format)
         let annex_b_data = bitstream.to_vec();
         if annex_b_data.is_empty() {
             return Ok(None);
         }
 
-        // Check frame type for keyframe detection
         let is_keyframe = matches!(bitstream.frame_type(), FrameType::IDR | FrameType::I);
 
         // MS-RDPEGFX requires Annex B format (ITU-H.264 Annex B with start codes)
@@ -582,13 +555,11 @@ impl Avc420Encoder {
         }))
     }
 
-    /// Force next frame to be a keyframe (IDR)
     pub fn force_keyframe(&mut self) {
         self.encoder.force_intra_frame();
         debug!("Forced keyframe on next encode");
     }
 
-    /// Get encoder statistics
     pub fn stats(&self) -> EncoderStats {
         EncoderStats {
             frames_encoded: self.frame_count,

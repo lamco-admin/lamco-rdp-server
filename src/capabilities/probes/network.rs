@@ -20,7 +20,6 @@ pub struct NetworkCapabilities {
 pub struct NetworkProbe;
 
 impl NetworkProbe {
-    /// Probe network capabilities
     pub async fn probe() -> NetworkCapabilities {
         info!("Probing network capabilities...");
 

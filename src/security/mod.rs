@@ -1,5 +1,10 @@
 //! Security and Authentication Module
 //!
+//! **Execution Path:** TLS 1.3 + PAM or no-auth
+//! **Status:** Active (v1.0.0+)
+//! **Platform:** Universal (PAM requires native)
+//! **Role:** TLS encryption and user authentication
+//!
 //! Provides TLS encryption and user authentication for secure RDP connections.
 //!
 //! # TLS Configuration
@@ -119,28 +124,28 @@ pub use tls::TlsConfig;
 
 use crate::config::Config;
 
-/// Security manager coordinates all security operations
-pub struct SecurityManager {
+/// Security subsystem for TLS and authentication
+///
+/// Coordinates TLS encryption and user authentication for RDP connections.
+pub struct Security {
     tls_config: TlsConfig,
     authenticator: Arc<UserAuthenticator>,
 }
 
-impl SecurityManager {
+impl Security {
     /// Create new security manager
     pub async fn new(config: &Config) -> Result<Self> {
-        info!("Initializing SecurityManager");
+        info!("Initializing Security");
 
-        // Load TLS configuration
         let tls_config =
             TlsConfig::from_files(&config.security.cert_path, &config.security.key_path)?;
 
-        // Verify TLS config
         tls_config.verify()?;
 
         let auth_method = AuthMethod::from_str(&config.security.auth_method);
         let authenticator = Arc::new(UserAuthenticator::new(auth_method, None));
 
-        info!("SecurityManager initialized successfully");
+        info!("Security initialized successfully");
 
         Ok(Self {
             tls_config,
@@ -163,7 +168,6 @@ impl SecurityManager {
     pub async fn authenticate(&self, username: &str, password: &str) -> Result<SessionToken> {
         UserAuthenticator::validate_username(username)?;
 
-        // Authenticate
         let authenticated = self.authenticator.authenticate(username, password)?;
 
         if !authenticated {
@@ -184,7 +188,7 @@ mod tests {
         let config = Config::default_config().unwrap();
 
         // This will fail if certs don't exist, which is expected
-        let result = SecurityManager::new(&config).await;
+        let result = Security::new(&config).await;
 
         // In real test environment with certs, this should pass
         if result.is_ok() {

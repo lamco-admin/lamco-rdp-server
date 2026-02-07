@@ -51,17 +51,6 @@ pub struct VirtualPointer {
 }
 
 impl VirtualPointer {
-    /// Create a new virtual pointer from the manager
-    ///
-    /// # Arguments
-    ///
-    /// * `manager` - The zwlr_virtual_pointer_manager_v1 global
-    /// * `seat` - The wl_seat to associate with (typically the default seat)
-    /// * `qh` - Queue handle for the Wayland event queue
-    ///
-    /// # Returns
-    ///
-    /// A VirtualPointer instance ready for input injection
     pub fn new<State>(
         manager: &ZwlrVirtualPointerManagerV1,
         seat: &WlSeat,
@@ -79,20 +68,7 @@ impl VirtualPointer {
 
     /// Send absolute pointer motion event
     ///
-    /// Moves the pointer to an absolute position within the specified coordinate space.
-    ///
-    /// # Arguments
-    ///
-    /// * `time` - Timestamp in milliseconds
-    /// * `x` - Absolute X coordinate (0 to x_extent)
-    /// * `y` - Absolute Y coordinate (0 to y_extent)
-    /// * `x_extent` - Width of coordinate space (typically screen width)
-    /// * `y_extent` - Height of coordinate space (typically screen height)
-    ///
-    /// # Protocol Details
-    ///
-    /// The compositor will map the coordinates [0, extent] to the actual output dimensions.
-    /// For multi-monitor setups, use the specific stream's dimensions as extents.
+    /// The compositor maps [0, extent] to actual output dimensions.
     pub fn motion_absolute(&self, time: u32, x: u32, y: u32, x_extent: u32, y_extent: u32) {
         debug!(
             "[wlr_direct] Pointer motion: x={}, y={}, extent={}x{}",
@@ -102,19 +78,6 @@ impl VirtualPointer {
         self.pointer.motion_absolute(time, x, y, x_extent, y_extent);
     }
 
-    /// Send pointer button event
-    ///
-    /// Injects a mouse button press or release.
-    ///
-    /// # Arguments
-    ///
-    /// * `time` - Timestamp in milliseconds
-    /// * `button` - Button code (evdev: 272=left, 273=right, 274=middle, etc.)
-    /// * `state` - Button state (0=released, 1=pressed)
-    ///
-    /// # Note
-    ///
-    /// Buttons use Linux evdev codes, which are already provided by the input handler.
     pub fn button(&self, time: u32, button: u32, state: ButtonState) {
         // Button state in wayland-protocols-wlr uses u32:
         // 0 = released, 1 = pressed
@@ -131,19 +94,6 @@ impl VirtualPointer {
         self.pointer.button(time, button, state_val);
     }
 
-    /// Send pointer axis (scroll) event
-    ///
-    /// Injects a scroll wheel or touchpad gesture event.
-    ///
-    /// # Arguments
-    ///
-    /// * `time` - Timestamp in milliseconds
-    /// * `axis` - Axis type (vertical or horizontal)
-    /// * `value` - Scroll distance in pixels (positive = down/right, negative = up/left)
-    ///
-    /// # Note
-    ///
-    /// The input handler has already converted RDP scroll deltas (120ths) to pixel values.
     pub fn axis(&self, time: u32, axis: Axis, value: f64) {
         // Axis in wayland-protocols-wlr uses u32:
         // 0 = vertical, 1 = horizontal
@@ -162,17 +112,7 @@ impl VirtualPointer {
         self.pointer.axis(time, axis_val, value);
     }
 
-    /// Send axis source event
-    ///
-    /// Indicates the source of axis events (wheel, finger, continuous).
-    ///
-    /// # Arguments
-    ///
-    /// * `source` - The axis source type
-    ///
-    /// # Note
-    ///
-    /// This should be called before axis() events to provide context to the compositor.
+    /// Should be called before axis() events to provide context to the compositor.
     pub fn axis_source(&self, source: AxisSource) {
         // AxisSource in wayland-protocols-wlr uses u32:
         // 0 = wheel, 1 = finger, 2 = continuous, 3 = wheel_tilt
@@ -211,9 +151,6 @@ impl VirtualPointer {
         self.pointer.frame();
     }
 
-    /// Get the underlying Wayland protocol object
-    ///
-    /// Provides access to the raw protocol object for advanced use cases.
     pub fn inner(&self) -> &ZwlrVirtualPointerV1 {
         &self.pointer
     }
@@ -229,9 +166,7 @@ impl Drop for VirtualPointer {
 /// Button state for pointer events
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ButtonState {
-    /// Button released
     Released,
-    /// Button pressed
     Pressed,
 }
 
@@ -248,9 +183,7 @@ impl From<bool> for ButtonState {
 /// Pointer axis type
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Axis {
-    /// Vertical scroll (up/down)
     VerticalScroll,
-    /// Horizontal scroll (left/right)
     HorizontalScroll,
 }
 
@@ -260,13 +193,11 @@ pub enum Axis {
 /// apply appropriate acceleration curves and gesture detection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AxisSource {
-    /// Mouse wheel
     Wheel,
-    /// Touchpad two-finger scroll
     Finger,
-    /// Continuous device (e.g., wheel without detents)
+    /// Wheel without detents
     Continuous,
-    /// Wheel tilt (horizontal scroll from wheel)
+    /// Horizontal scroll from tilting the wheel
     WheelTilt,
 }
 

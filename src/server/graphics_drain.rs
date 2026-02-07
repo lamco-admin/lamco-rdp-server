@@ -50,15 +50,6 @@ pub(super) struct GraphicsDrainStats {
 ///
 /// This task continuously drains the graphics queue, coalescing multiple frames
 /// into a single latest frame, then converts to IronRDP format and sends.
-///
-/// # Arguments
-///
-/// * `graphics_rx` - Receiver for graphics frames (bounded 4)
-/// * `update_sender` - Sender for IronRDP display updates
-///
-/// # Returns
-///
-/// A join handle for the spawned task
 pub(super) fn start_graphics_drain_task(
     mut graphics_rx: mpsc::Receiver<GraphicsFrame>,
     update_sender: mpsc::Sender<DisplayUpdate>,
@@ -68,7 +59,6 @@ pub(super) fn start_graphics_drain_task(
         let mut stats = GraphicsDrainStats::default();
 
         loop {
-            // Wait for at least one frame
             let mut latest_frame = match graphics_rx.recv().await {
                 Some(frame) => {
                     stats.frames_received += 1;
@@ -111,7 +101,6 @@ pub(super) fn start_graphics_drain_task(
 
             if let Err(e) = update_sender.send(update).await {
                 warn!("Failed to send display update: {}", e);
-                // Channel closed, exit task
                 return;
             }
 

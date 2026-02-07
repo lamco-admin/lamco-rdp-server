@@ -48,7 +48,6 @@ pub struct Yuv420Frame {
 }
 
 impl Yuv420Frame {
-    /// Create a new YUV420 frame with allocated buffers
     pub fn new(width: usize, height: usize) -> Self {
         let y_size = width * height;
         let uv_size = (width / 2) * (height / 2);
@@ -61,7 +60,6 @@ impl Yuv420Frame {
         }
     }
 
-    /// Get total frame size in bytes
     #[inline]
     pub fn total_size(&self) -> usize {
         self.y.len() + self.u.len() + self.v.len()
@@ -130,40 +128,32 @@ impl Yuv420Frame {
     // These methods match the openh264::formats::YUVSource trait signature,
     // allowing direct use with YUVSlices without double-conversion.
 
-    /// Get frame dimensions as (width, height)
     #[inline]
     pub fn dimensions(&self) -> (usize, usize) {
         (self.width, self.height)
     }
 
-    /// Get frame strides as (y_stride, u_stride, v_stride)
-    ///
     /// For planar YUV420, Y stride = width, U/V stride = width/2
     #[inline]
     pub fn strides(&self) -> (usize, usize, usize) {
         (self.width, self.width / 2, self.width / 2)
     }
 
-    /// Get Y (luma) plane slice
     #[inline]
     pub fn y_plane(&self) -> &[u8] {
         &self.y
     }
 
-    /// Get U (Cb) chroma plane slice
     #[inline]
     pub fn u_plane(&self) -> &[u8] {
         &self.u
     }
 
-    /// Get V (Cr) chroma plane slice
     #[inline]
     pub fn v_plane(&self) -> &[u8] {
         &self.v
     }
 
-    /// Validate that this frame is suitable for OpenH264 encoding
-    ///
     /// Checks that:
     /// - Dimensions are even (required for YUV420)
     /// - Plane sizes match expected dimensions
@@ -215,13 +205,6 @@ impl Yuv420Frame {
 /// - **U plane**: 2×2 box filter subsample from YUV444 U
 /// - **V plane**: 2×2 box filter subsample from YUV444 V
 ///
-/// # Arguments
-///
-/// * `yuv444` - Source YUV444 frame with full chroma
-///
-/// # Returns
-///
-/// YUV420 frame suitable for standard H.264 encoding
 pub fn pack_main_view(yuv444: &Yuv444Frame) -> Yuv420Frame {
     let width = yuv444.width;
     let height = yuv444.height;
@@ -321,13 +304,6 @@ pub fn pack_main_view(yuv444: &Yuv444Frame) -> Yuv420Frame {
 /// - **U plane**: V444 samples at odd positions (subsampled)
 /// - **V plane**: Neutral (128) for encoder stability
 ///
-/// # Arguments
-///
-/// * `yuv444` - Source YUV444 frame with full chroma
-///
-/// # Returns
-///
-/// YUV420 frame with chroma data packed as luma for H.264 encoding
 pub fn pack_auxiliary_view(yuv444: &Yuv444Frame) -> Yuv420Frame {
     // TESTING: Row-level macroblock packing WITH all-keyframes encoder
     // This will tell us if the packing is correct but P-frame prediction is the issue
@@ -787,17 +763,6 @@ pub fn pack_auxiliary_view_simplified(yuv444: &Yuv444Frame) -> Yuv420Frame {
     }
 }
 
-/// Pack dual YUV420 views from a single YUV444 frame
-///
-/// Convenience function that returns both views at once.
-///
-/// # Arguments
-///
-/// * `yuv444` - Source YUV444 frame
-///
-/// # Returns
-///
-/// Tuple of (main_view, auxiliary_view) as YUV420 frames
 pub fn pack_dual_views(yuv444: &Yuv444Frame) -> (Yuv420Frame, Yuv420Frame) {
     let main_view = pack_main_view(yuv444);
     let aux_view = pack_auxiliary_view(yuv444);

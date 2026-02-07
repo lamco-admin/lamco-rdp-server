@@ -47,12 +47,11 @@ pub enum DrmFormat {
 }
 
 impl DrmFormat {
-    /// Check if format supports alpha channel
     pub fn has_alpha(&self) -> bool {
         matches!(self, Self::Argb8888 | Self::Abgr8888)
     }
 
-    /// Check if format is YUV (hardware encoder friendly)
+    /// YUV formats allow direct handoff to hardware encoders.
     pub fn is_yuv(&self) -> bool {
         matches!(self, Self::Nv12)
     }
@@ -145,6 +144,14 @@ pub enum WaylandFeature {
     Clipboard {
         /// Portal version supporting clipboard
         portal_version: u32,
+    },
+
+    /// Clipboard manager detection (Klipper, CopyQ, etc.)
+    ClipboardManager {
+        /// Type of clipboard manager
+        manager_type: String,
+        /// Manager version
+        version: String,
     },
 
     /// Remote input injection
@@ -244,6 +251,16 @@ pub enum WaylandFeature {
         /// Touch support
         touch: bool,
     },
+
+    // === Authentication Features ===
+    // Added in Phase 3
+    /// Authentication method availability
+    Authentication {
+        /// Authentication method ("pam", "none")
+        method: String,
+        /// Whether NLA (Network Level Authentication) is supported
+        supports_nla: bool,
+    },
 }
 
 /// Token storage method for session persistence
@@ -262,7 +279,6 @@ pub enum TokenStorageMethod {
 }
 
 impl WaylandFeature {
-    /// Get a short identifier for logging
     pub fn short_name(&self) -> &'static str {
         match self {
             Self::DamageTracking { .. } => "damage",
@@ -274,6 +290,7 @@ impl WaylandFeature {
             Self::WindowCapture { .. } => "window-capture",
             Self::HdrColorSpace { .. } => "hdr",
             Self::Clipboard { .. } => "clipboard",
+            Self::ClipboardManager { .. } => "clipboard-manager",
             Self::RemoteInput { .. } => "remote-input",
             Self::PipeWireStream { .. } => "pipewire",
             // Session persistence
@@ -284,6 +301,8 @@ impl WaylandFeature {
             Self::WlrScreencopy { .. } => "wlr-screencopy",
             Self::WlrDirectInput { .. } => "wlr-direct-input",
             Self::LibeiInput { .. } => "libei-input",
+            // Authentication
+            Self::Authentication { .. } => "authentication",
         }
     }
 }
@@ -320,6 +339,12 @@ impl std::fmt::Display for WaylandFeature {
             }
             Self::Clipboard { portal_version } => {
                 write!(f, "Clipboard(portal v{})", portal_version)
+            }
+            Self::ClipboardManager {
+                manager_type,
+                version,
+            } => {
+                write!(f, "ClipboardManager({} v{})", manager_type, version)
             }
             Self::RemoteInput {
                 keyboard,
@@ -418,6 +443,13 @@ impl std::fmt::Display for WaylandFeature {
                     "libei(portal=v{}, eis={}, kbd={}, ptr={}, touch={})",
                     portal_version, has_connect_to_eis, keyboard, pointer, touch
                 )
+            }
+            // Authentication
+            Self::Authentication {
+                method,
+                supports_nla,
+            } => {
+                write!(f, "Auth(method={}, nla={})", method, supports_nla)
             }
         }
     }

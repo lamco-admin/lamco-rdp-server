@@ -1,5 +1,10 @@
 //! FUSE-based Clipboard File Transfer
 //!
+//! **Execution Path:** FUSE filesystem + RDP FileContents protocol
+//! **Status:** Active (v1.0.0+)
+//! **Platform:** Native only (FUSE not available in Flatpak sandbox)
+//! **Feature:** Requires native deployment, falls back to staging in Flatpak
+//!
 //! Implements a virtual filesystem for on-demand clipboard file transfer.
 //! When Windows copies files, we create virtual file entries in FUSE.
 //! When Linux reads (pastes), we fetch data from Windows via RDP on-demand.
@@ -33,10 +38,6 @@ use tracing::{debug, error, info, trace};
 
 use crate::clipboard::error::{ClipboardError, Result};
 
-// =============================================================================
-// Constants
-// =============================================================================
-
 /// Root directory inode (standard FUSE convention)
 const ROOT_INODE: u64 = 1;
 
@@ -48,10 +49,6 @@ const TTL: Duration = Duration::from_secs(1);
 
 /// Timeout for RDP file content requests
 const RDP_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-
-// =============================================================================
-// Virtual File Entry
-// =============================================================================
 
 /// A virtual file in the FUSE filesystem
 #[derive(Debug, Clone)]
@@ -94,10 +91,6 @@ impl VirtualFile {
     }
 }
 
-// =============================================================================
-// File Request/Response for Async Bridge
-// =============================================================================
-
 /// Request for file contents (sent from FUSE to async task)
 #[derive(Debug)]
 pub struct FileContentsRequest {
@@ -122,10 +115,6 @@ pub enum FileContentsResponse {
     Error(String),
 }
 
-// =============================================================================
-// FUSE Filesystem Implementation
-// =============================================================================
-
 /// FUSE filesystem for clipboard file transfer
 pub struct FuseClipboardFs {
     /// Virtual files indexed by inode
@@ -141,7 +130,6 @@ pub struct FuseClipboardFs {
 }
 
 impl FuseClipboardFs {
-    /// Create a new FUSE filesystem
     pub fn new(request_tx: mpsc::Sender<FileContentsRequest>, mount_point: PathBuf) -> Self {
         Self {
             files: Arc::new(RwLock::new(HashMap::new())),
@@ -152,17 +140,14 @@ impl FuseClipboardFs {
         }
     }
 
-    /// Get shared reference to files map
     pub fn files(&self) -> Arc<RwLock<HashMap<u64, VirtualFile>>> {
         Arc::clone(&self.files)
     }
 
-    /// Get shared reference to name mapping
     pub fn name_to_inode(&self) -> Arc<RwLock<HashMap<String, u64>>> {
         Arc::clone(&self.name_to_inode)
     }
 
-    /// Add a virtual file and return its inode
     pub fn add_file(
         &self,
         filename: String,
@@ -192,7 +177,6 @@ impl FuseClipboardFs {
         inode
     }
 
-    /// Clear all virtual files (new clipboard content)
     pub fn clear_files(&self) {
         let mut files = self.files.write();
         let mut names = self.name_to_inode.write();
@@ -202,12 +186,10 @@ impl FuseClipboardFs {
         self.next_inode.store(FIRST_FILE_INODE, Ordering::SeqCst);
     }
 
-    /// Get mount point
     pub fn mount_point(&self) -> &PathBuf {
         &self.mount_point
     }
 
-    /// Get root directory attributes
     fn root_attr(&self) -> FileAttr {
         let now = SystemTime::now();
         FileAttr {
@@ -231,7 +213,6 @@ impl FuseClipboardFs {
 }
 
 impl Filesystem for FuseClipboardFs {
-    /// Look up a directory entry by name
     fn lookup(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
         if parent != ROOT_INODE {
             reply.error(libc::ENOENT);
@@ -261,7 +242,6 @@ impl Filesystem for FuseClipboardFs {
         reply.error(libc::ENOENT);
     }
 
-    /// Get file attributes
     fn getattr(&mut self, _req: &Request, ino: u64, _fh: Option<u64>, reply: ReplyAttr) {
         if ino == ROOT_INODE {
             reply.attr(&TTL, &self.root_attr());
@@ -276,9 +256,7 @@ impl Filesystem for FuseClipboardFs {
         }
     }
 
-    /// Open a file (verify it exists)
     fn open(&mut self, _req: &Request, ino: u64, flags: i32, reply: ReplyOpen) {
-        // Check write flags - we're read-only
         if flags & libc::O_WRONLY != 0 || flags & libc::O_RDWR != 0 {
             reply.error(libc::EACCES);
             return;
@@ -286,14 +264,12 @@ impl Filesystem for FuseClipboardFs {
 
         let files = self.files.read();
         if files.contains_key(&ino) {
-            // Return file handle (we use inode as handle)
             reply.opened(ino, 0);
         } else {
             reply.error(libc::ENOENT);
         }
     }
 
-    /// Read file data - this fetches from RDP on-demand
     fn read(
         &mut self,
         _req: &Request,
@@ -318,15 +294,12 @@ impl Filesystem for FuseClipboardFs {
             }
         };
 
-        // Check bounds
         let offset = offset as u64;
         if offset >= file.size {
-            // Reading past EOF returns empty
             reply.data(&[]);
             return;
         }
 
-        // Clamp size to remaining bytes
         let remaining = file.size - offset;
         let read_size = std::cmp::min(size as u64, remaining) as u32;
 
@@ -335,7 +308,6 @@ impl Filesystem for FuseClipboardFs {
             file.filename, offset, read_size, file.file_index
         );
 
-        // Create oneshot channel for response
         let (response_tx, response_rx) = oneshot::channel();
 
         let request = FileContentsRequest {
@@ -346,15 +318,12 @@ impl Filesystem for FuseClipboardFs {
             response_tx,
         };
 
-        // Send request to async task (blocking send from sync context)
         if self.request_tx.blocking_send(request).is_err() {
             error!("Failed to send file contents request - channel closed");
             reply.error(libc::EIO);
             return;
         }
 
-        // Wait for response (blocking in FUSE thread)
-        // Use a timeout to avoid hanging forever
         match response_rx.blocking_recv() {
             Ok(FileContentsResponse::Data(data)) => {
                 trace!("FUSE read: received {} bytes", data.len());
@@ -371,7 +340,6 @@ impl Filesystem for FuseClipboardFs {
         }
     }
 
-    /// Read directory contents
     fn readdir(
         &mut self,
         _req: &Request,
@@ -395,9 +363,7 @@ impl Filesystem for FuseClipboardFs {
             entries.push((file.inode, FileType::RegularFile, &file.filename));
         }
 
-        // Skip entries before offset
         for (i, (inode, file_type, name)) in entries.iter().enumerate().skip(offset as usize) {
-            // Return false means buffer is full
             if reply.add(*inode, (i + 1) as i64, *file_type, name) {
                 break;
             }
@@ -406,7 +372,6 @@ impl Filesystem for FuseClipboardFs {
         reply.ok();
     }
 
-    /// Open directory
     fn opendir(&mut self, _req: &Request, ino: u64, _flags: i32, reply: ReplyOpen) {
         if ino == ROOT_INODE {
             reply.opened(0, 0);
@@ -415,10 +380,6 @@ impl Filesystem for FuseClipboardFs {
         }
     }
 }
-
-// =============================================================================
-// FUSE Manager
-// =============================================================================
 
 /// Wrapper for BackgroundSession that implements Send + Sync
 ///
@@ -434,8 +395,11 @@ struct SendableSession(fuser::BackgroundSession);
 unsafe impl Send for SendableSession {}
 unsafe impl Sync for SendableSession {}
 
-/// Manages FUSE filesystem lifecycle
-pub struct FuseManager {
+/// FUSE mount lifecycle manager
+///
+/// Manages mounting/unmounting FUSE filesystem and virtual file state.
+/// Provides on-demand file content fetching via RDP protocol.
+pub struct FuseMount {
     /// Mount point path
     mount_point: PathBuf,
     /// FUSE session (set after mount) - wrapped for Send + Sync
@@ -450,8 +414,7 @@ pub struct FuseManager {
     request_tx: mpsc::Sender<FileContentsRequest>,
 }
 
-impl FuseManager {
-    /// Create a new FUSE manager with the given mount point and request channel
+impl FuseMount {
     pub fn new(request_tx: mpsc::Sender<FileContentsRequest>) -> Result<Self> {
         let mount_point = get_mount_point();
         Ok(Self {
@@ -473,7 +436,6 @@ impl FuseManager {
             return Ok(()); // Already mounted
         }
 
-        // Create mount point directory
         std::fs::create_dir_all(&self.mount_point).map_err(|e| {
             ClipboardError::FileIoError(format!("Failed to create FUSE mount point: {}", e))
         })?;
@@ -483,7 +445,6 @@ impl FuseManager {
             self.mount_point
         );
 
-        // Helper to create filesystem with shared state
         let create_fs = || FuseClipboardFsShared {
             files: Arc::clone(&self.files),
             name_to_inode: Arc::clone(&self.name_to_inode),
@@ -538,31 +499,24 @@ impl FuseManager {
             drop(session); // BackgroundSession unmounts on drop
         }
 
-        // Try to remove mount point (may fail if not empty, that's ok)
         let _ = std::fs::remove_dir(&self.mount_point);
 
         Ok(())
     }
 
-    /// Check if mounted
     pub fn is_mounted(&self) -> bool {
         self.session.is_some()
     }
 
-    /// Get mount point path
     pub fn mount_point(&self) -> &PathBuf {
         &self.mount_point
     }
 
-    /// Set virtual files from file descriptors
-    ///
-    /// Returns paths to the virtual files for URI generation
     pub fn set_files(
         &self,
         descriptors: Vec<FileDescriptor>,
         clip_data_id: Option<u32>,
     ) -> Vec<PathBuf> {
-        // Clear existing files
         {
             let mut files = self.files.write();
             let mut names = self.name_to_inode.write();
@@ -605,7 +559,6 @@ impl FuseManager {
         paths
     }
 
-    /// Clear all virtual files
     pub fn clear_files(&self) {
         let mut files = self.files.write();
         let mut names = self.name_to_inode.write();
@@ -615,21 +568,16 @@ impl FuseManager {
         debug!("Cleared all virtual files from FUSE");
     }
 
-    /// Get file count
     pub fn file_count(&self) -> usize {
         self.files.read().len()
     }
 }
 
-impl Drop for FuseManager {
+impl Drop for FuseMount {
     fn drop(&mut self) {
         let _ = self.unmount();
     }
 }
-
-// =============================================================================
-// Shared FUSE Filesystem (for BackgroundSession)
-// =============================================================================
 
 /// FUSE filesystem with shared state (for use with BackgroundSession)
 struct FuseClipboardFsShared {
@@ -809,11 +757,6 @@ impl Filesystem for FuseClipboardFsShared {
     }
 }
 
-// =============================================================================
-// Helper Functions
-// =============================================================================
-
-/// Get the FUSE mount point path
 pub fn get_mount_point() -> PathBuf {
     let uid = unsafe { libc::getuid() };
     let runtime_dir =
@@ -822,7 +765,6 @@ pub fn get_mount_point() -> PathBuf {
     PathBuf::from(runtime_dir).join("lamco-clipboard-fuse")
 }
 
-/// Get root directory attributes
 fn root_attr() -> FileAttr {
     let now = SystemTime::now();
     FileAttr {
@@ -844,10 +786,6 @@ fn root_attr() -> FileAttr {
     }
 }
 
-// =============================================================================
-// File Descriptor (from RDP)
-// =============================================================================
-
 /// File descriptor from FileGroupDescriptorW
 #[derive(Debug, Clone)]
 pub struct FileDescriptor {
@@ -862,7 +800,6 @@ pub struct FileDescriptor {
 }
 
 impl FileDescriptor {
-    /// Create a new file descriptor
     pub fn new(filename: String, size: u64) -> Self {
         Self {
             filename,
@@ -873,10 +810,6 @@ impl FileDescriptor {
     }
 }
 
-// =============================================================================
-// URI Generation
-// =============================================================================
-
 /// Generate gnome-copied-files format content from file paths
 ///
 /// Format: `copy\nfile:///path/to/file1\nfile:///path/to/file2\0`
@@ -885,7 +818,6 @@ pub fn generate_gnome_copied_files_content(paths: &[PathBuf]) -> String {
     for path in paths {
         content.push_str(&format!("file://{}\n", path.display()));
     }
-    // Remove trailing newline and add null terminator
     if content.ends_with('\n') {
         content.pop();
     }
@@ -903,10 +835,6 @@ pub fn generate_uri_list_content(paths: &[PathBuf]) -> String {
     }
     content
 }
-
-// =============================================================================
-// Tests
-// =============================================================================
 
 #[cfg(test)]
 mod tests {

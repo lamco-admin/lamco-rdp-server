@@ -90,7 +90,6 @@ pub struct H264Frame {
 }
 
 impl H264Frame {
-    /// Create a new H.264 frame
     pub fn new(data: Vec<u8>, is_keyframe: bool, timestamp_ms: u64) -> Self {
         let size = data.len();
         Self {
@@ -126,21 +125,6 @@ impl H264Frame {
 /// All operations return `HardwareEncoderResult` which wraps backend-specific
 /// errors into a unified error type.
 pub trait HardwareEncoder {
-    /// Encode a BGRA frame to H.264
-    ///
-    /// # Arguments
-    ///
-    /// * `bgra_data` - Raw BGRA pixel data (4 bytes per pixel, row-major)
-    /// * `width` - Frame width in pixels (must be even)
-    /// * `height` - Frame height in pixels (must be even)
-    /// * `timestamp_ms` - Frame timestamp in milliseconds
-    ///
-    /// # Returns
-    ///
-    /// - `Ok(Some(frame))` - Successfully encoded frame
-    /// - `Ok(None)` - Frame was skipped by rate control
-    /// - `Err(e)` - Encoding failed
-    ///
     /// # Performance
     ///
     /// This method performs:
@@ -242,7 +226,6 @@ pub enum QualityPreset {
 }
 
 impl QualityPreset {
-    /// Parse from string (case-insensitive)
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "speed" | "fast" => Some(Self::Speed),
@@ -252,7 +235,6 @@ impl QualityPreset {
         }
     }
 
-    /// Get bitrate for this preset (kbps)
     pub fn bitrate_kbps(&self) -> u32 {
         match self {
             Self::Speed => 3000,
@@ -261,7 +243,6 @@ impl QualityPreset {
         }
     }
 
-    /// Get GOP (keyframe interval) for this preset
     pub fn gop_size(&self) -> u32 {
         match self {
             Self::Speed => 60,
@@ -281,13 +262,11 @@ impl std::fmt::Display for QualityPreset {
     }
 }
 
-/// Check if any hardware encoding backend is available at compile time
 #[inline]
 pub const fn is_hardware_encoding_available() -> bool {
     cfg!(any(feature = "vaapi", feature = "nvenc"))
 }
 
-/// Get list of available backends at compile time
 pub fn available_backends() -> Vec<&'static str> {
     let mut backends = Vec::new();
 

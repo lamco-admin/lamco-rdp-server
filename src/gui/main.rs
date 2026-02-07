@@ -17,7 +17,7 @@ use std::panic;
 use std::process::Command;
 use tracing::{error, info, warn};
 
-use lamco_rdp_server::capabilities::{CapabilityManager, RenderingRecommendation};
+use lamco_rdp_server::capabilities::{Capabilities, RenderingRecommendation};
 use lamco_rdp_server::gui::app::ConfigGuiApp;
 
 /// Professional sans-serif font for the UI
@@ -28,7 +28,6 @@ const FONT: Font = Font::with_name("Liberation Sans");
 const SOFTWARE_RENDERING_CONFIGURED: &str = "LAMCO_SOFTWARE_RENDERING_CONFIGURED";
 
 fn main() {
-    // Initialize logging
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             env::var("RUST_LOG")
@@ -36,7 +35,6 @@ fn main() {
         )
         .try_init();
 
-    // Run with proper error handling
     if let Err(e) = run() {
         error!("GUI failed: {}", e);
         std::process::exit(1);
@@ -44,27 +42,20 @@ fn main() {
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
-    // Check if we've already been re-executed with software rendering configured
     let software_configured = env::var(SOFTWARE_RENDERING_CONFIGURED).is_ok();
-
-    // Check for forced software rendering via environment
     let force_software = env::var("LAMCO_GUI_SOFTWARE").is_ok();
 
-    // If software rendering is already configured (via re-exec or env vars), skip detection
     if software_configured || env::var("LIBGL_ALWAYS_SOFTWARE").is_ok() {
         info!("Software rendering environment already configured");
         setup_panic_handler();
         return run_gui();
     }
 
-    // Initialize capability manager
     let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(async { CapabilityManager::initialize().await })?;
+    rt.block_on(async { Capabilities::initialize().await })?;
 
-    // Get capabilities
-    let caps = rt.block_on(async { CapabilityManager::global().read().await.state.clone() });
+    let caps = rt.block_on(async { Capabilities::global().read().await.state.clone() });
 
-    // Check rendering capability
     match &caps.rendering.recommendation {
         RenderingRecommendation::NoGui { reason, suggestion } => {
             print_no_gui_message(reason, suggestion);
@@ -82,16 +73,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // Force software rendering if requested
     if force_software {
         info!("Forced software rendering via LAMCO_GUI_SOFTWARE environment variable");
         reexec_with_software_rendering();
     }
 
-    // Set up panic handler for wgpu errors
     setup_panic_handler();
-
-    // Run the GUI
     run_gui()
 }
 
@@ -131,7 +118,6 @@ fn setup_panic_handler() {
             "Unknown panic".to_string()
         };
 
-        // Check if this is a wgpu/rendering error
         if msg.contains("wgpu")
             || msg.contains("Shader")
             || msg.contains("GPU")
@@ -199,6 +185,9 @@ fn run_gui() -> Result<(), Box<dyn std::error::Error>> {
         .antialiasing(true)
         .default_font(FONT)
         .subscription(ConfigGuiApp::subscription)
+        // Prevent automatic exit on window close - let our handler manage it
+        // This is required for "close GUI only" mode to work (server keeps running)
+        .exit_on_close_request(false)
         .run()?;
 
     Ok(())

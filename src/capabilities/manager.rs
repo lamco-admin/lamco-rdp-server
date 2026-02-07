@@ -1,4 +1,9 @@
-//! Capability manager singleton
+//! Capabilities Singleton
+//!
+//! **Execution Path:** System capability probing
+//! **Status:** Active (v1.0.0+)
+//! **Platform:** Universal
+//! **Role:** Centralized capability detection and state management
 //!
 //! Provides centralized capability state management with singleton access pattern.
 
@@ -17,13 +22,13 @@ use crate::capabilities::state::{
     UserImpact,
 };
 
-static INSTANCE: OnceLock<Arc<RwLock<CapabilityManager>>> = OnceLock::new();
+static INSTANCE: OnceLock<Arc<RwLock<Capabilities>>> = OnceLock::new();
 
-/// Error during capability manager initialization
+/// Error during capabilities initialization
 #[derive(Debug, Error)]
 pub enum InitializationError {
-    /// Manager already initialized
-    #[error("Capability manager already initialized")]
+    /// Capabilities already initialized
+    #[error("Capabilities already initialized")]
     AlreadyInitialized,
 
     /// Probe failed during initialization
@@ -31,11 +36,11 @@ pub enum InitializationError {
     ProbeFailed(String),
 }
 
-/// Central capability manager
+/// System capabilities singleton
 ///
 /// Manages the lifecycle of capability detection and provides access to
-/// current system capabilities.
-pub struct CapabilityManager {
+/// current system capabilities. Probed once at startup and accessible globally.
+pub struct Capabilities {
     /// Current capability state
     pub state: SystemCapabilities,
 
@@ -43,11 +48,8 @@ pub struct CapabilityManager {
     initialized: bool,
 }
 
-impl CapabilityManager {
-    /// Initialize the global capability manager
-    ///
-    /// This should be called once at startup before any capability queries.
-    /// It probes all subsystems to detect available capabilities.
+impl Capabilities {
+    /// Must be called once at startup before any capability queries.
     ///
     /// # Errors
     ///
@@ -57,7 +59,6 @@ impl CapabilityManager {
 
         let manager = Self::probe_all().await?;
 
-        // Log summary
         info!("{}", manager.diagnostic_summary());
 
         INSTANCE
@@ -68,25 +69,20 @@ impl CapabilityManager {
         Ok(())
     }
 
-    /// Get reference to the global manager
-    ///
     /// # Panics
     ///
-    /// Panics if called before `initialize()`. Always call `initialize()` at
-    /// program startup.
-    pub fn global() -> Arc<RwLock<CapabilityManager>> {
+    /// Panics if called before `initialize()`.
+    pub fn global() -> Arc<RwLock<Capabilities>> {
         INSTANCE
             .get()
-            .expect("CapabilityManager::initialize() must be called first")
+            .expect("Capabilities::initialize() must be called first")
             .clone()
     }
 
-    /// Check if the manager has been initialized
     pub fn is_initialized() -> bool {
         INSTANCE.get().is_some()
     }
 
-    /// Probe all subsystems
     async fn probe_all() -> Result<Self, InitializationError> {
         debug!("Probing display capabilities...");
         let display = DisplayProbe::probe().await;
@@ -106,7 +102,6 @@ impl CapabilityManager {
         debug!("Probing network capabilities...");
         let network = NetworkProbe::probe().await;
 
-        // Compute derived state
         let minimum_viable = Self::compute_minimum_viable(&display, &encoding, &input, &rendering);
         let degradations =
             Self::collect_degradations(&display, &encoding, &input, &storage, &rendering);
@@ -151,7 +146,6 @@ impl CapabilityManager {
         self.state.probed_at = Utc::now();
     }
 
-    /// Recompute derived state after a reprobe
     fn recompute_derived_state(&mut self) {
         self.state.minimum_viable = Self::compute_minimum_viable(
             &self.state.display,
@@ -199,7 +193,6 @@ impl CapabilityManager {
     ) -> Vec<Degradation> {
         let mut degradations = Vec::new();
 
-        // Display degradations
         if display.service_level == ServiceLevel::Degraded {
             degradations.push(Degradation {
                 subsystem: Subsystem::Display,
@@ -210,7 +203,6 @@ impl CapabilityManager {
             });
         }
 
-        // Encoding degradations
         if encoding.service_level == ServiceLevel::Fallback {
             degradations.push(Degradation {
                 subsystem: Subsystem::Encoding,
@@ -232,7 +224,6 @@ impl CapabilityManager {
             });
         }
 
-        // Input degradation
         if input.service_level == ServiceLevel::Fallback {
             degradations.push(Degradation {
                 subsystem: Subsystem::Input,
@@ -243,7 +234,6 @@ impl CapabilityManager {
             });
         }
 
-        // Rendering degradation
         if rendering.service_level == ServiceLevel::Fallback {
             degradations.push(Degradation {
                 subsystem: Subsystem::Rendering,
@@ -254,7 +244,6 @@ impl CapabilityManager {
             });
         }
 
-        // Storage degradation
         if storage.service_level == ServiceLevel::Fallback {
             degradations.push(Degradation {
                 subsystem: Subsystem::Storage,
@@ -276,7 +265,6 @@ impl CapabilityManager {
     ) -> Vec<BlockingIssue> {
         let mut issues = Vec::new();
 
-        // No display capture
         if display.service_level == ServiceLevel::Unavailable {
             issues.push(BlockingIssue {
                 subsystem: Subsystem::Display,
@@ -290,7 +278,6 @@ impl CapabilityManager {
             });
         }
 
-        // No video encoding
         if encoding.service_level == ServiceLevel::Unavailable {
             issues.push(BlockingIssue {
                 subsystem: Subsystem::Encoding,
@@ -304,7 +291,6 @@ impl CapabilityManager {
             });
         }
 
-        // No input
         if input.service_level == ServiceLevel::Unavailable {
             issues.push(BlockingIssue {
                 subsystem: Subsystem::Input,
@@ -320,7 +306,6 @@ impl CapabilityManager {
         issues
     }
 
-    /// Generate a diagnostic summary
     pub fn diagnostic_summary(&self) -> String {
         let mut summary = String::new();
 
@@ -386,7 +371,6 @@ impl CapabilityManager {
         summary
     }
 
-    /// Get JSON representation of capabilities
     pub fn to_json(&self) -> serde_json::Result<String> {
         serde_json::to_string_pretty(&self.state)
     }

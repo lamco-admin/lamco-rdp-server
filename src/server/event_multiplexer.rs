@@ -122,15 +122,14 @@ pub(super) struct EventMultiplexer {
 }
 
 impl EventMultiplexer {
-    /// Create new event multiplexer with default queue sizes
     pub(super) fn new() -> Self {
-        let (input_tx, input_rx) = mpsc::channel(32);
+        let (input_tx, input_rx) = mpsc::channel(256); // Increased from 32 to handle mouse event bursts
         let (control_tx, control_rx) = mpsc::channel(16);
         let (clipboard_tx, clipboard_rx) = mpsc::channel(8);
         let (graphics_tx, graphics_rx) = mpsc::channel(4);
 
         info!("Event multiplexer created with bounded queues:");
-        info!("  Input: 32 (Priority 1)");
+        info!("  Input: 256 (Priority 1 - handles mouse bursts)");
         info!("  Control: 16 (Priority 2)");
         info!("  Clipboard: 8 (Priority 3)");
         info!("  Graphics: 4 (Priority 4 - drop/coalesce)");
@@ -152,35 +151,29 @@ impl EventMultiplexer {
         }
     }
 
-    /// Get input event sender
     pub(super) fn input_sender(&self) -> mpsc::Sender<InputEvent> {
         self.input_tx.clone()
     }
 
-    /// Get control event sender
     pub(super) fn control_sender(&self) -> mpsc::Sender<ControlEvent> {
         self.control_tx.clone()
     }
 
-    /// Get clipboard event sender
     pub(super) fn clipboard_sender(&self) -> mpsc::Sender<ClipboardEvent> {
         self.clipboard_tx.clone()
     }
 
-    /// Get graphics frame sender
     pub(super) fn graphics_sender(&self) -> mpsc::Sender<GraphicsFrame> {
         self.graphics_tx.clone()
     }
 
-    /// Send input event with drop policy
     pub(super) async fn send_input(&self, event: InputEvent) {
         if self.input_tx.send(event).await.is_err() {
             warn!("Input queue full - dropping event (extremely rare)");
         }
     }
 
-    /// Send graphics frame with drop policy
-    /// If queue full, drop immediately (never block on graphics)
+    /// Drop immediately if queue full (never block on graphics)
     pub(super) fn send_graphics_nonblocking(&mut self, frame: GraphicsFrame) {
         if self.graphics_tx.try_send(frame).is_err() {
             self.graphics_dropped += 1;
@@ -193,32 +186,23 @@ impl EventMultiplexer {
         }
     }
 
-    /// Drain events to wire in priority order
-    ///
-    /// This is the core QoS implementation:
-    /// 1. Drain ALL input events (never starve)
-    /// 2. Process 1 control event (session management)
-    /// 3. Process 1 clipboard event (user operations)
-    /// 4. Coalesce graphics to 1 latest frame
+    /// Core QoS drain cycle - processes events in priority order:
+    /// input (all), control (1), clipboard (1), graphics (coalesced to 1)
     pub(super) async fn drain_cycle(&mut self) -> DrainResult {
         let mut result = DrainResult::default();
 
-        // PRIORITY 1: Drain ALL input events
         while let Ok(input) = self.input_rx.try_recv() {
             result.input_events.push(input);
         }
 
-        // PRIORITY 2: Process 1 control event
         if let Ok(control) = self.control_rx.try_recv() {
             result.control_event = Some(control);
         }
 
-        // PRIORITY 3: Process 1 clipboard event
         if let Ok(clipboard) = self.clipboard_rx.try_recv() {
             result.clipboard_event = Some(clipboard);
         }
 
-        // PRIORITY 4: Coalesce graphics - keep only latest frame
         let mut latest_frame = None;
         let mut coalesce_count = 0u32;
         while let Ok(frame) = self.graphics_rx.try_recv() {
@@ -242,7 +226,6 @@ impl EventMultiplexer {
         result
     }
 
-    /// Get statistics
     pub(super) fn stats(&self) -> MultiplexerStats {
         MultiplexerStats {
             input_dropped: self.input_dropped,
@@ -254,7 +237,6 @@ impl EventMultiplexer {
     }
 }
 
-/// Result of drain cycle containing events to process
 #[derive(Default)]
 pub(super) struct DrainResult {
     pub input_events: Vec<InputEvent>,
@@ -263,7 +245,6 @@ pub(super) struct DrainResult {
     pub graphics_frame: Option<GraphicsFrame>,
 }
 
-/// Multiplexer statistics
 #[derive(Debug, Clone)]
 pub(super) struct MultiplexerStats {
     pub input_dropped: u64,

@@ -28,7 +28,7 @@ pub fn view_server_tab(state: &AppState) -> Element<'_, Message> {
         ),
         space().height(16.0),
         // Maximum Connections
-        widgets::labeled_row_with_help(
+        widgets::labeled_row_pending_with_note(
             "Maximum Connections:",
             150.0,
             widgets::number_input(
@@ -37,11 +37,11 @@ pub fn view_server_tab(state: &AppState) -> Element<'_, Message> {
                 100.0,
                 Message::ServerMaxConnectionsChanged,
             ),
-            "Maximum number of simultaneous clients (1-100)",
+            "IronRDP handles one client at a time",
         ),
         space().height(16.0),
         // Session Timeout
-        widgets::labeled_row_with_help(
+        widgets::labeled_row_pending_with_note(
             "Session Timeout:",
             150.0,
             Element::from(
@@ -57,15 +57,26 @@ pub fn view_server_tab(state: &AppState) -> Element<'_, Message> {
                 .spacing(8)
                 .align_y(Alignment::Center)
             ),
-            "Auto-disconnect idle sessions (0 = never)",
+            "Needs idle tracking implementation",
         ),
         space().height(16.0),
         // Use XDG Portals
-        widgets::toggle_with_help(
+        widgets::toggle_pending_with_note(
             "Use XDG Desktop Portals",
             state.config.server.use_portals,
-            "Required for Wayland screen capture and input injection",
             Message::ServerUsePortalsToggled,
+            "Always enabled - required for Wayland",
+        ),
+        space().height(20.0),
+        // GUI Behavior section
+        widgets::section_header("GUI Behavior"),
+        space().height(12.0),
+        // Close stops server toggle
+        widgets::toggle_with_help(
+            "Closing GUI stops server",
+            state.close_stops_server,
+            "When disabled, closing the GUI leaves the server running in the background",
+            Message::ToggleCloseStopsServer,
         ),
     ]
     .spacing(8)

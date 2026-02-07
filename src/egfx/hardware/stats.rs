@@ -57,7 +57,6 @@ pub struct HardwareEncoderStats {
 }
 
 impl HardwareEncoderStats {
-    /// Create new stats for a backend
     pub fn new(backend: &'static str, target_bitrate_kbps: u32) -> Self {
         Self {
             backend,
@@ -77,7 +76,6 @@ impl HardwareEncoderStats {
         }
     }
 
-    /// Update stats after encoding a frame
     pub fn record_frame(&mut self, encode_time_ms: f32, bytes: usize, is_keyframe: bool) {
         self.frames_encoded += 1;
         self.bytes_encoded += bytes as u64;
@@ -104,13 +102,11 @@ impl HardwareEncoderStats {
         self.update_bitrate_estimate();
     }
 
-    /// Record a skipped frame
     pub fn record_skip(&mut self) {
         self.frames_skipped += 1;
         self.uptime = self.created_at.elapsed();
     }
 
-    /// Update bitrate estimate based on total bytes and time
     fn update_bitrate_estimate(&mut self) {
         let elapsed_secs = self.uptime.as_secs_f32();
         if elapsed_secs > 0.5 {
@@ -119,17 +115,14 @@ impl HardwareEncoderStats {
         }
     }
 
-    /// Update GPU utilization (called by backend if available)
     pub fn set_gpu_utilization(&mut self, utilization: f32) {
         self.gpu_utilization = Some(utilization.clamp(0.0, 100.0));
     }
 
-    /// Update encoder-specific utilization (called by backend if available)
     pub fn set_encoder_utilization(&mut self, utilization: f32) {
         self.encoder_utilization = Some(utilization.clamp(0.0, 100.0));
     }
 
-    /// Get frames per second based on total time
     pub fn fps(&self) -> f32 {
         let elapsed_secs = self.uptime.as_secs_f32();
         if elapsed_secs > 0.0 {
@@ -139,7 +132,6 @@ impl HardwareEncoderStats {
         }
     }
 
-    /// Get keyframe percentage
     pub fn keyframe_percentage(&self) -> f32 {
         if self.frames_encoded > 0 {
             (self.keyframes_encoded as f32 / self.frames_encoded as f32) * 100.0
@@ -148,7 +140,6 @@ impl HardwareEncoderStats {
         }
     }
 
-    /// Get skip percentage
     pub fn skip_percentage(&self) -> f32 {
         let total = self.frames_encoded + self.frames_skipped;
         if total > 0 {
@@ -158,7 +149,6 @@ impl HardwareEncoderStats {
         }
     }
 
-    /// Format stats for logging
     pub fn summary(&self) -> String {
         format!(
             "{}: {} frames, {:.1} fps, {} kbps (target {}), avg {:.2}ms/frame",
@@ -184,14 +174,12 @@ pub struct EncodeTimer {
 }
 
 impl EncodeTimer {
-    /// Start timing an encode operation
     pub fn start() -> Self {
         Self {
             start: Instant::now(),
         }
     }
 
-    /// Get elapsed time in milliseconds
     pub fn elapsed_ms(&self) -> f32 {
         self.start.elapsed().as_secs_f32() * 1000.0
     }

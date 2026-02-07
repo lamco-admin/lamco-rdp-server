@@ -1,7 +1,12 @@
 //! IronRDP Clipboard Backend Factory
 //!
+//! **Execution Path:** IronRDP CLIPRDR protocol
+//! **Status:** Active (v1.0.0+)
+//! **Platform:** Universal (RDP protocol)
+//! **Role:** Bridges IronRDP backend events to ClipboardOrchestrator
+//!
 //! Server-specific factory wrapping lamco-rdp-clipboard's backend.
-//! Integrates with the server's ClipboardManager for event routing.
+//! Integrates with the server's ClipboardOrchestrator for event routing.
 
 use ironrdp_cliprdr::backend::CliprdrBackendFactory;
 use ironrdp_server::ServerEventSender;
@@ -15,28 +20,28 @@ pub use lamco_rdp_clipboard::{
     RdpCliprdrBackend, RdpCliprdrFactory as LibRdpCliprdrFactory,
 };
 
-use crate::clipboard::manager::ClipboardManager;
+use crate::clipboard::manager::ClipboardOrchestrator;
 
 /// Server-specific clipboard backend factory
 ///
 /// Wraps [`LibRdpCliprdrFactory`] from lamco-rdp-clipboard and integrates
-/// with the server's [`ClipboardManager`] for event routing.
+/// with the server's [`ClipboardOrchestrator`] for event routing.
 ///
 /// # Example
 ///
 /// ```ignore
-/// use lamco_rdp_server::clipboard::{ClipboardManager, LamcoCliprdrFactory};
+/// use lamco_rdp_server::clipboard::{ClipboardOrchestrator, LamcoCliprdrFactory};
 /// use std::sync::Arc;
 /// use tokio::sync::Mutex;
 ///
-/// let manager = Arc::new(Mutex::new(ClipboardManager::new(config).await?));
+/// let manager = Arc::new(Mutex::new(ClipboardOrchestrator::new(config).await?));
 /// let factory = LamcoCliprdrFactory::new(manager);
 ///
 /// // Pass factory to IronRDP server builder
 /// ```
 pub struct LamcoCliprdrFactory {
     /// Clipboard manager shared across connections
-    clipboard_manager: Arc<Mutex<ClipboardManager>>,
+    clipboard_manager: Arc<Mutex<ClipboardOrchestrator>>,
 
     /// Event sender for clipboard events
     event_sender: ClipboardEventSender,
@@ -46,12 +51,7 @@ pub struct LamcoCliprdrFactory {
 }
 
 impl LamcoCliprdrFactory {
-    /// Create a new clipboard factory
-    ///
-    /// # Arguments
-    ///
-    /// * `clipboard_manager` - Shared clipboard manager instance
-    pub fn new(clipboard_manager: Arc<Mutex<ClipboardManager>>) -> Self {
+    pub fn new(clipboard_manager: Arc<Mutex<ClipboardOrchestrator>>) -> Self {
         let event_sender = ClipboardEventSender::new();
         let event_receiver = event_sender.subscribe();
 
@@ -76,7 +76,7 @@ impl LamcoCliprdrFactory {
     /// ironrdp clipboard types and lamco clipboard types.
     fn start_event_bridge(
         receiver: ClipboardEventReceiver,
-        clipboard_manager: Arc<Mutex<ClipboardManager>>,
+        clipboard_manager: Arc<Mutex<ClipboardOrchestrator>>,
     ) {
         use lamco_clipboard_core::ClipboardFormat;
 
@@ -86,10 +86,9 @@ impl LamcoCliprdrFactory {
             loop {
                 // Poll for events (ClipboardEventReceiver uses try_recv, not async recv)
                 if let Some(rdp_event) = receiver.try_recv() {
-                    // Get manager's event sender
                     let mgr = clipboard_manager.lock().await;
                     let manager_tx = mgr.event_sender();
-                    drop(mgr); // Release lock before sending
+                    drop(mgr);
 
                     match rdp_event {
                         ClipboardEvent::RemoteCopy { formats } => {
@@ -98,7 +97,6 @@ impl LamcoCliprdrFactory {
                                 formats.len()
                             );
 
-                            // Convert Vec<ironrdp_cliprdr::ClipboardFormat> to Vec<lamco_clipboard_core::ClipboardFormat>
                             let converted: Vec<ClipboardFormat> = formats
                                 .iter()
                                 .map(|f| {
@@ -228,8 +226,6 @@ impl CliprdrBackendFactory for LamcoCliprdrFactory {
     fn build_cliprdr_backend(&self) -> Box<dyn ironrdp_cliprdr::backend::CliprdrBackend> {
         debug!("Building clipboard backend for new connection");
 
-        // Create backend using library implementation
-        // Use /tmp/lamco-clipboard for temporary file storage
         let backend = RdpCliprdrBackend::new(
             "/tmp/lamco-clipboard".to_string(),
             self.event_sender.clone(),
@@ -244,7 +240,6 @@ impl ServerEventSender for LamcoCliprdrFactory {
         info!("Clipboard factory received server event sender");
         self.server_event_sender = Some(sender.clone());
 
-        // Register sender with ClipboardManager for delayed rendering requests
         let manager = Arc::clone(&self.clipboard_manager);
         let sender_clone = sender;
         tokio::spawn(async move {
@@ -268,11 +263,11 @@ impl std::fmt::Debug for LamcoCliprdrFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::clipboard::manager::ClipboardConfig;
+    use crate::clipboard::manager::ClipboardOrchestratorConfig;
 
     #[tokio::test]
     async fn test_factory_creation() {
-        let config = ClipboardConfig::default();
+        let config = ClipboardOrchestratorConfig::default();
         let manager = Arc::new(Mutex::new(ClipboardManager::new(config).await.unwrap()));
 
         let factory = LamcoCliprdrFactory::new(manager);
@@ -282,7 +277,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_factory_with_bridge() {
-        let config = ClipboardConfig::default();
+        let config = ClipboardOrchestratorConfig::default();
         let manager = Arc::new(Mutex::new(ClipboardManager::new(config).await.unwrap()));
 
         let factory = LamcoCliprdrFactory::new(manager);

@@ -42,30 +42,20 @@ impl Clone for TlsConfig {
 }
 
 impl TlsConfig {
-    /// Create TLS config from PEM files
-    ///
-    /// # Arguments
-    ///
-    /// * `cert_path` - Path to PEM certificate file
-    /// * `key_path` - Path to PEM private key file
-    ///
-    /// # Returns
-    ///
-    /// A configured `TlsConfig` with TLS 1.3 enabled
-    ///
-    /// # Errors
-    ///
-    /// Returns error if:
-    /// - Files cannot be opened
-    /// - PEM parsing fails
-    /// - No certificates or keys found
-    /// - ServerConfig creation fails
     pub fn from_files(cert_path: &Path, key_path: &Path) -> Result<Self> {
+        Self::from_files_with_options(cert_path, key_path, false)
+    }
+
+    pub fn from_files_with_options(
+        cert_path: &Path,
+        key_path: &Path,
+        require_tls_13: bool,
+    ) -> Result<Self> {
         info!("Loading TLS configuration from files");
         debug!("Certificate: {:?}", cert_path);
         debug!("Private key: {:?}", key_path);
+        debug!("Require TLS 1.3: {}", require_tls_13);
 
-        // Load certificate chain
         let cert_file = File::open(cert_path).context("Failed to open certificate file")?;
         let mut cert_reader = BufReader::new(cert_file);
 
@@ -79,7 +69,6 @@ impl TlsConfig {
 
         debug!("Loaded {} certificate(s)", certs.len());
 
-        // Load private key
         let key_file = File::open(key_path).context("Failed to open private key file")?;
         let mut key_reader = BufReader::new(key_file);
 
@@ -90,14 +79,27 @@ impl TlsConfig {
 
         debug!("Private key loaded successfully");
 
-        // Create ServerConfig with modern rustls 0.23 API
-        // Use builder pattern with defaults
-        let server_config = ServerConfig::builder()
-            .with_no_client_auth()
-            .with_single_cert(certs.clone(), private_key.clone_key())
-            .context("Failed to configure certificate")?;
+        // Create ServerConfig with protocol version control
+        // TLS 1.3 only is more secure but may have compatibility issues with older clients
+        let server_config = if require_tls_13 {
+            info!("Configuring TLS 1.3 ONLY (require_tls_13=true)");
+            ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+                .with_no_client_auth()
+                .with_single_cert(certs.clone(), private_key.clone_key())
+                .context("Failed to configure TLS 1.3 certificate")?
+        } else {
+            // Default: allow TLS 1.2 and 1.3
+            info!("Configuring TLS 1.2/1.3 (default)");
+            ServerConfig::builder()
+                .with_no_client_auth()
+                .with_single_cert(certs.clone(), private_key.clone_key())
+                .context("Failed to configure certificate")?
+        };
 
-        info!("TLS 1.3 configuration created successfully");
+        info!(
+            "TLS configuration created successfully (TLS 1.3 only: {})",
+            require_tls_13
+        );
 
         Ok(Self {
             cert_chain: certs,
@@ -117,7 +119,6 @@ impl TlsConfig {
     ///
     /// Performs basic validation checks on the configuration.
     pub fn verify(&self) -> Result<()> {
-        // Verify we have at least one certificate
         if self.cert_chain.is_empty() {
             anyhow::bail!("No certificates in chain");
         }

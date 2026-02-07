@@ -256,15 +256,6 @@ pub struct Avc444Encoder {
 
 #[cfg(feature = "h264")]
 impl Avc444Encoder {
-    /// Create a new AVC444 encoder
-    ///
-    /// # Arguments
-    ///
-    /// * `config` - Encoder configuration (applied to both internal encoders)
-    ///
-    /// # Returns
-    ///
-    /// Initialized AVC444 encoder with two OpenH264 instances
     pub fn new(config: EncoderConfig) -> EncoderResult<Self> {
         // Determine color space configuration:
         // 1. Use explicit config if provided
@@ -380,10 +371,6 @@ impl Avc444Encoder {
         Ok(encoder)
     }
 
-    /// Create encoder with specific color space configuration
-    ///
-    /// This is the preferred method for setting color space, as it configures
-    /// both the conversion matrix AND VUI signaling in the H.264 stream.
     pub fn with_color_space(
         mut config: EncoderConfig,
         color_space: ColorSpaceConfig,
@@ -395,13 +382,6 @@ impl Avc444Encoder {
     /// Configure Phase 1 auxiliary omission parameters
     ///
     /// Call this after `new()` to apply configuration from EgfxConfig.
-    ///
-    /// # Arguments
-    ///
-    /// * `enable` - Enable aux omission optimization
-    /// * `max_interval` - Maximum frames between aux updates (1-120)
-    /// * `change_threshold` - Change detection threshold (0.0-1.0, currently unused)
-    /// * `force_idr_on_return` - Force aux IDR when reintroducing
     ///
     /// # Example
     ///
@@ -439,10 +419,6 @@ impl Avc444Encoder {
     /// Forces a full IDR keyframe at regular intervals to clear accumulated
     /// compression artifacts. This is especially important for VDI where
     /// artifacts from window movement can persist.
-    ///
-    /// # Arguments
-    ///
-    /// * `interval_secs` - Interval in seconds between forced IDR frames (0 = disabled)
     ///
     /// # Example
     ///
@@ -523,18 +499,6 @@ impl Avc444Encoder {
         false
     }
 
-    /// Encode a BGRA frame to dual H.264 bitstreams
-    ///
-    /// # Arguments
-    ///
-    /// * `bgra_data` - Raw BGRA pixel data (4 bytes per pixel)
-    /// * `width` - Frame width (must be multiple of 2)
-    /// * `height` - Frame height (must be multiple of 2)
-    /// * `timestamp_ms` - Frame timestamp in milliseconds
-    ///
-    /// # Returns
-    ///
-    /// AVC444 frame with two H.264 bitstreams, or None if encoder skipped the frame
     pub fn encode_bgra(
         &mut self,
         bgra_data: &[u8],
@@ -952,14 +916,6 @@ impl Avc444Encoder {
     /// - 1080p: ~0.5ms
     /// - 1440p: ~0.8ms
     /// - 4K: ~1.5ms
-    ///
-    /// # Arguments
-    ///
-    /// * `frame` - YUV420 frame to hash
-    ///
-    /// # Returns
-    ///
-    /// 64-bit hash value for comparison
     fn hash_yuv420(frame: &super::yuv444_packing::Yuv420Frame) -> u64 {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
@@ -1013,15 +969,6 @@ impl Avc444Encoder {
     /// 3. Next Main: references Main → P-frame works!
     ///
     /// The client handles Main IDR + cached aux correctly (LC=1 mode).
-    ///
-    /// # Arguments
-    ///
-    /// * `aux_frame` - Current auxiliary YUV420 frame
-    /// * `_main_is_keyframe` - Whether main stream is IDR (IGNORED to break feedback loop)
-    ///
-    /// # Returns
-    ///
-    /// true if aux should be encoded and sent, false to omit
     fn should_send_aux(
         &mut self, // Changed to &mut self to clear force flag
         aux_frame: &super::yuv444_packing::Yuv420Frame,
@@ -1092,7 +1039,6 @@ impl Avc444Encoder {
         changed
     }
 
-    /// Get encoder statistics
     pub fn stats(&self) -> Avc444Stats {
         Avc444Stats {
             frames_encoded: self.frame_count,
@@ -1107,17 +1053,14 @@ impl Avc444Encoder {
         }
     }
 
-    /// Get the color matrix in use
     pub fn color_matrix(&self) -> ColorMatrix {
         self.color_matrix
     }
 
-    /// Get the color space configuration
     pub fn color_space(&self) -> &ColorSpaceConfig {
         &self.color_space
     }
 
-    /// Get the current H.264 level
     pub fn level(&self) -> Option<super::h264_level::H264Level> {
         self.current_level
     }
