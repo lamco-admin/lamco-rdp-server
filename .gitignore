@@ -15,7 +15,7 @@ Cargo.lock
 # Packaging build artifacts (keep config files, exclude outputs)
 packaging/build-dir/
 packaging/.flatpak-builder/
-packaging/.claude/
+packaging/.local/
 packaging/*.tar.xz
 packaging/*.tar.gz
 
@@ -52,7 +52,7 @@ target/criterion/
 # Environment files
 .env
 .env.local
-.claude/
+.local/
 
 # Flatpak build artifacts
 packaging/repo/
