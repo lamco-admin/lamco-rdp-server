@@ -1,24 +1,55 @@
+# Lamco RDP Server - Systemd User Service
+#
+# This service runs the RDP server as a user service, using the user's
+# Wayland session via XDG Portals.
+#
+# Installation:
+#   mkdir -p ~/.config/systemd/user
+#   cp lamco-rdp-server.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable lamco-rdp-server
+#   systemctl --user start lamco-rdp-server
+#
+# For linger (start on boot without login):
+#   sudo loginctl enable-linger $USER
+
 [Unit]
 Description=Lamco RDP Server
-Documentation=https://lamco.ai/docs/lamco-rdp-server
+Documentation=https://github.com/anthropics/lamco-rdp-server
 After=graphical-session.target
-Wants=xdg-desktop-portal.service pipewire.service
+Wants=graphical-session.target
+
+# Require a graphical session - we need Wayland compositor access
+ConditionEnvironment=WAYLAND_DISPLAY
 
 [Service]
-Type=simple
-ExecStart=/usr/bin/lamco-rdp-server -c /etc/wrd-server/config.toml
+Type=dbus
+BusName=io.lamco.RdpServer
+
+# Main executable with D-Bus service mode
+ExecStart=/usr/bin/lamco-rdp-server --dbus-service
+
+# Restart on failure, but not too aggressively
 Restart=on-failure
 RestartSec=5
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+# Environment
+Environment=RUST_LOG=info
 
 # Security hardening
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=read-only
 PrivateTmp=yes
-ReadWritePaths=/var/log/wrd-server /run/user/%U/wrd-clipboard-fuse
 
-# Environment
-Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%U/bus
+# Allow access to XDG runtime dir (for Wayland socket, PipeWire, D-Bus)
+ReadWritePaths=%t
+
+# Allow access to config directory
+ReadWritePaths=%h/.config/lamco-rdp-server
+ReadWritePaths=%h/.local/share/lamco-rdp-server
 
 [Install]
 WantedBy=graphical-session.target

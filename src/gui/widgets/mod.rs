@@ -3,12 +3,16 @@
 //! Centralizes styling decisions so tabs focus purely on layout.
 
 use iced::widget::{
-    button, column, container, pick_list, row, slider, space, text, text_input, toggler,
+    button, column, container, pick_list, row, slider, text, text_input, toggler, Space,
 };
+
+/// iced 0.13 compat — `space()` function was added in 0.14
+pub fn space() -> Space {
+    Space::new(0, 0)
+}
 use iced::{Alignment, Element, Length};
 
-use crate::gui::message::Message;
-use crate::gui::theme;
+use crate::gui::{message::Message, theme};
 
 pub fn labeled_row<'a>(
     label: &'a str,
@@ -87,7 +91,6 @@ pub fn collapsible_header<'a>(
             text_color: theme::colors::TEXT_PRIMARY,
             border: style.border,
             shadow: style.shadow,
-            snap: false,
         }
     })
     .into()

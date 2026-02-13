@@ -28,8 +28,7 @@
 //! VA-API encoders are NOT thread-safe. The encoder must be created and used
 //! on the same thread. For async usage, run encoding on a dedicated thread.
 
-use std::path::Path;
-use std::rc::Rc;
+use std::{path::Path, rc::Rc};
 
 use cros_libva::{
     self as libva, BufferType, Config, Context, Display, EncCodedBuffer, EncPictureParameter,
@@ -39,13 +38,13 @@ use cros_libva::{
 };
 use tracing::{debug, info, trace, warn};
 
-use crate::config::HardwareEncodingConfig;
-use crate::egfx::color_space::{ColorRange, ColorSpaceConfig, MatrixCoefficients};
-
-use super::error::VaapiError;
 use super::{
-    EncodeTimer, H264Frame, HardwareEncoder, HardwareEncoderError, HardwareEncoderResult,
-    HardwareEncoderStats, QualityPreset,
+    error::VaapiError, EncodeTimer, H264Frame, HardwareEncoder, HardwareEncoderError,
+    HardwareEncoderResult, HardwareEncoderStats, QualityPreset,
+};
+use crate::{
+    config::HardwareEncodingConfig,
+    egfx::color_space::{ColorRange, ColorSpaceConfig, MatrixCoefficients},
 };
 
 /// Number of surfaces in the pool for triple buffering
@@ -835,8 +834,9 @@ fn bgra_to_nv12(bgra: &[u8], width: usize, height: usize, config: &ColorSpaceCon
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::path::PathBuf;
+
+    use super::*;
 
     fn test_config() -> HardwareEncodingConfig {
         HardwareEncodingConfig {

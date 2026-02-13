@@ -1,6 +1,6 @@
 [package]
 name = "lamco-rdp-server"
-version = "1.3.0"
+version = "1.3.1"
 edition = "2021"
 rust-version = "1.85"
 authors = ["Greg Lamberson <greg@lamco.io>"]
@@ -213,7 +213,7 @@ pam = { version = "0.7", optional = true }
 # -----------------------------------------------------------------------------
 # GUI (optional - for configuration GUI)
 # -----------------------------------------------------------------------------
-iced = { version = "0.14", optional = true, features = ["tokio", "advanced", "canvas", "lazy", "svg", "image"] }
+iced = { version = "0.13", optional = true, features = ["tokio", "advanced", "canvas", "lazy", "svg", "image"] }
 rfd = { version = "0.15", optional = true, default-features = false, features = ["xdg-portal", "tokio"] }
 
 # =============================================================================
@@ -300,20 +300,65 @@ harness = false
 # =============================================================================
 
 [lints.rust]
-unsafe_code = "warn"
-unsafe_op_in_unsafe_fn = "warn"
+unsafe_code = "deny"
+unsafe_op_in_unsafe_fn = "deny"
 elided_lifetimes_in_paths = "warn"
 unreachable_pub = "warn"
 
 [lints.clippy]
-wildcard_imports = "warn"
+pedantic = { priority = -1, level = "deny" }
+allow_attributes = "deny"
+
+# Selective allows for false-positive-prone or low-value pedantic lints
+missing_errors_doc = "allow"
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+doc_markdown = "allow"
+similar_names = "allow"
+items_after_statements = "allow"
+redundant_else = "allow"
+match_same_arms = "allow"
+single_match_else = "allow"
+return_self_not_must_use = "allow"
+unused_self = "allow"
+unused_async = "allow"
+too_many_lines = "allow"
+manual_is_variant_and = "allow"
+bool_to_int_with_if = "allow"
+struct_excessive_bools = "allow"
+if_not_else = "allow"
+manual_let_else = "allow"
+missing_panics_doc = "allow"
+unnecessary_wraps = "allow"
+trivially_copy_pass_by_ref = "allow"
+needless_pass_by_value = "allow"
+manual_midpoint = "allow"
+match_wildcard_for_single_variants = "allow"
+ptr_as_ptr = "allow"
+cast_ptr_alignment = "allow"
+explicit_iter_loop = "allow"
+format_push_string = "allow"
+used_underscore_binding = "allow"
+used_underscore_items = "allow"
+struct_field_names = "allow"
+missing_fields_in_debug = "allow"
+unreadable_literal = "allow"
+
+# Functional lints
+wildcard_imports = "deny"
 large_futures = "warn"
 
-# Relaxed for coordinate/graphics code
+# Progressive (upgrade to "deny" when codebase is clean)
+unwrap_used = "warn"
+expect_used = "warn"
+
+# Coordinate/graphics code requires numeric casting
 as_conversions = "allow"
 cast_lossless = "allow"
 cast_possible_truncation = "allow"
 cast_possible_wrap = "allow"
+cast_sign_loss = "allow"
+cast_precision_loss = "allow"
 
 # =============================================================================
 # Patches - Override transitive dependencies

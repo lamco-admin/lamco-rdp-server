@@ -3,9 +3,10 @@
 //! This module defines the data structures used to represent detected capabilities
 //! across all subsystems.
 
+use std::fmt;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::fmt;
 
 use crate::capabilities::probes::{
     DisplayCapabilities, EncodingCapabilities, InputCapabilities, NetworkCapabilities,
@@ -50,7 +51,7 @@ pub struct SystemCapabilities {
 ///
 /// These levels represent the quality/performance tier at which a capability
 /// is available. Higher values indicate better service.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default)]
 pub enum ServiceLevel {
     /// Feature fully available with all capabilities
     Full = 4,
@@ -61,6 +62,7 @@ pub enum ServiceLevel {
     /// Feature explicitly disabled by configuration
     Disabled = 1,
     /// Feature unavailable due to missing requirements
+    #[default]
     Unavailable = 0,
 }
 
@@ -96,12 +98,6 @@ impl fmt::Display for ServiceLevel {
     }
 }
 
-impl Default for ServiceLevel {
-    fn default() -> Self {
-        Self::Unavailable
-    }
-}
-
 /// Subsystem identifier
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Subsystem {
@@ -134,7 +130,7 @@ impl Subsystem {
 
 impl fmt::Display for Subsystem {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:?}", self)
+        write!(f, "{self:?}")
     }
 }
 
@@ -182,7 +178,7 @@ impl UserImpact {
 
 impl fmt::Display for UserImpact {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:?}", self)
+        write!(f, "{self:?}")
     }
 }
 

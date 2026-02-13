@@ -2,13 +2,17 @@
 //!
 //! H.264 encoding settings, AVC444 configuration, and quality parameters.
 
-use iced::widget::{button, column, pick_list, row, slider, space, text};
-use iced::{Alignment, Element, Length};
+use iced::{
+    widget::{button, column, pick_list, row, slider, text},
+    Alignment, Element, Length,
+};
 
-use crate::gui::message::{EgfxPreset, Message};
-use crate::gui::state::AppState;
-use crate::gui::theme;
-use crate::gui::widgets;
+use crate::gui::{
+    message::{EgfxPreset, Message},
+    state::AppState,
+    theme, widgets,
+    widgets::space,
+};
 
 const ZGFX_OPTIONS: &[&str] = &["never", "auto", "always"];
 const CODEC_OPTIONS: &[&str] = &["auto", "avc420", "avc444"];

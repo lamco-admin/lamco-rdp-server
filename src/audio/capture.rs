@@ -25,19 +25,29 @@
 //! ScreenCast portal. The `node_id` parameter connects to the audio
 //! stream associated with the screen capture session.
 
+use std::{
+    convert::TryInto,
+    mem,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+};
+
 use anyhow::{Context, Result};
-use std::convert::TryInto;
-use std::mem;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use pipewire as pw;
+use pw::{
+    spa,
+    spa::{
+        param::{
+            format::{MediaSubtype, MediaType},
+            format_utils,
+        },
+        pod::Pod,
+    },
+};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, trace, warn};
-
-use pipewire as pw;
-use pw::spa;
-use pw::spa::param::format::{MediaSubtype, MediaType};
-use pw::spa::param::format_utils;
-use pw::spa::pod::Pod;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AudioFormat {

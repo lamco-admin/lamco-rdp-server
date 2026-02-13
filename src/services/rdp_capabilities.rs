@@ -154,7 +154,7 @@ impl RdpCapability {
             Self::InputCapability { .. } => "input",
             Self::SurfaceManagement { .. } => "surface",
             Self::FrameAcknowledge { .. } => "frame-ack",
-            Self::Custom { name, .. } => {
+            Self::Custom { name: _, .. } => {
                 // Return a static str, we can't return the name directly
                 // This is a limitation, but custom caps are rare
                 "custom"
@@ -190,7 +190,7 @@ impl std::fmt::Display for RdpCapability {
                 ..
             } => {
                 if *multi_mon {
-                    write!(f, "Desktop[multi-mon, max={}]", max_monitors)
+                    write!(f, "Desktop[multi-mon, max={max_monitors}]")
                 } else {
                     write!(f, "Desktop[single]")
                 }
@@ -209,9 +209,9 @@ impl std::fmt::Display for RdpCapability {
             } => {
                 let size_mb = max_size_bytes / (1024 * 1024);
                 if *file_copy {
-                    write!(f, "Clipboard[files, {}MB]", size_mb)
+                    write!(f, "Clipboard[files, {size_mb}MB]")
                 } else {
-                    write!(f, "Clipboard[text, {}MB]", size_mb)
+                    write!(f, "Clipboard[text, {size_mb}MB]")
                 }
             }
             Self::InputCapability {
@@ -233,13 +233,13 @@ impl std::fmt::Display for RdpCapability {
                 write!(f, "Input[{}]", inputs.join(","))
             }
             Self::SurfaceManagement { max_surfaces, .. } => {
-                write!(f, "Surface[max={}]", max_surfaces)
+                write!(f, "Surface[max={max_surfaces}]")
             }
             Self::FrameAcknowledge { max_unacked, .. } => {
-                write!(f, "FrameAck[max={}]", max_unacked)
+                write!(f, "FrameAck[max={max_unacked}]")
             }
             Self::Custom { name, version, .. } => {
-                write!(f, "Custom[{} v{}]", name, version)
+                write!(f, "Custom[{name} v{version}]")
             }
         }
     }

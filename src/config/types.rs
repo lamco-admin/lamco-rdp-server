@@ -1,7 +1,8 @@
 //! Configuration type definitions
 
-use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+
+use serde::{Deserialize, Serialize};
 
 /// Server configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -448,7 +449,7 @@ pub struct LoggingConfig {
 }
 
 /// Video pipeline configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct VideoPipelineConfig {
     /// Frame processor configuration
     pub processor: ProcessorConfig,
@@ -557,16 +558,6 @@ impl Default for ConverterConfig {
             enable_simd: true,
             damage_threshold: 0.75,
             enable_statistics: true,
-        }
-    }
-}
-
-impl Default for VideoPipelineConfig {
-    fn default() -> Self {
-        Self {
-            processor: ProcessorConfig::default(),
-            dispatcher: DispatcherConfig::default(),
-            converter: ConverterConfig::default(),
         }
     }
 }

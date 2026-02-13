@@ -18,14 +18,18 @@
 //! PipeWire capture → encode → ServerEvent::Rdpsnd(Wave) → RdpServer → client
 //! ```
 
-use ironrdp_rdpsnd::pdu::{AudioFormat, WaveFormat};
-use ironrdp_rdpsnd::server::{RdpsndServerHandler, RdpsndServerMessage};
+use ironrdp_rdpsnd::{
+    pdu::{AudioFormat, WaveFormat},
+    server::{RdpsndServerHandler, RdpsndServerMessage},
+};
 use ironrdp_server::ServerEvent;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
-use crate::audio::codecs::{AudioEncoder, OpusEncoderConfig};
-use crate::config::AudioConfig;
+use crate::{
+    audio::codecs::{AudioEncoder, OpusEncoderConfig},
+    config::AudioConfig,
+};
 
 #[derive(Debug, Clone)]
 struct FormatSpec {
@@ -147,7 +151,10 @@ impl PipeWireAudioHandler {
             });
         }
 
-        let formats: Vec<AudioFormat> = format_specs.iter().map(|f| f.to_audio_format()).collect();
+        let formats: Vec<AudioFormat> = format_specs
+            .iter()
+            .map(FormatSpec::to_audio_format)
+            .collect();
 
         info!(
             "PipeWire audio handler: codec={}, sample_rate={}, channels={}, formats={}, node_id={:?}",
@@ -338,7 +345,7 @@ mod tests {
 
     #[test]
     fn test_handler_creation() {
-        let handler = PipeWireAudioHandler::new(None, None);
+        let handler = PipeWireAudioHandler::new(AudioConfig::default(), None, None);
 
         assert!(!handler.formats.is_empty());
         assert!(!handler.is_active());
@@ -349,7 +356,7 @@ mod tests {
     #[test]
     fn test_handler_with_event_sender() {
         let (tx, _rx) = mpsc::unbounded_channel();
-        let handler = PipeWireAudioHandler::new(Some(tx), Some(42));
+        let handler = PipeWireAudioHandler::new(AudioConfig::default(), Some(tx), Some(42));
 
         assert!(!handler.formats.is_empty());
         assert!(!handler.is_active());

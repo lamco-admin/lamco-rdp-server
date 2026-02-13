@@ -23,16 +23,13 @@
 //! - [`KlipperCooperationCoordinator`] - KDE-specific integration
 //! - [`DbusClipboardBridge`] - Portal D-Bus communication
 
-use crate::clipboard::error::{ClipboardError, Result};
-use crate::clipboard::sync::{ClipboardState, SyncManager};
-use crate::clipboard::FormatConverterExt;
-use std::collections::HashMap;
-use std::fs::File;
-use std::io::{Read, Seek, SeekFrom, Write};
-use std::path::PathBuf;
-use std::sync::Arc;
-use tokio::sync::{mpsc, RwLock};
-use tracing::{debug, error, info, trace, warn};
+use std::{
+    collections::HashMap,
+    fs::File,
+    io::{Read, Seek, SeekFrom, Write},
+    path::PathBuf,
+    sync::Arc,
+};
 
 use lamco_clipboard_core::{
     sanitize::{
@@ -42,6 +39,14 @@ use lamco_clipboard_core::{
     ClipboardFormat, FormatConverter, LoopDetectionConfig, TransferConfig, TransferEngine,
 };
 use lamco_portal::dbus_clipboard::DbusClipboardBridge;
+use tokio::sync::{mpsc, RwLock};
+use tracing::{debug, error, info, trace, warn};
+
+use crate::clipboard::{
+    error::{ClipboardError, Result},
+    sync::{ClipboardState, SyncManager},
+    FormatConverterExt,
+};
 
 /// Runtime configuration for the clipboard orchestrator
 ///
@@ -156,7 +161,7 @@ impl std::fmt::Debug for ClipboardEvent {
         match self {
             Self::RdpReady => write!(f, "RdpReady"),
             Self::RdpFormatList(formats) => write!(f, "RdpFormatList({} formats)", formats.len()),
-            Self::RdpDataRequest(id, _) => write!(f, "RdpDataRequest({})", id),
+            Self::RdpDataRequest(id, _) => write!(f, "RdpDataRequest({id})"),
             Self::RdpDataResponse(data) => write!(f, "RdpDataResponse({} bytes)", data.len()),
             Self::RdpDataError => write!(f, "RdpDataError"),
             Self::RdpFileContentsRequest {
@@ -168,8 +173,7 @@ impl std::fmt::Debug for ClipboardEvent {
             } => {
                 write!(
                     f,
-                    "RdpFileContentsRequest(stream={}, index={}, size={}, size_req={})",
-                    stream_id, list_index, size, is_size_request
+                    "RdpFileContentsRequest(stream={stream_id}, index={list_index}, size={size}, size_req={is_size_request})"
                 )
             }
             Self::RdpFileContentsResponse {
@@ -186,9 +190,9 @@ impl std::fmt::Debug for ClipboardEvent {
                 )
             }
             Self::PortalFormatsAvailable(mimes, force) => {
-                write!(f, "PortalFormatsAvailable({:?}, force={})", mimes, force)
+                write!(f, "PortalFormatsAvailable({mimes:?}, force={force})")
             }
-            Self::PortalDataRequest(mime) => write!(f, "PortalDataRequest({})", mime),
+            Self::PortalDataRequest(mime) => write!(f, "PortalDataRequest({mime})"),
             Self::PortalDataResponse(data) => write!(f, "PortalDataResponse({} bytes)", data.len()),
         }
     }
@@ -366,7 +370,7 @@ struct FileTransferState {
 /// File being received from Windows
 #[derive(Debug)]
 struct IncomingFile {
-    #[allow(dead_code)] // Used for debugging
+    #[expect(dead_code, reason = "retained for debug logging of file transfers")]
     stream_id: u32,
     filename: String,
     total_size: u64,
@@ -382,7 +386,7 @@ struct IncomingFile {
 /// File being sent to Windows
 #[derive(Debug)]
 struct OutgoingFile {
-    #[allow(dead_code)] // Used for multi-file tracking
+    #[expect(dead_code, reason = "needed for multi-file transfer tracking")]
     list_index: u32,
     path: PathBuf,
     size: u64,
@@ -416,7 +420,7 @@ impl FileTransferState {
         self.pending_descriptors = descriptors;
     }
 
-    #[allow(dead_code)] // WIP: File transfer cleanup
+    #[expect(dead_code, reason = "WIP: file transfer cleanup path")]
     fn clear_pending_descriptors(&mut self) {
         self.pending_descriptors.clear();
     }
@@ -428,7 +432,7 @@ impl FileTransferState {
     }
 
     /// Check if all incoming files are complete
-    #[allow(dead_code)] // WIP: File transfer completion check
+    #[expect(dead_code, reason = "WIP: file transfer completion check")]
     fn all_files_complete(&self) -> bool {
         !self.incoming_files.is_empty()
             && self
@@ -683,7 +687,7 @@ impl ClipboardOrchestrator {
         &self,
         mut event_rx: tokio::sync::mpsc::UnboundedReceiver<crate::clipboard::CooperationEvent>,
     ) {
-        let converter = Arc::clone(&self.converter);
+        let _converter = Arc::clone(&self.converter);
         let server_event_sender = Arc::clone(&self.server_event_sender);
         let sync_manager = Arc::clone(&self.sync_manager);
         let cooperation_content_cache = Arc::clone(&self.cooperation_content_cache);
@@ -853,7 +857,8 @@ impl ClipboardOrchestrator {
     /// Check if FUSE is available and mounted
     pub async fn is_fuse_available(&self) -> bool {
         let fuse = self.fuse_manager.read().await;
-        fuse.as_ref().map(|m| m.is_mounted()).unwrap_or(false)
+        fuse.as_ref()
+            .is_some_and(super::fuse::FuseMount::is_mounted)
     }
 
     /// Set Portal clipboard manager and session (async to acquire write lock)
@@ -912,13 +917,13 @@ impl ClipboardOrchestrator {
 
                 let handle = tokio::spawn(async move {
                     loop {
-                    let transfer_event = tokio::select! {
-                        Some(event) = transfer_rx.recv() => event,
-                        _ = shutdown_rx.recv() => {
-                            info!("SelectionTransfer handler received shutdown signal");
-                            break;
-                        }
-                    };
+                        let transfer_event = tokio::select! {
+                            Some(event) = transfer_rx.recv() => event,
+                            _ = shutdown_rx.recv() => {
+                                info!("SelectionTransfer handler received shutdown signal");
+                                break;
+                            }
+                        };
                         info!(
                             "SelectionTransfer signal: {} (serial {})",
                             transfer_event.mime_type, transfer_event.serial
@@ -1061,8 +1066,9 @@ impl ClipboardOrchestrator {
 
                         let sender_opt = server_event_sender.read().await.clone();
                         if let Some(sender) = sender_opt {
-                            use ironrdp_cliprdr::backend::ClipboardMessage;
-                            use ironrdp_cliprdr::pdu::ClipboardFormatId;
+                            use ironrdp_cliprdr::{
+                                backend::ClipboardMessage, pdu::ClipboardFormatId,
+                            };
 
                             // Must enqueue BEFORE sending so response handler finds it
                             pending_requests.write().await.push_back((
@@ -1280,7 +1286,7 @@ impl ClipboardOrchestrator {
 
             loop {
                 tokio::select! {
-                    _ = tokio::time::sleep(tokio::time::Duration::from_secs(1)) => {
+                    () = tokio::time::sleep(tokio::time::Duration::from_secs(1)) => {
 
                 let mut hashes = hashes_for_cleanup.write().await;
                 let before_size = hashes.len();
@@ -1332,10 +1338,10 @@ impl ClipboardOrchestrator {
             let mut rate_limited_count = 0;
 
             // Loop suppression: ignore events within this window after we wrote data
-            #[allow(dead_code)] // WIP: Loop suppression refinement
+            #[expect(dead_code, reason = "WIP: loop suppression refinement")]
             const LOOP_SUPPRESSION_WINDOW_MS: u128 = 2000;
             // Maximum pending hash entries (prevent unbounded memory)
-            #[allow(dead_code)] // WIP: Hash cache bounds
+            #[expect(dead_code, reason = "WIP: hash cache bounds enforcement")]
             const MAX_HASH_CACHE_SIZE: usize = 50;
 
             let mut last_forward_time: Option<std::time::Instant> = None;
@@ -1727,7 +1733,7 @@ impl ClipboardOrchestrator {
                     server_event_sender,
                     local_advertised_formats,
                     file_transfer_state,
-                    &cooperation_content_cache,
+                    cooperation_content_cache,
                 )
                 .await
             }
@@ -1859,7 +1865,7 @@ impl ClipboardOrchestrator {
         // Registered format IDs vary per session, store for later lookup
         {
             let mut stored_formats = current_rdp_formats.write().await;
-            *stored_formats = formats.clone();
+            stored_formats.clone_from(&formats);
             debug!(
                 "Stored {} RDP formats for format ID lookup",
                 stored_formats.len()
@@ -1958,9 +1964,7 @@ impl ClipboardOrchestrator {
         portal
             .announce_rdp_formats(&session_guard, mime_types)
             .await
-            .map_err(|e| {
-                ClipboardError::PortalError(format!("Failed to announce formats: {}", e))
-            })?;
+            .map_err(|e| ClipboardError::PortalError(format!("Failed to announce formats: {e}")))?;
 
         debug!(" RDP clipboard formats announced to Portal via SetSelection");
 
@@ -2011,8 +2015,7 @@ impl ClipboardOrchestrator {
 
                 let sender_opt = server_event_sender.read().await.clone();
                 if let Some(sender) = sender_opt {
-                    use ironrdp_cliprdr::backend::ClipboardMessage;
-                    use ironrdp_cliprdr::pdu::FormatDataResponse;
+                    use ironrdp_cliprdr::{backend::ClipboardMessage, pdu::FormatDataResponse};
                     use ironrdp_pdu::IntoOwned;
 
                     let data_to_send = if format_id == 1 {
@@ -2187,8 +2190,7 @@ impl ClipboardOrchestrator {
 
         let sender_opt = server_event_sender.read().await.clone();
         if let Some(sender) = sender_opt {
-            use ironrdp_cliprdr::backend::ClipboardMessage;
-            use ironrdp_cliprdr::pdu::FormatDataResponse;
+            use ironrdp_cliprdr::{backend::ClipboardMessage, pdu::FormatDataResponse};
             use ironrdp_pdu::IntoOwned;
 
             let response = FormatDataResponse::new_data(rdp_data);
@@ -2339,8 +2341,7 @@ impl ClipboardOrchestrator {
 
         let sender_opt = server_event_sender.read().await.clone();
         if let Some(sender) = sender_opt {
-            use ironrdp_cliprdr::backend::ClipboardMessage;
-            use ironrdp_cliprdr::pdu::FormatDataResponse;
+            use ironrdp_cliprdr::{backend::ClipboardMessage, pdu::FormatDataResponse};
             use ironrdp_pdu::IntoOwned;
 
             let response = FormatDataResponse::new_data(descriptor_data);
@@ -2366,8 +2367,7 @@ impl ClipboardOrchestrator {
     ) {
         let sender_opt = server_event_sender.read().await.clone();
         if let Some(sender) = sender_opt {
-            use ironrdp_cliprdr::backend::ClipboardMessage;
-            use ironrdp_cliprdr::pdu::FormatDataResponse;
+            use ironrdp_cliprdr::{backend::ClipboardMessage, pdu::FormatDataResponse};
             use ironrdp_pdu::IntoOwned;
 
             let response = FormatDataResponse::new_error();
@@ -2509,7 +2509,8 @@ impl ClipboardOrchestrator {
 
                     let fuse_available = {
                         let fuse = fuse_manager.read().await;
-                        fuse.as_ref().map(|m| m.is_mounted()).unwrap_or(false)
+                        fuse.as_ref()
+                            .is_some_and(super::fuse::FuseMount::is_mounted)
                     };
 
                     if fuse_available {
@@ -2567,7 +2568,7 @@ impl ClipboardOrchestrator {
                                 .write_selection_data(&session_guard, serial, uri_bytes)
                                 .await
                             {
-                                Ok(_) => {
+                                Ok(()) => {
                                     info!(
                                         "FUSE file URIs delivered - files available for on-demand read"
                                     );
@@ -2611,8 +2612,10 @@ impl ClipboardOrchestrator {
                         state.set_pending_descriptors(descriptors.clone());
                         state.portal_serial = Some(serial);
 
-                        use ironrdp_cliprdr::backend::ClipboardMessage;
-                        use ironrdp_cliprdr::pdu::{FileContentsFlags, FileContentsRequest};
+                        use ironrdp_cliprdr::{
+                            backend::ClipboardMessage,
+                            pdu::{FileContentsFlags, FileContentsRequest},
+                        };
 
                         // Required when CAN_LOCK_CLIPDATA is negotiated
                         let clip_data_id = 1u32;
@@ -2645,7 +2648,7 @@ impl ClipboardOrchestrator {
 
                             let temp_path = state
                                 .download_dir
-                                .join(format!(".{}.{}.tmp", filename, stream_id));
+                                .join(format!(".{filename}.{stream_id}.tmp"));
 
                             if let Err(e) = std::fs::create_dir_all(&state.download_dir) {
                                 error!("Failed to create download directory: {}", e);
@@ -2963,8 +2966,7 @@ impl ClipboardOrchestrator {
                 drop(pending);
 
                 return Err(ClipboardError::PortalError(format!(
-                    "SelectionWrite failed: {}",
-                    e
+                    "SelectionWrite failed: {e}"
                 )));
             }
             Ok(Ok(())) => {
@@ -3235,7 +3237,7 @@ impl ClipboardOrchestrator {
                             .announce_rdp_formats(&session, reannounce_mimes)
                             .await
                         {
-                            Ok(_) => {
+                            Ok(()) => {
                                 info!("│ ✅ SetSelection succeeded - ownership reclaimed");
 
                                 *last_reannounce_time.write().await = Some(SystemTime::now());
@@ -3302,7 +3304,10 @@ impl ClipboardOrchestrator {
 
         debug!(" Sending FormatList to RDP client:");
         for (idx, fmt) in ironrdp_formats.iter().enumerate() {
-            let name_str = fmt.name.as_ref().map(|n| n.value()).unwrap_or("");
+            let name_str = fmt
+                .name
+                .as_ref()
+                .map_or("", ironrdp_cliprdr::pdu::ClipboardFormatName::value);
             info!("   Format {}: ID={}, Name={:?}", idx, fmt.id.0, name_str);
         }
 
@@ -3434,11 +3439,10 @@ impl ClipboardOrchestrator {
                     list_index,
                     state.outgoing_files.len()
                 );
-                ClipboardError::InvalidState(format!("File index {} not found", list_index))
+                ClipboardError::InvalidState(format!("File index {list_index} not found"))
             })?;
 
-        use ironrdp_cliprdr::backend::ClipboardMessage;
-        use ironrdp_cliprdr::pdu::FileContentsResponse;
+        use ironrdp_cliprdr::{backend::ClipboardMessage, pdu::FileContentsResponse};
 
         if is_size_request {
             info!(
@@ -3506,16 +3510,16 @@ impl ClipboardOrchestrator {
     /// Read a chunk from a file
     fn read_file_chunk(path: &PathBuf, offset: u64, size: u32) -> Result<Vec<u8>> {
         let mut file = File::open(path)
-            .map_err(|e| ClipboardError::FileIoError(format!("Failed to open file: {}", e)))?;
+            .map_err(|e| ClipboardError::FileIoError(format!("Failed to open file: {e}")))?;
 
         file.seek(SeekFrom::Start(offset)).map_err(|e| {
-            ClipboardError::FileIoError(format!("Failed to seek to offset {}: {}", offset, e))
+            ClipboardError::FileIoError(format!("Failed to seek to offset {offset}: {e}"))
         })?;
 
         let mut buffer = vec![0u8; size as usize];
         let bytes_read = file
             .read(&mut buffer)
-            .map_err(|e| ClipboardError::FileIoError(format!("Failed to read file: {}", e)))?;
+            .map_err(|e| ClipboardError::FileIoError(format!("Failed to read file: {e}")))?;
 
         buffer.truncate(bytes_read);
         Ok(buffer)
@@ -3603,7 +3607,7 @@ impl ClipboardOrchestrator {
                 file.temp_path.display(),
                 e
             );
-            ClipboardError::FileIoError(format!("File write failed: {}", e))
+            ClipboardError::FileIoError(format!("File write failed: {e}"))
         })?;
 
         file.received_size += data.len() as u64;
@@ -3632,7 +3636,7 @@ impl ClipboardOrchestrator {
 
             file.file_handle
                 .flush()
-                .map_err(|e| ClipboardError::FileIoError(format!("Failed to flush file: {}", e)))?;
+                .map_err(|e| ClipboardError::FileIoError(format!("Failed to flush file: {e}")))?;
 
             let temp_path = file.temp_path.clone();
             let filename = file.filename.clone();
@@ -3653,7 +3657,7 @@ impl ClipboardOrchestrator {
                     final_path.display(),
                     e
                 );
-                ClipboardError::FileIoError(format!("Failed to finalize file: {}", e))
+                ClipboardError::FileIoError(format!("Failed to finalize file: {e}"))
             })?;
 
             info!("Saved file to: {}", final_path.display());
@@ -3688,7 +3692,7 @@ impl ClipboardOrchestrator {
                             })
                             .collect::<Vec<_>>()
                             .join("/");
-                        format!("file://{}", encoded)
+                        format!("file://{encoded}")
                     })
                     .collect();
 
@@ -3712,7 +3716,7 @@ impl ClipboardOrchestrator {
                             .write_selection_data(&session_guard, serial, uri_bytes.clone())
                             .await
                         {
-                            Ok(_) => {
+                            Ok(()) => {
                                 info!(
                                     "Delivered {} file URI(s) to Portal (serial={})",
                                     completed_files.len(),
@@ -3748,8 +3752,10 @@ impl ClipboardOrchestrator {
             drop(state); // Release lock before sending
 
             if let Some(sender) = server_event_sender.read().await.as_ref() {
-                use ironrdp_cliprdr::backend::ClipboardMessage;
-                use ironrdp_cliprdr::pdu::{FileContentsFlags, FileContentsRequest};
+                use ironrdp_cliprdr::{
+                    backend::ClipboardMessage,
+                    pdu::{FileContentsFlags, FileContentsRequest},
+                };
 
                 info!(
                     "Requesting next chunk for '{}' (pos={}, size={}, remaining={})",
@@ -3808,22 +3814,22 @@ impl ClipboardOrchestrator {
                 let clipboard_portal = portal_clipboard_mgr.portal_clipboard();
 
                 match clipboard_portal
-                    .set_selection(&*session_guard, Default::default())
+                    .set_selection(&session_guard, Default::default())
                     .await
                 {
-                    Ok(_) => {
+                    Ok(()) => {
                         info!("✅ Portal clipboard cleared successfully");
-                        return Ok(());
+                        Ok(())
                     }
                     Err(e) => {
                         warn!("⚠️  Failed to clear Portal clipboard: {}", e);
                         // Don't propagate error - clearing is best-effort
-                        return Ok(());
+                        Ok(())
                     }
                 }
             } else {
                 debug!("Portal session not set");
-                return Ok(());
+                Ok(())
             }
         } else {
             debug!("No Portal clipboard to clear");
@@ -3872,7 +3878,7 @@ impl ClipboardOrchestrator {
 
             for (i, handle) in handles.drain(..).enumerate() {
                 match tokio::time::timeout(timeout, handle).await {
-                    Ok(Ok(_)) => {
+                    Ok(Ok(())) => {
                         debug!("  Task {} finished cleanly", i + 1);
                     }
                     Ok(Err(e)) => {

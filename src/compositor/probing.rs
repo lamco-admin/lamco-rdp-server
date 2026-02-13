@@ -3,13 +3,15 @@
 //! This module implements the actual detection logic to identify
 //! the running compositor and probe its capabilities.
 
+use std::{fs, process::Command};
+
 use anyhow::Result;
-use std::fs;
-use std::process::Command;
 use tracing::{debug, info, warn};
 
-use super::capabilities::{CompositorCapabilities, CompositorType, WaylandGlobal};
-use super::portal_caps::PortalCapabilities;
+use super::{
+    capabilities::{CompositorCapabilities, CompositorType, WaylandGlobal},
+    portal_caps::PortalCapabilities,
+};
 
 /// Probe all compositor capabilities
 ///
@@ -211,7 +213,10 @@ fn detect_gnome_version() -> Option<String> {
             if output.status.success() {
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 // Output is like "GNOME Shell 46.0"
-                stdout.split_whitespace().last().map(|v| v.to_string())
+                stdout
+                    .split_whitespace()
+                    .last()
+                    .map(std::string::ToString::to_string)
             } else {
                 None
             }
@@ -229,7 +234,10 @@ fn detect_kde_version() -> Option<String> {
             if output.status.success() {
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 // Output is like "plasmashell 6.0.0"
-                stdout.split_whitespace().last().map(|v| v.to_string())
+                stdout
+                    .split_whitespace()
+                    .last()
+                    .map(std::string::ToString::to_string)
             } else {
                 None
             }
@@ -246,7 +254,10 @@ fn detect_sway_version() -> Option<String> {
             if output.status.success() {
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 // Output is like "sway version 1.9"
-                stdout.split_whitespace().last().map(|v| v.to_string())
+                stdout
+                    .split_whitespace()
+                    .last()
+                    .map(std::string::ToString::to_string)
             } else {
                 None
             }
@@ -267,13 +278,8 @@ fn detect_hyprland_version() -> Option<String> {
                     if line.starts_with("Hyprland") || line.contains("version") {
                         return line
                             .split_whitespace()
-                            .find(|s| {
-                                s.chars()
-                                    .next()
-                                    .map(|c| c.is_ascii_digit())
-                                    .unwrap_or(false)
-                            })
-                            .map(|v| v.to_string());
+                            .find(|s| s.chars().next().is_some_and(|c| c.is_ascii_digit()))
+                            .map(std::string::ToString::to_string);
                     }
                 }
                 None
@@ -393,7 +399,7 @@ pub fn detect_os_release() -> Option<OsRelease> {
                 "NAME" => release.name = value.to_string(),
                 "PRETTY_NAME" => release.pretty_name = value.to_string(),
                 "ID_LIKE" => {
-                    release.id_like = value.split_whitespace().map(|s| s.to_lowercase()).collect();
+                    release.id_like = value.split_whitespace().map(str::to_lowercase).collect();
                 }
                 _ => {}
             }

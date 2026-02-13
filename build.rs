@@ -4,30 +4,22 @@
 
 use std::process::Command;
 
+fn run_command(program: &str, args: &[&str], fallback: &str) -> String {
+    match Command::new(program).args(args).output() {
+        Ok(o) => String::from_utf8_lossy(&o.stdout).trim().to_string(),
+        Err(_) => fallback.to_string(),
+    }
+}
+
 fn main() {
-    // Set build date
-    let date_output = Command::new("date")
-        .args(["+%Y-%m-%d"])
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .unwrap_or_else(|_| "unknown".to_string());
-    println!("cargo:rustc-env=BUILD_DATE={}", date_output);
+    let date_output = run_command("date", &["+%Y-%m-%d"], "unknown");
+    println!("cargo:rustc-env=BUILD_DATE={date_output}");
 
-    // Set build time
-    let time_output = Command::new("date")
-        .args(["+%H:%M:%S"])
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .unwrap_or_else(|_| "".to_string());
-    println!("cargo:rustc-env=BUILD_TIME={}", time_output);
+    let time_output = run_command("date", &["+%H:%M:%S"], "");
+    println!("cargo:rustc-env=BUILD_TIME={time_output}");
 
-    // Set git commit hash
-    let git_hash = Command::new("git")
-        .args(["rev-parse", "--short", "HEAD"])
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .unwrap_or_else(|_| "unknown".to_string());
-    println!("cargo:rustc-env=GIT_HASH={}", git_hash);
+    let git_hash = run_command("git", &["rev-parse", "--short", "HEAD"], "unknown");
+    println!("cargo:rustc-env=GIT_HASH={git_hash}");
 
     // Re-run if git HEAD changes
     println!("cargo:rerun-if-changed=.git/HEAD");

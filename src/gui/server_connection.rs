@@ -10,8 +10,10 @@ use std::time::Duration;
 
 use tokio::sync::mpsc;
 
-use super::dbus_client::DbusClient;
-use super::server_process::{ServerLogLine, ServerProcess};
+use super::{
+    dbus_client::DbusClient,
+    server_process::{ServerLogLine, ServerProcess},
+};
 use crate::config::Config;
 
 /// Connection mode for the server

@@ -2,12 +2,12 @@
 //!
 //! Detects available input injection methods.
 
-use serde::{Deserialize, Serialize};
 use std::path::Path;
+
+use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
-use crate::capabilities::fallback::AttemptResult;
-use crate::capabilities::state::ServiceLevel;
+use crate::capabilities::{fallback::AttemptResult, state::ServiceLevel};
 
 /// Input capabilities
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -165,8 +165,7 @@ impl InputProbe {
         let selected = strategies.first().cloned();
         let service_level = selected
             .as_ref()
-            .map(|s| s.service_level)
-            .unwrap_or(ServiceLevel::Unavailable);
+            .map_or(ServiceLevel::Unavailable, |s| s.service_level);
 
         let unavailable_reason = if strategies.is_empty() {
             Some("No input injection method available".into())

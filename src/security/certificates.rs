@@ -3,10 +3,10 @@
 //! Provides utilities for generating self-signed certificates
 //! and managing certificate lifecycle.
 
+use std::{fs, path::Path};
+
 use anyhow::{Context, Result};
 use rcgen::{Certificate, CertificateParams, DistinguishedName, DnType, KeyPair};
-use std::fs;
-use std::path::Path;
 use tracing::{info, warn};
 
 /// Certificate generator
@@ -86,8 +86,9 @@ impl CertificateGenerator {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use tempfile::TempDir;
+
+    use super::*;
 
     #[test]
     fn test_generate_self_signed() {

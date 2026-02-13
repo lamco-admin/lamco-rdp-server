@@ -30,15 +30,17 @@
 //! This is Tier 2 from docs/decisions/CLIPBOARD-KDE-STRATEGIC-DECISION.md.
 //! Falls back to Tier 3 (re-announce) if cooperation fails.
 
+use std::{
+    sync::Arc,
+    time::{Duration, SystemTime},
+};
+
 use futures_util::StreamExt;
-use std::sync::Arc;
-use std::time::{Duration, SystemTime};
 use tokio::sync::{mpsc, RwLock};
 use tracing::{debug, error, info, warn};
 use zbus::Connection;
 
-use crate::clipboard::error::Result;
-use crate::clipboard::{ClipboardFormat, FormatConverter, FormatConverterExt};
+use crate::clipboard::{error::Result, ClipboardFormat, FormatConverterExt};
 
 /// Klipper cooperation coordinator
 ///
@@ -184,7 +186,7 @@ impl KlipperCooperationCoordinator {
             )
             .await
             {
-                Ok(_) => {
+                Ok(()) => {
                     info!("Klipper signal monitoring ended normally");
                 }
                 Err(e) => {
@@ -227,10 +229,9 @@ impl KlipperCooperationCoordinator {
             fn clipboard_history_updated(&self) -> zbus::Result<()>;
         }
 
-        let proxy = KlipperProxy::new(&*connection).await.map_err(|e| {
+        let proxy = KlipperProxy::new(&connection).await.map_err(|e| {
             crate::clipboard::error::ClipboardError::DBus(format!(
-                "Failed to create Klipper proxy: {}",
-                e
+                "Failed to create Klipper proxy: {e}"
             ))
         })?;
 
@@ -250,8 +251,7 @@ impl KlipperCooperationCoordinator {
             Err(e) => {
                 error!("❌ Klipper proxy test failed: {}", e);
                 return Err(crate::clipboard::error::ClipboardError::DBus(format!(
-                    "Klipper proxy not responsive: {}",
-                    e
+                    "Klipper proxy not responsive: {e}"
                 )));
             }
         }
@@ -261,8 +261,7 @@ impl KlipperCooperationCoordinator {
             .await
             .map_err(|e| {
                 crate::clipboard::error::ClipboardError::DBus(format!(
-                    "Failed to subscribe to signal: {}",
-                    e
+                    "Failed to subscribe to signal: {e}"
                 ))
             })?;
 
@@ -363,7 +362,7 @@ impl KlipperCooperationCoordinator {
                     stats_guard.sync_errors += 1;
 
                     let _ = event_tx.send(CooperationEvent::CooperationFailed {
-                        reason: format!("get_clipboard_contents failed: {}", e),
+                        reason: format!("get_clipboard_contents failed: {e}"),
                         retry: true,
                     });
                 }
@@ -378,7 +377,7 @@ impl KlipperCooperationCoordinator {
                     }
                 }
 
-                _ = tokio::time::sleep_until(next_heartbeat) => {
+                () = tokio::time::sleep_until(next_heartbeat) => {
                     heartbeat_count += 1;
                     info!("💓 Heartbeat #{}: Signal monitor task is alive and waiting for signals", heartbeat_count);
                     next_heartbeat = tokio::time::Instant::now() + heartbeat_interval;

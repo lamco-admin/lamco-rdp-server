@@ -2,10 +2,14 @@
 //!
 //! Detects the deployment context (Flatpak, systemd, native, etc.) and
 //! determines the best available method for storing session tokens securely.
+#![expect(
+    unsafe_code,
+    reason = "libc::getuid() for deployment context detection"
+)]
+
+use std::{path::Path, process::Command};
 
 use anyhow::{anyhow, Context, Result};
-use std::path::Path;
-use std::process::Command;
 use tracing::{debug, info};
 
 /// Deployment context affecting available strategies
@@ -32,7 +36,7 @@ impl std::fmt::Display for DeploymentContext {
             Self::Native => write!(f, "Native Package"),
             Self::Flatpak => write!(f, "Flatpak"),
             Self::SystemdUser { linger_enabled } => {
-                write!(f, "systemd User Service (linger: {})", linger_enabled)
+                write!(f, "systemd User Service (linger: {linger_enabled})")
             }
             Self::SystemdSystem => write!(f, "systemd System Service"),
             Self::InitD => write!(f, "initd/OpenRC"),
@@ -153,7 +157,7 @@ fn check_linger_enabled() -> bool {
         .or_else(|_| std::env::var("LOGNAME"))
         .unwrap_or_else(|_| uid.to_string());
 
-    let linger_path = format!("/var/lib/systemd/linger/{}", username);
+    let linger_path = format!("/var/lib/systemd/linger/{username}");
 
     Path::new(&linger_path).exists()
 }
@@ -315,7 +319,7 @@ async fn check_secret_service_unlocked() -> bool {
     use super::secret_service::AsyncSecretServiceClient;
 
     match AsyncSecretServiceClient::connect().await {
-        Ok(client) => tokio::task::spawn_blocking(move || {
+        Ok(_client) => tokio::task::spawn_blocking(move || {
             super::secret_service::check_secret_service_unlocked()
         })
         .await

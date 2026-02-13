@@ -22,11 +22,11 @@
 //! - **Policy decisions**: When to allow/block sync based on state
 
 use std::time::{Duration, SystemTime};
-use tracing::{debug, warn};
 
 // Import loop detection from library
 pub use lamco_clipboard_core::loop_detector::ClipboardSource;
 pub use lamco_clipboard_core::{ClipboardFormat, LoopDetectionConfig, LoopDetector};
+use tracing::{debug, warn};
 
 /// Clipboard ownership state
 #[derive(Debug, Clone)]

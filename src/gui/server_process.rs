@@ -2,14 +2,20 @@
 //!
 //! Handles spawning, monitoring, and controlling the lamco-rdp-server process
 //! from the GUI. Provides real-time log capture and status updates.
+#![expect(unsafe_code, reason = "libc signal check for process liveness")]
+
+use std::{
+    io::{BufRead, BufReader},
+    path::PathBuf,
+    process::{Child, Command, Stdio},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::{Duration, Instant},
+};
 
 use anyhow::{anyhow, Context, Result};
-use std::io::{BufRead, BufReader};
-use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
@@ -192,8 +198,10 @@ impl ServerProcess {
 
         #[cfg(unix)]
         {
-            use nix::sys::signal::{kill, Signal};
-            use nix::unistd::Pid;
+            use nix::{
+                sys::signal::{kill, Signal},
+                unistd::Pid,
+            };
 
             let pid = Pid::from_raw(self.pid as i32);
             match kill(pid, Signal::SIGTERM) {

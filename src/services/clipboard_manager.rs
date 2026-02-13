@@ -8,6 +8,7 @@
 //! **Not to be confused with** the server's clipboard orchestrator (`ClipboardOrchestrator`).
 
 use std::time::Duration;
+
 use tracing::{debug, info, warn};
 use zbus::Connection;
 
@@ -298,7 +299,7 @@ impl DetectedSystemClipboardManager {
         }
     }
 
-    async fn query_copyq_version(connection: &Connection) -> Option<String> {
+    async fn query_copyq_version(_connection: &Connection) -> Option<String> {
         debug!("    Querying CopyQ version...");
 
         // CopyQ doesn't expose version via D-Bus in a standard way

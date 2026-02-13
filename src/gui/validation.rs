@@ -2,11 +2,12 @@
 //!
 //! Validates configuration parameters and provides detailed error/warning messages.
 
-use std::net::SocketAddr;
-use std::path::Path;
+use std::{net::SocketAddr, path::Path};
 
-use crate::config::Config;
-use crate::gui::state::{ValidationError, ValidationResult, ValidationWarning};
+use crate::{
+    config::Config,
+    gui::state::{ValidationError, ValidationResult, ValidationWarning},
+};
 
 /// Validate a complete configuration
 pub fn validate_config(config: &Config) -> ValidationResult {

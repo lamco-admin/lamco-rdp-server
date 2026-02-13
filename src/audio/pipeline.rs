@@ -9,18 +9,18 @@
 //! The pipeline runs as an async task, receiving audio samples from
 //! PipeWire and sending encoded audio through the RDPSND channel.
 
+use std::{sync::Arc, time::Instant};
+
 use anyhow::{Context, Result};
-use std::sync::Arc;
-use std::time::Instant;
+use ironrdp_rdpsnd::server::RdpsndServer;
+use ironrdp_svc::SvcMessage;
 use tokio::sync::{mpsc, Mutex, RwLock};
 use tracing::{debug, error, info, warn};
 
-use ironrdp_rdpsnd::server::{RdpsndServer, RdpsndServerMessage, RdpsndSvcMessages};
-use ironrdp_svc::SvcMessage;
-
-use crate::audio::capture::{AudioCaptureHandle, AudioFormat, AudioSamples, CaptureConfig};
-use crate::audio::codecs::{AudioEncoder, OpusEncoderConfig};
-use crate::audio::handler::PipeWireAudioHandler;
+use crate::audio::{
+    capture::{AudioSamples, CaptureConfig},
+    codecs::AudioEncoder,
+};
 
 #[derive(Debug, Clone)]
 pub struct PipelineConfig {

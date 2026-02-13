@@ -217,7 +217,7 @@ impl TransferEngine {
             progress.started_at = Some(Instant::now());
         }
 
-        let chunks: Vec<Vec<u8>> = data.chunks(self.config.chunk_size).map(|c| c.to_vec()).collect();
+        let chunks: Vec<Vec<u8>> = data.chunks(self.config.chunk_size).map(<[u8]>::to_vec).collect();
 
         Ok(chunks)
     }
@@ -349,7 +349,7 @@ impl TransferEngine {
 
     /// Check if a transfer is in progress
     pub fn is_active(&self) -> bool {
-        self.progress.as_ref().map(|p| p.state.is_active()).unwrap_or(false)
+        self.progress.as_ref().is_some_and(|p| p.state.is_active())
     }
 
     /// Get the configured chunk size

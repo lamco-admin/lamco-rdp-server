@@ -3,11 +3,14 @@
 //! Defines proxies for org.gnome.Mutter.ScreenCast D-Bus interfaces.
 //! These are GNOME-specific and bypass the XDG Portal permission model.
 
+use std::collections::HashMap;
+
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value};
-use zbus::Connection;
+use zbus::{
+    zvariant::{OwnedObjectPath, OwnedValue, Value},
+    Connection,
+};
 
 /// Main ScreenCast interface proxy
 ///
@@ -19,7 +22,7 @@ pub struct MutterScreenCast<'a> {
     proxy: zbus::Proxy<'a>,
 }
 
-impl<'a> MutterScreenCast<'a> {
+impl MutterScreenCast<'_> {
     /// Create a new ScreenCast proxy
     pub async fn new(connection: &Connection) -> Result<Self> {
         let proxy = zbus::ProxyBuilder::new(connection)
@@ -74,7 +77,7 @@ pub struct MutterScreenCastSession<'a> {
     proxy: zbus::Proxy<'a>,
 }
 
-impl<'a> MutterScreenCastSession<'a> {
+impl MutterScreenCastSession<'_> {
     /// Create a session proxy for an existing session
     pub async fn new(connection: &Connection, session_path: OwnedObjectPath) -> Result<Self> {
         let proxy = zbus::ProxyBuilder::new(connection)
@@ -177,7 +180,7 @@ pub struct MutterScreenCastStream<'a> {
     proxy: zbus::Proxy<'a>,
 }
 
-impl<'a> MutterScreenCastStream<'a> {
+impl MutterScreenCastStream<'_> {
     /// Create a stream proxy for an existing stream
     pub async fn new(connection: &Connection, stream_path: OwnedObjectPath) -> Result<Self> {
         let proxy = zbus::ProxyBuilder::new(connection)

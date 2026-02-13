@@ -8,12 +8,12 @@
 //! - Damage tracking: Advanced -> Damage Tracking
 //! - Video pipeline: Advanced -> Video Pipeline
 
-use iced::widget::{column, pick_list, row, slider, space, text};
-use iced::{Alignment, Element, Length};
+use iced::{
+    widget::{column, pick_list, row, slider, text},
+    Alignment, Element, Length,
+};
 
-use crate::gui::message::Message;
-use crate::gui::state::AppState;
-use crate::gui::widgets;
+use crate::gui::{message::Message, state::AppState, widgets, widgets::space};
 
 /// Cursor rendering modes
 const CURSOR_MODES: &[&str] = &["metadata", "embedded", "hidden"];

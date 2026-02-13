@@ -134,9 +134,9 @@ mod manager;
 
 pub use layout::{CoordinateSpace, Layout, LayoutCalculator, MonitorLayout, VirtualDesktop};
 pub use manager::{MonitorEvent, MonitorInfo, Monitors, MultiMonitorConfig};
+use thiserror::Error;
 
 use crate::multimon::layout::LayoutError;
-use thiserror::Error;
 
 pub type Result<T> = std::result::Result<T, MultiMonitorError>;
 

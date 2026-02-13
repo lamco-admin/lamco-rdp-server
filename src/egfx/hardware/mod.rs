@@ -56,15 +56,13 @@ pub mod vaapi;
 pub mod nvenc;
 
 // Re-exports
+#[cfg(feature = "nvenc")]
+pub use error::NvencError;
+#[cfg(feature = "vaapi")]
+pub use error::VaapiError;
 pub use error::{HardwareEncoderError, HardwareEncoderResult};
 pub use factory::create_hardware_encoder;
 pub use stats::{EncodeTimer, HardwareEncoderStats};
-
-#[cfg(feature = "vaapi")]
-pub use error::VaapiError;
-
-#[cfg(feature = "nvenc")]
-pub use error::NvencError;
 
 use crate::config::HardwareEncodingConfig;
 

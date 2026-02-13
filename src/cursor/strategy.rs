@@ -66,7 +66,7 @@ impl std::str::FromStr for CursorMode {
             "painted" | "embedded" | "composite" => Ok(Self::Painted),
             "hidden" | "none" | "off" => Ok(Self::Hidden),
             "predictive" | "predict" | "physics" => Ok(Self::Predictive),
-            _ => Err(format!("Unknown cursor mode: {}", s)),
+            _ => Err(format!("Unknown cursor mode: {s}")),
         }
     }
 }

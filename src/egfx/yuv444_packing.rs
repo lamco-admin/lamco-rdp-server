@@ -213,7 +213,7 @@ pub fn pack_main_view(yuv444: &Yuv444Frame) -> Yuv420Frame {
     let y = yuv444.y.clone();
 
     // U plane: 2×2 box filter subsample
-    let mut u = subsample_chroma_420(&yuv444.u, width, height);
+    let u = subsample_chroma_420(&yuv444.u, width, height);
 
     // V plane: 2×2 box filter subsample
     let v = subsample_chroma_420(&yuv444.v, width, height);
@@ -374,7 +374,7 @@ fn pack_auxiliary_view_spec_compliant(yuv444: &Yuv444Frame) -> Yuv420Frame {
 
     // Pad to 16-row macroblock boundary (required by spec)
     // MS-RDPEGFX: "The auxiliary frame is aligned to multiples of 16×16"
-    let padded_height = ((height + 15) / 16) * 16;
+    let padded_height = height.div_ceil(16) * 16;
     // Use explicit allocation + fill to ensure deterministic memory state
     let mut aux_y = vec![0u8; padded_height * width];
     aux_y.fill(128);
@@ -582,6 +582,7 @@ fn pack_auxiliary_view_spec_compliant(yuv444: &Yuv444Frame) -> Yuv420Frame {
     // DIAGNOSTIC: Compute hash AFTER truncate so we only hash what OpenH264 sees
     if width == 1280 && height == 800 {
         use std::hash::{Hash, Hasher};
+
         use tracing::debug;
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         aux_y.hash(&mut hasher);
@@ -589,8 +590,10 @@ fn pack_auxiliary_view_spec_compliant(yuv444: &Yuv444Frame) -> Yuv420Frame {
         aux_v.hash(&mut hasher);
         let frame_hash = hasher.finish();
 
-        use std::sync::atomic::{AtomicU64, Ordering};
-        use std::sync::{Mutex, OnceLock};
+        use std::sync::{
+            atomic::{AtomicU64, Ordering},
+            Mutex, OnceLock,
+        };
         static PREV_HASH: AtomicU64 = AtomicU64::new(0);
         static FRAME_NUM: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         static PREV_BUFFERS: OnceLock<Mutex<(Vec<u8>, Vec<u8>, Vec<u8>)>> = OnceLock::new();
@@ -719,8 +722,8 @@ fn pack_auxiliary_view_spec_compliant(yuv444: &Yuv444Frame) -> Yuv420Frame {
 ///
 /// Uses a simpler pixel extraction pattern that may not match the spec
 /// exactly but is easier to debug.
-#[allow(dead_code)]
-pub fn pack_auxiliary_view_simplified(yuv444: &Yuv444Frame) -> Yuv420Frame {
+#[expect(dead_code, reason = "alternative packing for debugging AVC444 issues")]
+pub(super) fn pack_auxiliary_view_simplified(yuv444: &Yuv444Frame) -> Yuv420Frame {
     let width = yuv444.width;
     let height = yuv444.height;
 
@@ -782,7 +785,7 @@ pub fn validate_dimensions(width: usize, height: usize) -> bool {
 /// H.264 encoding works with 16×16 macroblocks, so dimensions should
 /// be aligned for optimal encoding.
 #[inline]
-pub fn align_to_16(dim: usize) -> usize {
+pub(super) fn align_to_16(dim: usize) -> usize {
     (dim + 15) & !15
 }
 

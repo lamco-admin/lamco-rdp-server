@@ -7,8 +7,10 @@
 //! detection. This allows us to handle platform-specific quirks like the
 //! AVC444 blur issue on RHEL 9.
 
-use super::capabilities::{BufferType, CaptureBackend, CompositorType};
-use super::probing::detect_os_release;
+use super::{
+    capabilities::{BufferType, CaptureBackend, CompositorType},
+    probing::detect_os_release,
+};
 
 /// Known compositor quirks that require workarounds
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -192,8 +194,7 @@ impl CompositorProfile {
         let is_modern = version
             .and_then(|v| v.split('.').next())
             .and_then(|major| major.parse::<u32>().ok())
-            .map(|major| major >= 45)
-            .unwrap_or(false);
+            .is_some_and(|major| major >= 45);
 
         // Detect OS for platform-specific quirks
         let os_release = detect_os_release();
@@ -244,11 +245,10 @@ impl CompositorProfile {
         let is_plasma6 = version
             .and_then(|v| v.split('.').next())
             .and_then(|major| major.parse::<u32>().ok())
-            .map(|major| major >= 6)
-            .unwrap_or(false);
+            .is_some_and(|major| major >= 6);
 
         // Build quirks list
-        let mut quirks = if is_plasma6 {
+        let quirks = if is_plasma6 {
             vec![]
         } else {
             vec![Quirk::MultiMonitorPositionQuirk]

@@ -30,9 +30,12 @@
 //! average activity. This smooths out sudden spikes and provides
 //! stable FPS transitions.
 
+use std::{
+    collections::VecDeque,
+    time::{Duration, Instant},
+};
+
 use serde::{Deserialize, Serialize};
-use std::collections::VecDeque;
-use std::time::{Duration, Instant};
 use tracing::debug;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -330,15 +333,15 @@ impl AdaptiveFpsController {
         }
 
         // Slow ramp-down (don't drop FPS too quickly)
-        if target_level < self.activity_level {
-            if self.frames_at_level >= self.config.ramp_down_frames {
-                return match self.activity_level {
-                    ActivityLevel::High => ActivityLevel::Medium,
-                    ActivityLevel::Medium => ActivityLevel::Low,
-                    ActivityLevel::Low => ActivityLevel::Static,
-                    ActivityLevel::Static => ActivityLevel::Static,
-                };
-            }
+        if target_level < self.activity_level
+            && self.frames_at_level >= self.config.ramp_down_frames
+        {
+            return match self.activity_level {
+                ActivityLevel::High => ActivityLevel::Medium,
+                ActivityLevel::Medium => ActivityLevel::Low,
+                ActivityLevel::Low => ActivityLevel::Static,
+                ActivityLevel::Static => ActivityLevel::Static,
+            };
         }
 
         self.activity_level

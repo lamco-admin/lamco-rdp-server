@@ -2,12 +2,12 @@
 //!
 //! RDPSND audio output settings including codec selection, sample rate, and quality.
 
-use iced::widget::{column, pick_list, row, space, text};
-use iced::{Alignment, Element, Length};
+use iced::{
+    widget::{column, pick_list, row, text},
+    Alignment, Element, Length,
+};
 
-use crate::gui::message::Message;
-use crate::gui::state::AppState;
-use crate::gui::widgets;
+use crate::gui::{message::Message, state::AppState, widgets, widgets::space};
 
 /// Available audio codecs
 const AUDIO_CODECS: &[&str] = &["auto", "opus", "pcm", "adpcm"];

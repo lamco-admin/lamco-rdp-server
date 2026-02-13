@@ -2,9 +2,9 @@
 //!
 //! Defines the service identifiers, levels, and advertised service structure.
 
-use super::rdp_capabilities::RdpCapability;
-use super::wayland_features::WaylandFeature;
 use serde::{Deserialize, Serialize};
+
+use super::{rdp_capabilities::RdpCapability, wayland_features::WaylandFeature};
 
 /// Unique identifier for each known service
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

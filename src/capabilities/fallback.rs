@@ -3,8 +3,9 @@
 //! This module provides a generic framework for implementing fallback chains
 //! where multiple strategies can be tried in order until one succeeds.
 
-use async_trait::async_trait;
 use std::time::{Duration, Instant};
+
+use async_trait::async_trait;
 use thiserror::Error;
 
 use crate::capabilities::ServiceLevel;
@@ -188,7 +189,7 @@ impl AllStrategiesFailed {
                 attempt.duration_ms
             ));
             if let Some(err) = &attempt.error {
-                report.push_str(&format!("      Error: {}\n", err));
+                report.push_str(&format!("      Error: {err}\n"));
             }
         }
         report
@@ -250,7 +251,7 @@ impl<T> FallbackChain<T> {
                     Err(e) => {
                         self.attempts.push(AttemptResult::failure(
                             strategy.name(),
-                            format!("Instantiation failed: {}", e),
+                            format!("Instantiation failed: {e}"),
                             start.elapsed(),
                         ));
                     }
@@ -265,7 +266,7 @@ impl<T> FallbackChain<T> {
                 Err(e) => {
                     self.attempts.push(AttemptResult::failure(
                         strategy.name(),
-                        format!("Probe error: {}", e),
+                        format!("Probe error: {e}"),
                         start.elapsed(),
                     ));
                 }

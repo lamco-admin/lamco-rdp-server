@@ -4,14 +4,20 @@
 //! - TOML files
 //! - Environment variables
 //! - CLI arguments
+#![expect(
+    unsafe_code,
+    reason = "libc::getuid() for default config path detection"
+)]
+
+use std::{net::SocketAddr, path::PathBuf};
 
 use anyhow::{Context, Result};
-use ashpd::desktop::remote_desktop::DeviceType;
-use ashpd::desktop::screencast::{CursorMode, SourceType};
+use ashpd::desktop::{
+    remote_desktop::DeviceType,
+    screencast::{CursorMode, SourceType},
+};
 use enumflags2::BitFlags;
 use serde::{Deserialize, Serialize};
-use std::net::SocketAddr;
-use std::path::PathBuf;
 
 /// Check if running inside a Flatpak sandbox
 pub fn is_flatpak() -> bool {
@@ -37,9 +43,10 @@ pub fn get_cert_config_dir() -> PathBuf {
             PathBuf::from("/etc/lamco-rdp-server")
         } else {
             // Running as user - use XDG config
-            dirs::config_dir()
-                .map(|d| d.join("lamco-rdp-server"))
-                .unwrap_or_else(|| PathBuf::from("/etc/lamco-rdp-server"))
+            dirs::config_dir().map_or_else(
+                || PathBuf::from("/etc/lamco-rdp-server"),
+                |d| d.join("lamco-rdp-server"),
+            )
         }
     }
 }
@@ -55,13 +62,15 @@ pub fn default_key_path() -> PathBuf {
 pub mod types;
 
 // Use types from types.rs
-use types::*;
-
 // Re-export types needed by other modules
-pub use types::AudioConfig;
-pub use types::GuiStateConfig;
-pub use types::HardwareEncodingConfig;
-pub use types::{CursorConfig, CursorPredictorConfig};
+use types::{
+    AdaptiveFpsConfig, AdvancedVideoConfig, ClipboardConfig, DamageTrackingConfig, DisplayConfig,
+    EgfxConfig, InputConfig, LatencyConfig, LoggingConfig, MultiMonitorConfig, PerformanceConfig,
+    SecurityConfig, ServerConfig, VideoConfig, VideoPipelineConfig,
+};
+pub use types::{
+    AudioConfig, CursorConfig, CursorPredictorConfig, GuiStateConfig, HardwareEncodingConfig,
+};
 
 /// Main configuration structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -114,8 +123,8 @@ pub struct Config {
 impl Config {
     /// Load configuration from file
     pub fn load(path: &str) -> Result<Self> {
-        let content = std::fs::read_to_string(path)
-            .context(format!("Failed to read config file: {}", path))?;
+        let content =
+            std::fs::read_to_string(path).context(format!("Failed to read config file: {path}"))?;
 
         let config: Config = toml::from_str(&content).context("Failed to parse config file")?;
 
@@ -151,8 +160,8 @@ impl Config {
             },
             clipboard: ClipboardConfig {
                 enabled: true,
-                max_size: 10485760, // 10 MB
-                rate_limit_ms: 200, // Max 5 events/second
+                max_size: 10_485_760, // 10 MB
+                rate_limit_ms: 200,   // Max 5 events/second
                 allowed_types: vec![],
                 kde_syncselection_hint: false, // Disabled by default (experimental)
                 strategy_override: None,       // Automatic selection by default
@@ -199,14 +208,14 @@ impl Config {
             (false, false) => Ok(false), // Neither exists - can generate
             (true, false) => {
                 anyhow::bail!(
-                    "Certificate exists but private key is missing: {:?}",
-                    self.security.key_path
+                    "Certificate exists but private key is missing: {}",
+                    self.security.key_path.display()
                 )
             }
             (false, true) => {
                 anyhow::bail!(
-                    "Private key exists but certificate is missing: {:?}",
-                    self.security.cert_path
+                    "Private key exists but certificate is missing: {}",
+                    self.security.cert_path.display()
                 )
             }
         }
@@ -220,10 +229,16 @@ impl Config {
             .context("Invalid listen address")?;
 
         if !self.security.cert_path.exists() {
-            anyhow::bail!("Certificate not found: {:?}", self.security.cert_path);
+            anyhow::bail!(
+                "Certificate not found: {}",
+                self.security.cert_path.display()
+            );
         }
         if !self.security.key_path.exists() {
-            anyhow::bail!("Private key not found: {:?}", self.security.key_path);
+            anyhow::bail!(
+                "Private key not found: {}",
+                self.security.key_path.display()
+            );
         }
 
         match self.video.cursor_mode.as_str() {
@@ -288,12 +303,10 @@ impl Config {
     /// Override config with CLI arguments
     pub fn with_overrides(mut self, listen: Option<String>, port: u16) -> Self {
         if let Some(listen_addr) = listen {
-            self.server.listen_addr = format!("{}:{}", listen_addr, port);
-        } else {
-            if let Ok(mut addr) = self.server.listen_addr.parse::<SocketAddr>() {
-                addr.set_port(port);
-                self.server.listen_addr = addr.to_string();
-            }
+            self.server.listen_addr = format!("{listen_addr}:{port}");
+        } else if let Ok(mut addr) = self.server.listen_addr.parse::<SocketAddr>() {
+            addr.set_port(port);
+            self.server.listen_addr = addr.to_string();
         }
 
         self

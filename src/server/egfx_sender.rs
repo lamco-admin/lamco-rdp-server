@@ -27,20 +27,19 @@
 //! The display handler doesn't need to know about EGFX protocol details.
 
 use std::sync::Arc;
-use tokio::sync::mpsc;
-use tracing::{debug, trace, warn};
 
 // IronRDP types - used internally only
 use ironrdp_dvc::encode_dvc_messages;
 use ironrdp_egfx::pdu::Avc420Region;
 use ironrdp_server::{EgfxServerMessage, GfxServerHandle, ServerEvent};
 use ironrdp_svc::ChannelFlags;
+use tokio::sync::mpsc;
+use tracing::{debug, trace, warn};
 
-use crate::damage::DamageRegion;
-use crate::server::gfx_factory::HandlerState;
+use crate::{damage::DamageRegion, server::gfx_factory::HandlerState};
 
 /// Result type for frame sending operations
-pub type SendResult<T> = Result<T, SendError>;
+pub(super) type SendResult<T> = Result<T, SendError>;
 
 /// Errors that can occur when sending frames
 #[derive(Debug)]
@@ -69,7 +68,7 @@ impl std::fmt::Display for SendError {
             SendError::NoSurface => write!(f, "No primary surface available"),
             SendError::Backpressure => write!(f, "Frame dropped due to backpressure"),
             SendError::ChannelClosed => write!(f, "Server event channel closed"),
-            SendError::EncodingFailed(e) => write!(f, "DVC encoding failed: {}", e),
+            SendError::EncodingFailed(e) => write!(f, "DVC encoding failed: {e}"),
             SendError::LockFailed => write!(f, "Failed to acquire lock"),
         }
     }
@@ -252,7 +251,7 @@ impl EgfxFrameSender {
                         let preview_len = std::cmp::min(16, nal_len);
                         let preview: Vec<String> = h264_data[nal_start..nal_start + preview_len]
                             .iter()
-                            .map(|b| format!("{:02x}", b))
+                            .map(|b| format!("{b:02x}"))
                             .collect();
                         nal_types.push(format!(
                             "{}({}b,ref={})[{}]",
@@ -262,7 +261,7 @@ impl EgfxFrameSender {
                             preview.join(" ")
                         ));
                     } else {
-                        nal_types.push(format!("{}({}b,ref={})", type_name, nal_len, nal_ref_idc));
+                        nal_types.push(format!("{type_name}({nal_len}b,ref={nal_ref_idc})"));
                     }
 
                     nal_count += 1;
@@ -295,7 +294,7 @@ impl EgfxFrameSender {
         let dump_count = FRAME_DUMP_COUNT.fetch_add(1, Ordering::SeqCst);
         if dump_count < 3 {
             use std::io::Write;
-            let filename = format!("/tmp/rdp-frame-{}.h264", dump_count);
+            let filename = format!("/tmp/rdp-frame-{dump_count}.h264");
             if let Ok(mut file) = std::fs::File::create(&filename) {
                 if file.write_all(h264_data).is_ok() {
                     trace!(
@@ -402,8 +401,8 @@ impl EgfxFrameSender {
         &self,
         stream1_data: &[u8],
         stream2_data: &[u8],
-        encoded_width: u16,
-        encoded_height: u16,
+        _encoded_width: u16,
+        _encoded_height: u16,
         display_width: u16,
         display_height: u16,
         timestamp_ms: u32,
@@ -527,8 +526,8 @@ impl EgfxFrameSender {
     pub async fn send_frame_with_regions(
         &self,
         h264_data: &[u8],
-        encoded_width: u16,
-        encoded_height: u16,
+        _encoded_width: u16,
+        _encoded_height: u16,
         display_width: u16,
         display_height: u16,
         damage_regions: &[DamageRegion],
@@ -559,7 +558,10 @@ impl EgfxFrameSender {
         };
 
         if regions.len() > 1 {
-            let total_area: u64 = damage_regions.iter().map(|r| r.area()).sum();
+            let total_area: u64 = damage_regions
+                .iter()
+                .map(super::super::damage::DamageRegion::area)
+                .sum();
             let frame_area = display_width as u64 * display_height as u64;
             let ratio = (total_area as f32 / frame_area as f32 * 100.0) as u32;
             debug!(
@@ -617,8 +619,8 @@ impl EgfxFrameSender {
         &self,
         stream1_data: &[u8],
         stream2_data: Option<&[u8]>, // Now optional!
-        encoded_width: u16,
-        encoded_height: u16,
+        _encoded_width: u16,
+        _encoded_height: u16,
         display_width: u16,
         display_height: u16,
         damage_regions: &[DamageRegion],

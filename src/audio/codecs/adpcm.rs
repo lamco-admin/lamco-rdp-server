@@ -96,7 +96,7 @@ impl AdpcmEncoder {
         // (First sample is in header)
         let header_size = 4 * self.channels;
         let data_samples = self.samples_per_block - 1;
-        let data_size = (data_samples * self.channels + 1) / 2; // 4 bits per sample, round up
+        let data_size = (data_samples * self.channels).div_ceil(2); // 4 bits per sample, round up
         header_size + data_size
     }
 
@@ -307,35 +307,33 @@ impl AdpcmDecoder {
                     output.push(sample2);
                 }
             }
-        } else {
-            if data.len() >= 8 {
-                let left_predictor = i16::from_le_bytes([data[0], data[1]]);
-                let left_step = data[2];
-                self.left.set_state(left_predictor, left_step);
+        } else if data.len() >= 8 {
+            let left_predictor = i16::from_le_bytes([data[0], data[1]]);
+            let left_step = data[2];
+            self.left.set_state(left_predictor, left_step);
 
-                let right_predictor = i16::from_le_bytes([data[4], data[5]]);
-                let right_step = data[6];
-                self.right.set_state(right_predictor, right_step);
+            let right_predictor = i16::from_le_bytes([data[4], data[5]]);
+            let right_step = data[6];
+            self.right.set_state(right_predictor, right_step);
 
-                output.push(left_predictor);
-                output.push(right_predictor);
+            output.push(left_predictor);
+            output.push(right_predictor);
 
-                let mut idx = 8;
-                while idx + 4 <= data.len() {
-                    let l1 = Self::decode_sample(&mut self.left, data[idx] & 0x0F);
-                    let l2 = Self::decode_sample(&mut self.left, data[idx] >> 4);
-                    let l3 = Self::decode_sample(&mut self.left, data[idx + 1] & 0x0F);
-                    let l4 = Self::decode_sample(&mut self.left, data[idx + 1] >> 4);
+            let mut idx = 8;
+            while idx + 4 <= data.len() {
+                let l1 = Self::decode_sample(&mut self.left, data[idx] & 0x0F);
+                let l2 = Self::decode_sample(&mut self.left, data[idx] >> 4);
+                let l3 = Self::decode_sample(&mut self.left, data[idx + 1] & 0x0F);
+                let l4 = Self::decode_sample(&mut self.left, data[idx + 1] >> 4);
 
-                    let r1 = Self::decode_sample(&mut self.right, data[idx + 2] & 0x0F);
-                    let r2 = Self::decode_sample(&mut self.right, data[idx + 2] >> 4);
-                    let r3 = Self::decode_sample(&mut self.right, data[idx + 3] & 0x0F);
-                    let r4 = Self::decode_sample(&mut self.right, data[idx + 3] >> 4);
+                let r1 = Self::decode_sample(&mut self.right, data[idx + 2] & 0x0F);
+                let r2 = Self::decode_sample(&mut self.right, data[idx + 2] >> 4);
+                let r3 = Self::decode_sample(&mut self.right, data[idx + 3] & 0x0F);
+                let r4 = Self::decode_sample(&mut self.right, data[idx + 3] >> 4);
 
-                    output.extend_from_slice(&[l1, r1, l2, r2, l3, r3, l4, r4]);
+                output.extend_from_slice(&[l1, r1, l2, r2, l3, r3, l4, r4]);
 
-                    idx += 4;
-                }
+                idx += 4;
             }
         }
 

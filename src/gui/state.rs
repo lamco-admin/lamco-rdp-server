@@ -2,8 +2,10 @@
 //!
 //! Manages configuration state, validation, server status, and UI state.
 
-use std::path::PathBuf;
-use std::time::{Duration, SystemTime};
+use std::{
+    path::PathBuf,
+    time::{Duration, SystemTime},
+};
 
 use crate::config::Config;
 

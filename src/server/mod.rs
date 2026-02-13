@@ -67,28 +67,29 @@ mod graphics_drain;
 mod input_handler;
 mod multiplexer_loop;
 
+use std::{net::SocketAddr, sync::Arc};
+
+use anyhow::{Context, Result};
 pub use display_handler::LamcoDisplayHandler;
 pub use egfx_sender::{EgfxFrameSender, SendError};
 pub use gfx_factory::{HandlerState, LamcoGfxFactory, SharedHandlerState};
 pub use input_handler::LamcoInputHandler;
-
-use anyhow::{Context, Result};
 use ironrdp_graphics::zgfx::CompressionMode;
 use ironrdp_pdu::rdp::capability_sets::server_codecs_capabilities;
 use ironrdp_server::{Credentials, RdpServer};
-use std::net::SocketAddr;
-use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, error, info, warn};
 
-use crate::audio::factory::create_sound_factory;
-use crate::clipboard::{ClipboardOrchestrator, ClipboardOrchestratorConfig, LamcoCliprdrFactory};
-use crate::config::{is_flatpak, Config};
-use crate::input::MonitorInfo as InputMonitorInfo;
-use crate::portal::PortalManager;
-use crate::security::TlsConfig;
-use crate::services::{ServiceId, ServiceLevel, ServiceRegistry};
-use crate::session::{PipeWireAccess, SessionStrategySelector, SessionType};
+use crate::{
+    audio::factory::create_sound_factory,
+    clipboard::{ClipboardOrchestrator, ClipboardOrchestratorConfig, LamcoCliprdrFactory},
+    config::{is_flatpak, Config},
+    input::MonitorInfo as InputMonitorInfo,
+    portal::PortalManager,
+    security::TlsConfig,
+    services::{ServiceId, ServiceLevel, ServiceRegistry},
+    session::{PipeWireAccess, SessionStrategySelector, SessionType},
+};
 
 /// WRD Server
 ///
@@ -96,18 +97,19 @@ use crate::session::{PipeWireAccess, SessionStrategySelector, SessionType};
 /// with IronRDP for RDP protocol handling.
 pub struct LamcoRdpServer {
     /// Configuration (kept for future dynamic reconfiguration)
-    #[allow(dead_code)]
     config: Arc<Config>,
 
     /// IronRDP server instance
     rdp_server: RdpServer,
 
     /// Portal manager for Wayland access (kept for resource cleanup)
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "Arc kept alive for portal resource cleanup on drop"
+    )]
     portal_manager: Arc<PortalManager>,
 
     /// Display handler (kept for lifecycle management)
-    #[allow(dead_code)]
     display_handler: Arc<LamcoDisplayHandler>,
 
     /// Service registry for capability/feature decisions
@@ -389,7 +391,10 @@ impl LamcoRdpServer {
 
                 let session_id = format!("lamco-rdp-input-clipboard-{}", uuid::Uuid::new_v4());
                 let (portal_handle, _) = portal_manager
-                    .create_session(session_id, clipboard_mgr.as_ref().map(|c| c.as_ref()))
+                    .create_session(
+                        session_id,
+                        clipboard_mgr.as_ref().map(std::convert::AsRef::as_ref),
+                    )
                     .await
                     .context("Failed to create Portal session for input+clipboard")?;
 
@@ -422,8 +427,7 @@ impl LamcoRdpServer {
 
         let initial_size = stream_info
             .first()
-            .map(|s| (s.size.0 as u16, s.size.1 as u16))
-            .unwrap_or((1920, 1080)); // Default fallback
+            .map_or((1920, 1080), |s| (s.size.0 as u16, s.size.1 as u16)); // Default fallback
 
         info!(
             "Initial desktop size: {}x{}",
@@ -453,8 +457,8 @@ impl LamcoRdpServer {
         info!("ZGFX compression mode: {:?}", compression_mode);
 
         let gfx_factory = LamcoGfxFactory::with_config(
-            initial_size.0 as u16,
-            initial_size.1 as u16,
+            initial_size.0,
+            initial_size.1,
             force_avc420_only,
             config.egfx.max_frames_in_flight,
             compression_mode,
@@ -472,11 +476,11 @@ impl LamcoRdpServer {
                 initial_size.0,
                 initial_size.1,
                 pipewire_fd,
-                stream_info.to_vec(), // streams() returns &[StreamInfo], convert to Vec
-                Some(graphics_tx),    // Graphics queue for multiplexer
+                stream_info.clone(), // streams() returns &[StreamInfo], convert to Vec
+                Some(graphics_tx),   // Graphics queue for multiplexer
                 Some(gfx_server_handle), // EGFX server handle for H.264 frame sending
                 Some(gfx_handler_state), // EGFX handler state for readiness checks
-                Arc::clone(&config),  // Pass config for feature flags
+                Arc::clone(&config), // Pass config for feature flags
                 Arc::clone(&service_registry), // Service registry for feature decisions
             )
             .await
@@ -497,22 +501,22 @@ impl LamcoRdpServer {
             .enumerate()
             .map(|(idx, stream)| InputMonitorInfo {
                 id: idx as u32,
-                name: format!("Monitor {}", idx),
-                x: stream.position.0 as i32,
-                y: stream.position.1 as i32,
-                width: stream.size.0 as u32,
-                height: stream.size.1 as u32,
+                name: format!("Monitor {idx}"),
+                x: stream.position.0,
+                y: stream.position.1,
+                width: stream.size.0,
+                height: stream.size.1,
                 dpi: 96.0,         // Default DPI
                 scale_factor: 1.0, // Default scale, Portal doesn't provide this
                 stream_x: stream.position.0 as u32,
                 stream_y: stream.position.1 as u32,
-                stream_width: stream.size.0 as u32,
-                stream_height: stream.size.1 as u32,
+                stream_width: stream.size.0,
+                stream_height: stream.size.1,
                 is_primary: idx == 0, // First monitor is primary
             })
             .collect();
 
-        let primary_stream_id = stream_info.first().map(|s| s.node_id).unwrap_or(0);
+        let primary_stream_id = stream_info.first().map_or(0, |s| s.node_id);
 
         info!(
             "Using PipeWire stream node ID {} for input injection",
@@ -572,7 +576,7 @@ impl LamcoRdpServer {
             ironrdp_server::tokio_rustls::TlsAcceptor::from(tls_config.server_config());
 
         let codecs = server_codecs_capabilities(&["remotefx"])
-            .map_err(|e| anyhow::anyhow!("Failed to create codec capabilities: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to create codec capabilities: {e}"))?;
 
         // Check for KDE Portal Clipboard bug (Bug 515465)
         // All current KDE versions (6.3.90-6.5.x) have threading bugs in Portal Clipboard
@@ -891,7 +895,7 @@ impl LamcoRdpServer {
             let session_guard = session_arc.read().await;
 
             match session_guard.close().await {
-                Ok(_) => {
+                Ok(()) => {
                     info!("  ✅ Portal session closed successfully");
                 }
                 Err(e) => {

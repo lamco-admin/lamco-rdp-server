@@ -4,8 +4,10 @@
 //! Used for input injection (keyboard, mouse) without portal permissions.
 
 use anyhow::{Context, Result};
-use zbus::zvariant::{ObjectPath, OwnedObjectPath};
-use zbus::Connection;
+use zbus::{
+    zvariant::{ObjectPath, OwnedObjectPath},
+    Connection,
+};
 
 /// Main RemoteDesktop interface proxy
 ///
@@ -17,7 +19,7 @@ pub struct MutterRemoteDesktop<'a> {
     proxy: zbus::Proxy<'a>,
 }
 
-impl<'a> MutterRemoteDesktop<'a> {
+impl MutterRemoteDesktop<'_> {
     /// Create a new RemoteDesktop proxy
     pub async fn new(connection: &Connection) -> Result<Self> {
         let proxy = zbus::ProxyBuilder::new(connection)
@@ -64,7 +66,7 @@ pub struct MutterRemoteDesktopSession<'a> {
     proxy: zbus::Proxy<'a>,
 }
 
-impl<'a> MutterRemoteDesktopSession<'a> {
+impl MutterRemoteDesktopSession<'_> {
     /// Create a session proxy for an existing session
     pub async fn new(connection: &Connection, session_path: OwnedObjectPath) -> Result<Self> {
         let proxy = zbus::ProxyBuilder::new(connection)
@@ -83,6 +85,7 @@ impl<'a> MutterRemoteDesktopSession<'a> {
     /// GNOME 46+ requires ConnectToEIS before input injection works
     pub async fn connect_to_eis(&self) -> Result<()> {
         use std::collections::HashMap;
+
         use zbus::zvariant::Value;
 
         let options: HashMap<String, Value> = HashMap::new();

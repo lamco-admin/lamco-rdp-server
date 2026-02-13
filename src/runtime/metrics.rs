@@ -10,11 +10,14 @@
 //! Metrics can be exported in various formats (JSON, Prometheus-compatible)
 //! for integration with monitoring systems.
 
+use std::{
+    collections::HashMap,
+    sync::Arc,
+    time::{Duration, Instant, SystemTime},
+};
+
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime};
 
 /// Metrics collector for the entire system
 pub struct MetricsCollector {
@@ -65,7 +68,7 @@ impl MetricsCollector {
 
     /// Get histogram statistics
     pub fn get_histogram(&self, name: &str) -> Option<HistogramStats> {
-        self.histograms.read().get(name).map(|h| h.stats())
+        self.histograms.read().get(name).map(Histogram::stats)
     }
 
     /// Get all metrics as a snapshot
@@ -97,20 +100,20 @@ impl MetricsCollector {
 
         // Export counters
         for (name, value) in self.counters.read().iter() {
-            output.push_str(&format!("# TYPE {} counter\n", name));
-            output.push_str(&format!("{} {}\n", name, value));
+            output.push_str(&format!("# TYPE {name} counter\n"));
+            output.push_str(&format!("{name} {value}\n"));
         }
 
         // Export gauges
         for (name, value) in self.gauges.read().iter() {
-            output.push_str(&format!("# TYPE {} gauge\n", name));
-            output.push_str(&format!("{} {}\n", name, value));
+            output.push_str(&format!("# TYPE {name} gauge\n"));
+            output.push_str(&format!("{name} {value}\n"));
         }
 
         // Export histograms
         for (name, histogram) in self.histograms.read().iter() {
             let stats = histogram.stats();
-            output.push_str(&format!("# TYPE {} histogram\n", name));
+            output.push_str(&format!("# TYPE {name} histogram\n"));
             output.push_str(&format!("{}_count {}\n", name, stats.count));
             output.push_str(&format!("{}_sum {}\n", name, stats.sum));
             output.push_str(&format!("{}_min {}\n", name, stats.min));

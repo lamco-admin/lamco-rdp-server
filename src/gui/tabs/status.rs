@@ -2,13 +2,17 @@
 //!
 //! Server status, service registry display, and live log viewer.
 
-use iced::widget::{button, column, container, pick_list, row, scrollable, space, text};
-use iced::{Alignment, Element, Length};
+use iced::{
+    widget::{button, column, container, pick_list, row, scrollable, text},
+    Alignment, Element, Length,
+};
 
-use crate::gui::message::Message;
-use crate::gui::state::{AppState, LogLevel, ServerStatus, ServiceLevel};
-use crate::gui::theme;
-use crate::gui::widgets;
+use crate::gui::{
+    message::Message,
+    state::{AppState, LogLevel, ServerStatus, ServiceLevel},
+    theme, widgets,
+    widgets::space,
+};
 
 const LOG_LEVELS: &[&str] = &["Trace", "Debug", "Info", "Warn", "Error"];
 

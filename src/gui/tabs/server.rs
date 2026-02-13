@@ -2,12 +2,12 @@
 //!
 //! Basic server settings: listen address, max connections, timeouts, portals.
 
-use iced::widget::{column, row, space, text};
-use iced::{Alignment, Element};
+use iced::{
+    widget::{column, row, text},
+    Alignment, Element,
+};
 
-use crate::gui::message::Message;
-use crate::gui::state::AppState;
-use crate::gui::widgets;
+use crate::gui::{message::Message, state::AppState, widgets, widgets::space};
 
 pub fn view_server_tab(state: &AppState) -> Element<'_, Message> {
     column![

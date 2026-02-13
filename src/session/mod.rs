@@ -83,15 +83,13 @@ pub mod strategies {
     #[cfg(feature = "libei")]
     pub mod libei;
 
+    #[cfg(feature = "libei")]
+    pub use libei::{LibeiSessionHandleImpl, LibeiStrategy};
     pub use mutter_direct::MutterDirectStrategy;
     pub use portal_token::{PortalSessionHandleImpl, PortalTokenStrategy};
     pub use selector::SessionStrategySelector;
-
     #[cfg(feature = "wayland")]
     pub use wlr_direct::{WlrDirectStrategy, WlrSessionHandleImpl};
-
-    #[cfg(feature = "libei")]
-    pub use libei::{LibeiSessionHandleImpl, LibeiStrategy};
 }
 
 pub use credentials::{

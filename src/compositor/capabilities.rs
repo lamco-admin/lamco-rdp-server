@@ -3,8 +3,7 @@
 //! This module defines the data structures used to represent
 //! compositor capabilities and detected features.
 
-use super::portal_caps::PortalCapabilities;
-use super::profiles::CompositorProfile;
+use super::{portal_caps::PortalCapabilities, profiles::CompositorProfile};
 
 /// Compositor type with version information
 #[derive(Debug, Clone, PartialEq)]
@@ -110,7 +109,7 @@ pub struct WaylandGlobal {
 }
 
 /// Preferred buffer type for screen capture
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BufferType {
     /// Memory file descriptor (shm)
     MemFd,
@@ -119,19 +118,15 @@ pub enum BufferType {
     DmaBuf,
 
     /// Either type (compositor chooses)
+    #[default]
     Any,
 }
 
-impl Default for BufferType {
-    fn default() -> Self {
-        Self::Any
-    }
-}
-
 /// Capture backend preference
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CaptureBackend {
     /// XDG Desktop Portal (most compatible)
+    #[default]
     Portal,
 
     /// wlroots screencopy protocol (direct, low-latency)
@@ -139,12 +134,6 @@ pub enum CaptureBackend {
 
     /// ext-image-copy-capture (modern standard)
     ExtImageCopyCapture,
-}
-
-impl Default for CaptureBackend {
-    fn default() -> Self {
-        Self::Portal
-    }
 }
 
 /// Complete compositor capabilities
@@ -309,8 +298,7 @@ impl CompositorCapabilities {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compositor::portal_caps::PortalCapabilities;
-    use crate::compositor::profiles::CompositorProfile;
+    use crate::compositor::{portal_caps::PortalCapabilities, profiles::CompositorProfile};
 
     #[test]
     fn test_compositor_type_name() {

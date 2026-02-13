@@ -54,7 +54,7 @@ impl MulawEncoder {
         let mantissa = ((sample >> (exponent + 3)) & 0x0F) as u8;
 
         // Combine: sign(1) + exponent(3) + mantissa(4), then invert
-        let encoded = sign | ((exponent as u8) << 4) | mantissa;
+        let encoded = sign | (exponent << 4) | mantissa;
         !encoded
     }
 
@@ -122,7 +122,7 @@ const ALAW_ENCODE_TABLE: [u8; 128] = {
     while i < 128 {
         // Map linear index to A-law value
         // Index represents upper bits of 13-bit magnitude (after >> 6)
-        let mut sample = i << 6; // Reconstruct approximate 13-bit value
+        let sample = i << 6; // Reconstruct approximate 13-bit value
 
         let seg: u8;
         let mant: u8;
@@ -241,7 +241,7 @@ impl AlawEncoder {
         };
 
         // Convert 16-bit to 13-bit (shift right 3)
-        let mag = (mag >> 3).min(4095) as i32;
+        let mag = (mag >> 3).min(4095);
 
         // Find segment and mantissa based on magnitude
         let (seg, mant): (u8, u8) = if mag < 32 {

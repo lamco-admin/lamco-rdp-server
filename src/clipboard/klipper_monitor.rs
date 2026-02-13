@@ -9,8 +9,9 @@
 //! when Klipper processes clipboard changes. This allows precise timing
 //! for re-announce mitigation instead of arbitrary delays.
 
-use futures::stream::StreamExt;
 use std::sync::Arc;
+
+use futures::stream::StreamExt;
 use tokio::sync::broadcast;
 use tracing::{debug, error, info, warn};
 use zbus::{proxy, Connection};
@@ -100,7 +101,7 @@ impl KlipperSignalMonitor {
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         debug!("Starting Klipper signal listener task");
 
-        let proxy = KlipperSignalProxyProxy::new(&*connection).await?;
+        let proxy = KlipperSignalProxyProxy::new(&connection).await?;
 
         let mut stream = proxy.receive_clipboard_history_updated().await?;
 

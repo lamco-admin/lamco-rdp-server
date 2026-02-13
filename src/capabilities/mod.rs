@@ -51,12 +51,11 @@ pub use fallback::{
     ProbeError, StrategyProbe,
 };
 pub use manager::Capabilities;
-pub use state::{
-    BlockingIssue, Degradation, MinimumViableConfig, ServiceLevel, Subsystem, SystemCapabilities,
-    UserImpact,
-};
-
 pub use probes::{
     DisplayCapabilities, EncodingCapabilities, InputCapabilities, NetworkCapabilities,
     RenderingCapabilities, RenderingRecommendation, StorageCapabilities,
+};
+pub use state::{
+    BlockingIssue, Degradation, MinimumViableConfig, ServiceLevel, Subsystem, SystemCapabilities,
+    UserImpact,
 };

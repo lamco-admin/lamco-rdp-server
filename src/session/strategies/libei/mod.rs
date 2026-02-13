@@ -48,20 +48,18 @@
 //!
 //! **Flatpak compatible:** Yes (Portal provides socket FD across sandbox boundary)
 
+use std::{collections::HashMap, os::unix::net::UnixStream, sync::Arc};
+
 use anyhow::{anyhow, Context as AnyhowContext, Result};
+use ashpd::desktop::{
+    remote_desktop::{DeviceType, RemoteDesktop},
+    PersistMode,
+};
 use async_trait::async_trait;
 use futures::stream::StreamExt;
-use std::collections::HashMap;
-use std::os::unix::net::UnixStream;
-use std::sync::Arc;
+use reis::{ei, tokio::EiEventStream, PendingRequestResult};
 use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, error, info, warn};
-
-use ashpd::desktop::remote_desktop::{DeviceType, RemoteDesktop};
-use ashpd::desktop::PersistMode;
-use reis::ei;
-use reis::tokio::EiEventStream;
-use reis::PendingRequestResult;
 
 use crate::session::strategy::{
     ClipboardComponents, PipeWireAccess, SessionHandle, SessionStrategy, SessionType, StreamInfo,

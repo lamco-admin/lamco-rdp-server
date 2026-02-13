@@ -11,10 +11,15 @@
 //! - Fast local access for internal handler operations
 //! - Cross-task visibility for the frame sender to check EGFX readiness
 
-use ironrdp_egfx::pdu::{CapabilitiesAdvertisePdu, CapabilitiesV81Flags, CapabilitySet};
-use ironrdp_egfx::server::{GraphicsPipelineHandler, QoeMetrics, Surface};
-use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicBool, AtomicU16, Ordering},
+    Arc,
+};
+
+use ironrdp_egfx::{
+    pdu::{CapabilitiesAdvertisePdu, CapabilitiesV81Flags, CapabilitySet},
+    server::{GraphicsPipelineHandler, QoeMetrics, Surface},
+};
 use tracing::{debug, info, trace, warn};
 
 use crate::server::{HandlerState, SharedHandlerState};
@@ -190,8 +195,7 @@ impl LamcoGraphicsHandler {
                 // We preserve it here for diagnostic purposes only - it's not used for frame sending.
                 let existing_channel_id: u32 = guard
                     .as_ref()
-                    .map(|s: &HandlerState| s.dvc_channel_id)
-                    .unwrap_or(0);
+                    .map_or(0, |s: &HandlerState| s.dvc_channel_id);
 
                 let state = HandlerState {
                     is_ready: self.ready.load(Ordering::Acquire),
@@ -266,7 +270,7 @@ impl GraphicsPipelineHandler for LamcoGraphicsHandler {
             }
             // V10+ with AVC420 implies AVC444v2 support
             CapabilitySet::V10 { .. }
-            | CapabilitySet::V10_1 { .. }
+            | CapabilitySet::V10_1
             | CapabilitySet::V10_2 { .. }
             | CapabilitySet::V10_3 { .. }
             | CapabilitySet::V10_4 { .. }

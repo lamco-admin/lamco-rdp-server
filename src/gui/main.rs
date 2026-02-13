@@ -10,15 +10,14 @@
 //! variables set. This is necessary because Mesa/OpenGL reads environment
 //! variables at process startup, before main() runs.
 
-use iced::{Font, Size};
-use std::env;
-use std::os::unix::process::CommandExt;
-use std::panic;
-use std::process::Command;
-use tracing::{error, info, warn};
+use std::{env, os::unix::process::CommandExt, panic, process::Command};
 
-use lamco_rdp_server::capabilities::{Capabilities, RenderingRecommendation};
-use lamco_rdp_server::gui::app::ConfigGuiApp;
+use iced::{Font, Size};
+use lamco_rdp_server::{
+    capabilities::{Capabilities, RenderingRecommendation},
+    gui::app::ConfigGuiApp,
+};
+use tracing::{error, info, warn};
 
 /// Professional sans-serif font for the UI
 /// Liberation Sans is similar to Arial/Helvetica and widely available on Linux
@@ -178,17 +177,14 @@ fn print_gpu_error_message(msg: &str) {
 
 /// Run the iced GUI application
 fn run_gui() -> Result<(), Box<dyn std::error::Error>> {
-    iced::application(ConfigGuiApp::new, ConfigGuiApp::update, ConfigGuiApp::view)
-        .title("Lamco RDP Server")
+    iced::application("Lamco RDP Server", ConfigGuiApp::update, ConfigGuiApp::view)
         .window_size(Size::new(1200.0, 800.0))
         .centered()
         .antialiasing(true)
         .default_font(FONT)
         .subscription(ConfigGuiApp::subscription)
-        // Prevent automatic exit on window close - let our handler manage it
-        // This is required for "close GUI only" mode to work (server keeps running)
         .exit_on_close_request(false)
-        .run()?;
+        .run_with(ConfigGuiApp::new)?;
 
     Ok(())
 }

@@ -29,8 +29,7 @@ use ironrdp_server::{ServerEvent, ServerEventSender, SoundServerFactory};
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
-use crate::audio::handler::PipeWireAudioHandler;
-use crate::config::AudioConfig;
+use crate::{audio::handler::PipeWireAudioHandler, config::AudioConfig};
 
 pub struct LamcoSoundFactory {
     audio_config: AudioConfig,

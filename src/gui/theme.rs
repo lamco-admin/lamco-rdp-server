@@ -4,8 +4,10 @@
 //! DataDog, or enterprise admin consoles. Dark backgrounds reduce eye
 //! strain during extended use and make status indicators pop.
 
-use iced::widget::{button, container, text_input};
-use iced::{Background, Border, Color, Shadow, Theme};
+use iced::{
+    widget::{button, container, text_input},
+    Background, Border, Color, Shadow, Theme,
+};
 
 /// Professional dark color palette with cyan/teal accents.
 /// Inspired by modern DevOps and infrastructure dashboards.
@@ -88,7 +90,6 @@ pub fn primary_button_style(_theme: &Theme, status: button::Status) -> button::S
             radius: 6.0.into(),
         },
         shadow: accent_glow(),
-        snap: false,
     };
 
     match status {
@@ -126,7 +127,6 @@ pub fn secondary_button_style(_theme: &Theme, status: button::Status) -> button:
             radius: 6.0.into(),
         },
         shadow: Shadow::default(),
-        snap: false,
     };
 
     match status {
@@ -165,7 +165,6 @@ pub fn danger_button_style(_theme: &Theme, status: button::Status) -> button::St
             offset: iced::Vector::new(0.0, 0.0),
             blur_radius: 8.0,
         },
-        snap: false,
     };
 
     match status {
@@ -207,7 +206,6 @@ pub fn success_button_style(_theme: &Theme, status: button::Status) -> button::S
             offset: iced::Vector::new(0.0, 0.0),
             blur_radius: 8.0,
         },
-        snap: false,
     };
 
     match status {
@@ -258,7 +256,6 @@ pub fn tab_button_style(active: bool) -> impl Fn(&Theme, button::Status) -> butt
                 radius: 8.0.into(),
             },
             shadow: Shadow::default(),
-            snap: false,
         };
 
         match status {
@@ -288,7 +285,6 @@ pub fn section_container_style(_theme: &Theme) -> container::Style {
         },
         text_color: Some(colors::TEXT_PRIMARY),
         shadow: card_shadow(),
-        snap: false,
     }
 }
 
@@ -307,7 +303,6 @@ pub fn log_viewer_style(_theme: &Theme) -> container::Style {
             offset: iced::Vector::new(0.0, 2.0),
             blur_radius: 4.0,
         },
-        snap: false,
     }
 }
 
@@ -321,7 +316,6 @@ pub fn collapsible_header_style(_theme: &Theme) -> container::Style {
         },
         text_color: Some(colors::TEXT_PRIMARY),
         shadow: Shadow::default(),
-        snap: false,
     }
 }
 
@@ -352,7 +346,6 @@ pub fn preset_button_style(selected: bool) -> impl Fn(&Theme, button::Status) ->
             } else {
                 Shadow::default()
             },
-            snap: false,
         };
 
         match status {
@@ -424,7 +417,6 @@ pub fn header_style(_theme: &Theme) -> container::Style {
             offset: iced::Vector::new(0.0, 2.0),
             blur_radius: 8.0,
         },
-        snap: false,
     }
 }
 
@@ -452,7 +444,6 @@ pub fn status_badge_style(running: bool) -> impl Fn(&Theme) -> container::Style 
             },
             text_color: Some(colors::TEXT_PRIMARY),
             shadow: Shadow::default(),
-            snap: false,
         }
     }
 }
@@ -532,7 +523,6 @@ pub fn category_button_style(
                 radius: 6.0.into(),
             },
             shadow: Shadow::default(),
-            snap: false,
         };
 
         match status {
@@ -577,7 +567,6 @@ pub fn dropdown_item_style(is_selected: bool) -> impl Fn(&Theme, button::Status)
                 radius: 4.0.into(),
             },
             shadow: Shadow::default(),
-            snap: false,
         };
 
         match status {

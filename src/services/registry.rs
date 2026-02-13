@@ -3,14 +3,15 @@
 //! The central registry that holds all advertised services and provides
 //! query methods for runtime feature decisions.
 
-use crate::compositor::CompositorCapabilities;
 use std::collections::HashMap;
+
 use tracing::info;
 
 use super::{
     service::{AdvertisedService, ServiceId, ServiceLevel},
     translation::translate_capabilities,
 };
+use crate::compositor::CompositorCapabilities;
 
 /// Central service registry
 ///
@@ -52,16 +53,14 @@ impl ServiceRegistry {
     pub fn has_service(&self, id: ServiceId) -> bool {
         self.services
             .get(&id)
-            .map(|s| s.level > ServiceLevel::Unavailable)
-            .unwrap_or(false)
+            .is_some_and(|s| s.level > ServiceLevel::Unavailable)
     }
 
     /// Returns `Unavailable` if service doesn't exist in the registry.
     pub fn service_level(&self, id: ServiceId) -> ServiceLevel {
         self.services
             .get(&id)
-            .map(|s| s.level)
-            .unwrap_or(ServiceLevel::Unavailable)
+            .map_or(ServiceLevel::Unavailable, |s| s.level)
     }
 
     pub fn get_service(&self, id: ServiceId) -> Option<&AdvertisedService> {
@@ -126,7 +125,7 @@ impl ServiceRegistry {
             let rdp_info = service
                 .rdp_capability
                 .as_ref()
-                .map(|c| format!(" → {}", c))
+                .map(|c| format!(" → {c}"))
                 .unwrap_or_default();
 
             info!(

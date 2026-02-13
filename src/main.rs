@@ -4,11 +4,9 @@
 
 use anyhow::Result;
 use clap::Parser;
+use lamco_rdp_server::{config::Config, server::LamcoRdpServer};
 use tracing::{info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-
-use lamco_rdp_server::config::Config;
-use lamco_rdp_server::server::LamcoRdpServer;
 
 /// Command-line arguments for lamco-rdp-server
 #[derive(Parser, Debug)]
@@ -165,7 +163,7 @@ async fn main() -> Result<()> {
 
         {
             let mut s = state.write().await;
-            s.config_path = args.config.clone();
+            s.config_path.clone_from(&args.config);
         }
 
         match lamco_rdp_server::dbus::start_service(args.system, state).await {
@@ -182,7 +180,7 @@ async fn main() -> Result<()> {
             }
             Err(e) => {
                 tracing::error!("Failed to start D-Bus service: {}", e);
-                return Err(anyhow::anyhow!("D-Bus service failed: {}", e));
+                return Err(anyhow::anyhow!("D-Bus service failed: {e}"));
             }
         }
     } else {
@@ -238,7 +236,7 @@ async fn show_capabilities(format: &str) -> Result<()> {
     let caps = lamco_rdp_server::compositor::probe_capabilities()
         .await
         .unwrap_or_else(|e| {
-            eprintln!("Failed to probe capabilities: {}", e);
+            eprintln!("Failed to probe capabilities: {e}");
             std::process::exit(1);
         });
 
@@ -260,7 +258,7 @@ async fn show_capabilities(format: &str) -> Result<()> {
             &storage_method,
             &encryption,
             accessible,
-            &os_release,
+            os_release.as_ref(),
             &kernel_version,
         );
     } else {
@@ -277,15 +275,15 @@ fn output_capabilities_json(
     storage_method: &lamco_rdp_server::session::CredentialStorageMethod,
     _encryption: &lamco_rdp_server::session::EncryptionType,
     accessible: bool,
-    os_release: &Option<lamco_rdp_server::compositor::OsRelease>,
+    os_release: Option<&lamco_rdp_server::compositor::OsRelease>,
     kernel_version: &str,
 ) {
     use serde_json::json;
 
-    let distribution = os_release
-        .as_ref()
-        .map(|os| format!("{} {}", os.pretty_name, os.version_id))
-        .unwrap_or_else(|| "Unknown".to_string());
+    let distribution = os_release.as_ref().map_or_else(
+        || "Unknown".to_string(),
+        |os| format!("{} {}", os.pretty_name, os.version_id),
+    );
 
     let mut services = Vec::new();
 
@@ -513,11 +511,11 @@ fn output_capabilities_text(
     );
     println!();
 
-    println!("Deployment: {}", deployment);
+    println!("Deployment: {deployment}");
     println!();
 
-    println!("Credential Storage: {}", storage_method);
-    println!("  Encryption: {}", encryption);
+    println!("Credential Storage: {storage_method}");
+    println!("  Encryption: {encryption}");
     println!("  Accessible: {}", if accessible { "✅" } else { "❌" });
     println!();
 }
@@ -530,15 +528,15 @@ async fn show_persistence_status() -> Result<()> {
     println!();
 
     let deployment = lamco_rdp_server::session::detect_deployment_context();
-    let (storage_method, encryption, accessible) =
+    let (storage_method, encryption, _accessible) =
         lamco_rdp_server::session::detect_credential_storage(&deployment).await;
 
     let token_manager = lamco_rdp_server::session::Tokens::new(storage_method).await?;
 
     let has_token = token_manager.load_token("default").await?.is_some();
 
-    println!("Deployment: {}", deployment);
-    println!("Storage: {} ({})", storage_method, encryption);
+    println!("Deployment: {deployment}");
+    println!("Storage: {storage_method} ({encryption})");
     println!(
         "Token Status: {}",
         if has_token {
@@ -625,7 +623,7 @@ async fn run_diagnostics() -> Result<()> {
     print!("[  ] D-Bus session bus... ");
     match zbus::Connection::session().await {
         Ok(_) => println!("✅"),
-        Err(e) => println!("❌ {}", e),
+        Err(e) => println!("❌ {e}"),
     }
 
     // Test 3: Compositor detection
@@ -637,7 +635,7 @@ async fn run_diagnostics() -> Result<()> {
     ) {
         println!("⚠️  Unknown (using generic support)");
     } else {
-        println!("✅ {}", compositor);
+        println!("✅ {compositor}");
     }
 
     // Test 4: Portal connection
@@ -650,22 +648,22 @@ async fn run_diagnostics() -> Result<()> {
                 println!("⚠️  Partial support");
             }
         }
-        Err(e) => println!("❌ {}", e),
+        Err(e) => println!("❌ {e}"),
     }
 
     // Test 5: Deployment detection
     print!("[  ] Deployment context... ");
     let deployment = lamco_rdp_server::session::detect_deployment_context();
-    println!("✅ {}", deployment);
+    println!("✅ {deployment}");
 
     // Test 6: Credential storage
     print!("[  ] Credential storage... ");
     let (method, encryption, accessible) =
         lamco_rdp_server::session::detect_credential_storage(&deployment).await;
     if accessible {
-        println!("✅ {} ({})", method, encryption);
+        println!("✅ {method} ({encryption})");
     } else {
-        println!("⚠️  {} (locked)", method);
+        println!("⚠️  {method} (locked)");
     }
 
     // Test 7: Token availability
@@ -723,10 +721,9 @@ fn init_logging(
         // - zbus: info level for D-Bus troubleshooting without flooding
         // - Everything else: warn
         tracing_subscriber::EnvFilter::new(format!(
-            "lamco={level},lamco_portal={level},lamco_rdp={level},lamco_video={level},\
-             ironrdp_cliprdr={level},ironrdp_egfx={level},ironrdp_dvc={level},ironrdp_server={level},\
-             ironrdp=info,ashpd={level},zbus=info,warn",
-            level = log_level
+            "lamco={log_level},lamco_portal={log_level},lamco_rdp={log_level},lamco_video={log_level},\
+             ironrdp_cliprdr={log_level},ironrdp_egfx={log_level},ironrdp_dvc={log_level},ironrdp_server={log_level},\
+             ironrdp=info,ashpd={log_level},zbus=info,warn"
         ))
     });
 
@@ -735,13 +732,16 @@ fn init_logging(
         Some(cli_path.clone())
     } else if let Some(log_dir) = &logging_config.log_dir {
         if let Err(e) = fs::create_dir_all(log_dir) {
-            eprintln!("Warning: Cannot create log directory {:?}: {}", log_dir, e);
+            eprintln!(
+                "Warning: Cannot create log directory {}: {e}",
+                log_dir.display()
+            );
             None
         } else {
             let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
             Some(
                 log_dir
-                    .join(format!("lamco-rdp-server-{}.log", timestamp))
+                    .join(format!("lamco-rdp-server-{timestamp}.log"))
                     .display()
                     .to_string(),
             )
@@ -758,8 +758,7 @@ fn init_logging(
             Ok(f) => Some((f, path.clone())),
             Err(e) => {
                 eprintln!(
-                    "Warning: Cannot create log file {:?}: {} — logging to console only",
-                    path, e
+                    "Warning: Cannot create log file {path:?}: {e} — logging to console only"
                 );
                 None
             }

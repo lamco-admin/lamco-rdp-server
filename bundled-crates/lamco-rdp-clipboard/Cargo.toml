@@ -30,3 +30,25 @@ ironrdp-cliprdr = { git = "https://github.com/lamco-admin/IronRDP", branch = "ma
 ironrdp-core = { git = "https://github.com/lamco-admin/IronRDP", branch = "master" }
 thiserror = "2"
 tracing = "0.1"
+
+[lints.rust]
+unsafe_code = "deny"
+unsafe_op_in_unsafe_fn = "deny"
+elided_lifetimes_in_paths = "warn"
+unreachable_pub = "warn"
+
+[lints.clippy]
+pedantic = { priority = -1, level = "deny" }
+allow_attributes = "deny"
+missing_errors_doc = "allow"
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+wildcard_imports = "deny"
+doc_markdown = "allow"
+unreadable_literal = "allow"
+similar_names = "allow"
+return_self_not_must_use = "allow"
+missing_panics_doc = "allow"
+struct_field_names = "allow"
+needless_pass_by_value = "allow"
+trivially_copy_pass_by_ref = "allow"

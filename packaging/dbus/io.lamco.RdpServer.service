@@ -1,0 +1,14 @@
+# D-Bus Service File for Lamco RDP Server
+#
+# This file enables D-Bus service activation - the server will be
+# started automatically when a client tries to connect to the service.
+#
+# Installation (native):
+#   sudo cp io.lamco.RdpServer.service /usr/share/dbus-1/services/
+#
+# For Flatpak, this file should be in:
+#   /app/share/dbus-1/services/io.lamco.RdpServer.service
+
+[D-BUS Service]
+Name=io.lamco.RdpServer
+Exec=/usr/bin/lamco-rdp-server --dbus-service

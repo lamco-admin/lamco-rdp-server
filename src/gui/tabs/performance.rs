@@ -2,13 +2,17 @@
 //!
 //! Threading, adaptive FPS, and latency governor settings.
 
-use iced::widget::{button, column, pick_list, row, slider, space, text};
-use iced::{Alignment, Element, Length};
+use iced::{
+    widget::{button, column, pick_list, row, slider, text},
+    Alignment, Element, Length,
+};
 
-use crate::gui::message::{Message, PerformancePreset};
-use crate::gui::state::AppState;
-use crate::gui::theme;
-use crate::gui::widgets;
+use crate::gui::{
+    message::{Message, PerformancePreset},
+    state::AppState,
+    theme, widgets,
+    widgets::space,
+};
 
 const LATENCY_MODES: &[&str] = &["interactive", "balanced", "quality"];
 

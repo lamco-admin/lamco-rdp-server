@@ -110,8 +110,9 @@
 //! - [`UserAuthenticator`] - PAM-based authentication
 //! - `scripts/generate-certs.sh` - Automated certificate generation script
 
-use anyhow::Result;
 use std::sync::Arc;
+
+use anyhow::Result;
 use tracing::info;
 
 pub mod auth;

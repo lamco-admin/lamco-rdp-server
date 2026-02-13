@@ -4,7 +4,6 @@
 //! Requires the `h264` feature to be enabled.
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-
 #[cfg(feature = "h264")]
 use lamco_rdp_server::egfx::{Avc444Encoder, EncoderConfig};
 

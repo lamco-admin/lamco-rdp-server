@@ -106,7 +106,7 @@ impl OpusEncoder {
         let channels = match config.channels {
             1 => opus2::Channels::Mono,
             2 => opus2::Channels::Stereo,
-            n => anyhow::bail!("Unsupported channel count: {} (must be 1 or 2)", n),
+            n => anyhow::bail!("Unsupported channel count: {n} (must be 1 or 2)"),
         };
 
         let mut encoder =

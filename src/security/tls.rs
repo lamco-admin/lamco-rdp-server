@@ -4,24 +4,22 @@
 //!
 //! Uses IronRDP's re-exported rustls (v0.23) for version compatibility.
 
+use std::{fs::File, io::BufReader, path::Path, sync::Arc};
+
 use anyhow::{Context, Result};
 use ironrdp_server::tokio_rustls::rustls;
-use rustls::pki_types::{CertificateDer, PrivateKeyDer};
-use rustls::ServerConfig;
-use std::fs::File;
-use std::io::BufReader;
-use std::path::Path;
-use std::sync::Arc;
+use rustls::{
+    pki_types::{CertificateDer, PrivateKeyDer},
+    ServerConfig,
+};
 use tracing::{debug, info};
 
 /// TLS configuration wrapper
 pub struct TlsConfig {
     /// Certificate chain (owned for lifetime management)
-    #[allow(dead_code)]
     cert_chain: Vec<CertificateDer<'static>>,
 
     /// Private key (owned for lifetime management)
-    #[allow(dead_code)]
     private_key: PrivateKeyDer<'static>,
 
     /// rustls ServerConfig
@@ -130,8 +128,9 @@ impl TlsConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::path::PathBuf;
+
+    use super::*;
 
     fn get_test_cert_paths() -> (PathBuf, PathBuf) {
         (

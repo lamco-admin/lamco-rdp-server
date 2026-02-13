@@ -5,6 +5,7 @@
 //! the encoder factory and display handler.
 
 use std::path::PathBuf;
+
 use thiserror::Error;
 
 /// Unified error type for hardware encoding operations

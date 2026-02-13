@@ -3,14 +3,17 @@
 //! Implements priority-based event processing for all server operations.
 //! Ensures input is always prioritized over graphics, preventing lag.
 
+use std::sync::Arc;
+
 use ironrdp_cliprdr::backend::ClipboardMessage;
 use ironrdp_server::{KeyboardEvent as IronKeyboardEvent, MouseEvent as IronMouseEvent};
-use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex, RwLock};
 use tracing::{debug, info};
 
-use crate::input::{CoordinateTransformer, KeyboardHandler, MouseHandler};
-use crate::portal::RemoteDesktopManager;
+use crate::{
+    input::{CoordinateTransformer, KeyboardHandler, MouseHandler},
+    portal::RemoteDesktopManager,
+};
 
 /// Control event for session management
 #[derive(Debug)]

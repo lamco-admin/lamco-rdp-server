@@ -62,6 +62,19 @@ pub mod strategy;
 pub mod sync;
 
 // Library primitives from lamco crates
+// Server-specific types
+pub use cooperation::{CooperationEvent, CooperationStats, KlipperCooperationCoordinator};
+pub use error::{ClipboardError, ErrorContext, ErrorType, RecoveryAction, Result, RetryConfig};
+pub use fuse::{
+    generate_gnome_copied_files_content, generate_uri_list_content, get_mount_point,
+    FileContentsRequest, FileContentsResponse, FileDescriptor, FuseMount,
+};
+pub use ironrdp_backend::LamcoCliprdrFactory;
+pub use klipper::{KlipperInfo, KlipperMonitor};
+pub use klipper_monitor::{KlipperClipboardEvent, KlipperSignalMonitor};
+pub use lamco_clipboard_core::formats::{
+    mime_to_rdp_formats as lib_mime_to_rdp_formats, rdp_format_to_mime as lib_rdp_format_to_mime,
+};
 pub use lamco_clipboard_core::{
     // Error types (base)
     ClipboardError as CoreClipboardError,
@@ -74,28 +87,11 @@ pub use lamco_clipboard_core::{
     TransferProgress,
     TransferState,
 };
-
-pub use lamco_clipboard_core::formats::{
-    mime_to_rdp_formats as lib_mime_to_rdp_formats, rdp_format_to_mime as lib_rdp_format_to_mime,
-};
-
 pub use lamco_portal::dbus_clipboard::{DbusClipboardBridge, DbusClipboardEvent};
-
 pub use lamco_rdp_clipboard::{
     ClipboardEvent as RdpClipboardEvent, ClipboardEventReceiver, ClipboardEventSender,
     ClipboardGeneralCapabilityFlags, RdpCliprdrBackend, RdpCliprdrFactory as LibRdpCliprdrFactory,
 };
-
-// Server-specific types
-pub use cooperation::{CooperationEvent, CooperationStats, KlipperCooperationCoordinator};
-pub use error::{ClipboardError, ErrorContext, ErrorType, RecoveryAction, Result, RetryConfig};
-pub use fuse::{
-    generate_gnome_copied_files_content, generate_uri_list_content, get_mount_point,
-    FileContentsRequest, FileContentsResponse, FileDescriptor, FuseMount,
-};
-pub use ironrdp_backend::LamcoCliprdrFactory;
-pub use klipper::{KlipperInfo, KlipperMonitor};
-pub use klipper_monitor::{KlipperClipboardEvent, KlipperSignalMonitor};
 pub use manager::{ClipboardEvent, ClipboardOrchestrator, ClipboardOrchestratorConfig};
 pub use provider::{ClipboardProvider, ClipboardProviderEvent, PortalClipboardProvider};
 pub use strategy::ClipboardIntegrationMode;
@@ -179,7 +175,7 @@ impl FormatConverterExt for FormatConverter {
     }
 
     fn mime_to_rdp_formats(&self, mime_types: &[String]) -> error::Result<Vec<RdpFormat>> {
-        let strs: Vec<&str> = mime_types.iter().map(|s| s.as_str()).collect();
+        let strs: Vec<&str> = mime_types.iter().map(std::string::String::as_str).collect();
         let formats = lib_mime_to_rdp_formats(&strs);
         Ok(formats
             .into_iter()
@@ -192,11 +188,10 @@ impl FormatConverterExt for FormatConverter {
 
     fn format_id_to_mime(&self, format_id: u32) -> error::Result<String> {
         lib_rdp_format_to_mime(format_id)
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
             .ok_or_else(|| {
                 error::ClipboardError::Core(CoreClipboardError::UnsupportedFormat(format!(
-                    "No MIME type for format ID {}",
-                    format_id
+                    "No MIME type for format ID {format_id}"
                 )))
             })
     }

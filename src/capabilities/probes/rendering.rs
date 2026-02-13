@@ -9,8 +9,9 @@
 //! that don't support the advanced shader features required by wgpu/iced.
 //! This probe detects such situations and recommends software rendering.
 
-use serde::{Deserialize, Serialize};
 use std::path::Path;
+
+use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
 use super::environment::{
@@ -231,17 +232,14 @@ impl RenderingProbe {
             }
         }
 
-        let is_virtual = name
-            .as_ref()
-            .map(|n| {
-                let n = n.to_lowercase();
-                n.contains("llvmpipe")
-                    || n.contains("softpipe")
-                    || n.contains("virtio")
-                    || n.contains("qxl")
-                    || n.contains("swrast")
-            })
-            .unwrap_or(false);
+        let is_virtual = name.as_ref().is_some_and(|n| {
+            let n = n.to_lowercase();
+            n.contains("llvmpipe")
+                || n.contains("softpipe")
+                || n.contains("virtio")
+                || n.contains("qxl")
+                || n.contains("swrast")
+        });
 
         name.map(|name| GpuInfo {
             name,
@@ -368,7 +366,7 @@ impl RenderingProbe {
             );
         }
 
-        let is_virtual_gpu = gpu_info.map(|g| g.is_virtual).unwrap_or(false);
+        let is_virtual_gpu = gpu_info.is_some_and(|g| g.is_virtual);
 
         if let Some(virt) = virtualization {
             if !wgpu_supported || is_virtual_gpu {
@@ -376,7 +374,7 @@ impl RenderingProbe {
                     let reason = format!(
                         "Virtual machine ({:?}) with virtual GPU ({:?})",
                         virt,
-                        gpu_info.map(|g| &g.name).unwrap_or(&"unknown".to_string())
+                        gpu_info.map_or(&"unknown".to_string(), |g| &g.name)
                     );
                     return (
                         RenderingRecommendation::UseSoftware {
@@ -388,8 +386,7 @@ impl RenderingProbe {
                     return (
                         RenderingRecommendation::NoGui {
                             reason: format!(
-                                "Virtual machine ({:?}) without GPU passthrough or software rendering",
-                                virt
+                                "Virtual machine ({virt:?}) without GPU passthrough or software rendering"
                             ),
                             suggestion: "Enable 3D acceleration in VM settings, install mesa-dri-drivers, or use CLI".into(),
                         },
@@ -404,35 +401,30 @@ impl RenderingProbe {
                 RenderingRecommendation::UseGpu {
                     reason: format!(
                         "Hardware GPU available: {}",
-                        gpu_info.map(|g| g.name.as_str()).unwrap_or("Unknown")
+                        gpu_info.map_or("Unknown", |g| g.name.as_str())
                     ),
                 },
                 None,
             );
         }
 
-        if gpu_available && !wgpu_supported {
-            if software_available {
-                return (
-                    RenderingRecommendation::UseSoftware {
-                        reason:
-                            "GPU available but not compatible with wgpu; using software rendering"
-                                .into(),
-                    },
-                    Some("GPU present but wgpu incompatible".into()),
-                );
-            }
+        if gpu_available && !wgpu_supported && software_available {
+            return (
+                RenderingRecommendation::UseSoftware {
+                    reason: "GPU available but not compatible with wgpu; using software rendering"
+                        .into(),
+                },
+                Some("GPU present but wgpu incompatible".into()),
+            );
         }
 
-        if !gpu_available {
-            if software_available {
-                return (
-                    RenderingRecommendation::UseSoftware {
-                        reason: "No GPU detected; using software rendering".into(),
-                    },
-                    Some("No GPU detected".into()),
-                );
-            }
+        if !gpu_available && software_available {
+            return (
+                RenderingRecommendation::UseSoftware {
+                    reason: "No GPU detected; using software rendering".into(),
+                },
+                Some("No GPU detected".into()),
+            );
         }
 
         (

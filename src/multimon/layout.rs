@@ -4,6 +4,7 @@
 //! production-grade algorithms for positioning, alignment, and optimization.
 
 use std::collections::HashMap;
+
 use thiserror::Error;
 use tracing::{debug, warn};
 
@@ -58,12 +59,12 @@ pub enum LayoutStrategy {
 pub struct LayoutCalculator {
     strategy: LayoutStrategy,
 
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "planned for multi-monitor alignment support")]
     alignment: Alignment,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
+#[expect(dead_code, reason = "variants planned for multi-monitor layout modes")]
 pub(super) enum Alignment {
     Top,
     Center,

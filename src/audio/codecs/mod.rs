@@ -28,10 +28,9 @@ pub mod g711;
 pub mod opus;
 
 pub use adpcm::{AdpcmDecoder, AdpcmEncoder};
+use anyhow::Result;
 pub use g711::{AlawEncoder, G711Encoder, G711Variant, MulawEncoder};
 pub use opus::{OpusApplication, OpusEncoder, OpusEncoderConfig};
-
-use anyhow::Result;
 
 #[derive(Debug)]
 pub enum AudioEncoder {

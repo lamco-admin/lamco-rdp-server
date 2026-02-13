@@ -4,15 +4,17 @@
 //! This provides a unified interface similar to PortalManager but using Mutter's
 //! direct D-Bus APIs instead of going through the XDG Portal.
 
+use std::collections::HashMap;
+
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::os::fd::AsRawFd;
 use tracing::{debug, info};
 use zbus::zvariant::{OwnedObjectPath, Value};
 
-use super::remote_desktop::{MutterRemoteDesktop, MutterRemoteDesktopSession};
-use super::screencast::{MutterScreenCast, MutterScreenCastSession, MutterScreenCastStream};
+use super::{
+    remote_desktop::{MutterRemoteDesktop, MutterRemoteDesktopSession},
+    screencast::{MutterScreenCast, MutterScreenCastSession, MutterScreenCastStream},
+};
 
 /// Stream information from Mutter
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -246,7 +248,7 @@ impl MutterSessionHandle {
     ///
     /// This node ID can be used to connect to PipeWire and receive video frames
     pub fn pipewire_node_id(&self) -> u32 {
-        self.stream_info.first().map(|s| s.node_id).unwrap_or(0)
+        self.stream_info.first().map_or(0, |s| s.node_id)
     }
 
     /// Get stream information

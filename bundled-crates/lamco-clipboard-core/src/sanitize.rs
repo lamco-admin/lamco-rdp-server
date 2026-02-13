@@ -100,7 +100,7 @@ pub fn sanitize_filename_for_windows(filename: &str) -> String {
     let base_name = name_upper.split('.').next().unwrap_or("");
 
     if WINDOWS_RESERVED_NAMES.contains(&base_name) {
-        sanitized = format!("_{}", sanitized);
+        sanitized = format!("_{sanitized}");
     }
 
     // Truncate if too long (preserve extension if possible)
@@ -113,7 +113,7 @@ pub fn sanitize_filename_for_windows(filename: &str) -> String {
                 let base = &sanitized[..dot_pos];
                 // Truncate base, keeping extension
                 let truncated_base: String = base.chars().take(base_max).collect();
-                sanitized = format!("{}{}", truncated_base, ext);
+                sanitized = format!("{truncated_base}{ext}");
             } else {
                 // Extension itself is too long, just truncate
                 sanitized = sanitized.chars().take(WINDOWS_MAX_FILENAME_LEN).collect();
@@ -182,7 +182,7 @@ pub fn sanitize_filename_for_linux(filename: &str) -> String {
 
     // Handle leading dash (can be confused with command options)
     if sanitized.starts_with('-') {
-        sanitized = format!("_{}", sanitized);
+        sanitized = format!("_{sanitized}");
     }
 
     // Handle empty result
@@ -199,7 +199,7 @@ pub fn sanitize_filename_for_linux(filename: &str) -> String {
                 let base_max = LINUX_MAX_FILENAME_LEN - ext_len;
                 let base = &sanitized[..dot_pos];
                 let truncated_base: String = base.chars().take(base_max).collect();
-                sanitized = format!("{}{}", truncated_base, ext);
+                sanitized = format!("{truncated_base}{ext}");
             } else {
                 sanitized = sanitized.chars().take(LINUX_MAX_FILENAME_LEN).collect();
             }

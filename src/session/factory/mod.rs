@@ -33,13 +33,11 @@ pub mod state;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-
-use crate::session::strategy::SessionHandle;
-use crate::session::DeploymentContext;
-
 pub use portal::PortalSessionFactory;
 pub use quirks::{InitQuirk, InitQuirkRegistry, SessionStrategyType};
 pub use state::{SessionCreationError, SessionCreationFailure, SessionCreationState};
+
+use crate::session::{strategy::SessionHandle, DeploymentContext};
 
 /// Capabilities provided by a session factory
 #[derive(Debug, Clone)]

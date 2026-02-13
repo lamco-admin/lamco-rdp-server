@@ -3,14 +3,13 @@
 //! Detects available video encoders including hardware (VA-API, NVENC) and
 //! software (OpenH264) options.
 
+use std::{path::Path, time::Instant};
+
 use serde::{Deserialize, Serialize};
-use std::path::Path;
-use std::time::{Duration, Instant};
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 use super::environment::run_command;
-use crate::capabilities::fallback::AttemptResult;
-use crate::capabilities::state::ServiceLevel;
+use crate::capabilities::{fallback::AttemptResult, state::ServiceLevel};
 
 /// Encoding capabilities
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -161,7 +160,7 @@ impl EncodingProbe {
         let start = Instant::now();
 
         for i in 128..=135 {
-            let device = format!("/dev/dri/renderD{}", i);
+            let device = format!("/dev/dri/renderD{i}");
             if !Path::new(&device).exists() {
                 continue;
             }
@@ -224,7 +223,7 @@ impl EncodingProbe {
         caps.max_resolution = (4096, 4096);
         caps.max_fps = 60;
 
-        let output_lower = output.to_lowercase();
+        let _output_lower = output.to_lowercase();
 
         for line in output.lines() {
             let line_lower = line.to_lowercase();
@@ -235,20 +234,18 @@ impl EncodingProbe {
             {
                 caps.h264 = true;
 
-                if line_lower.contains("main") {
-                    if !caps.h264_profiles.contains(&"main".to_string()) {
-                        caps.h264_profiles.push("main".into());
-                    }
+                if line_lower.contains("main") && !caps.h264_profiles.contains(&"main".to_string())
+                {
+                    caps.h264_profiles.push("main".into());
                 }
-                if line_lower.contains("high") {
-                    if !caps.h264_profiles.contains(&"high".to_string()) {
-                        caps.h264_profiles.push("high".into());
-                    }
+                if line_lower.contains("high") && !caps.h264_profiles.contains(&"high".to_string())
+                {
+                    caps.h264_profiles.push("high".into());
                 }
-                if line_lower.contains("baseline") || line_lower.contains("constrained") {
-                    if !caps.h264_profiles.contains(&"baseline".to_string()) {
-                        caps.h264_profiles.push("baseline".into());
-                    }
+                if (line_lower.contains("baseline") || line_lower.contains("constrained"))
+                    && !caps.h264_profiles.contains(&"baseline".to_string())
+                {
+                    caps.h264_profiles.push("baseline".into());
                 }
             }
 
@@ -327,7 +324,7 @@ impl EncodingProbe {
                 AttemptResult {
                     strategy_name: "NVENC".into(),
                     success: false,
-                    error: Some(format!("nvidia-smi failed: {}", e)),
+                    error: Some(format!("nvidia-smi failed: {e}")),
                     duration_ms: start.elapsed().as_millis() as u64,
                 },
             ),

@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!--
+  Polkit Policy for Lamco RDP Server System Service
+
+  This policy controls access to the system-level RDP server service.
+  Required when running lamco-rdp-server on the system D-Bus bus.
+
+  Installation:
+    sudo cp io.lamco.RdpServer.policy /usr/share/polkit-1/actions/
+-->
+<policyconfig>
+  <vendor>Lamco</vendor>
+  <vendor_url>https://lamco.ai</vendor_url>
+  <icon_name>io.lamco.RdpServer</icon_name>
+
+  <!-- Start/stop the system RDP server -->
+  <action id="io.lamco.RdpServer.manage">
+    <description>Manage Lamco RDP Server</description>
+    <message>Authentication is required to manage the RDP server</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+  </action>
+
+  <!-- View server status (read-only) -->
+  <action id="io.lamco.RdpServer.status">
+    <description>View Lamco RDP Server status</description>
+    <message>Authentication is required to view server status</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+  </action>
+
+  <!-- Modify server configuration -->
+  <action id="io.lamco.RdpServer.configure">
+    <description>Configure Lamco RDP Server</description>
+    <message>Authentication is required to modify server configuration</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+  </action>
+
+  <!-- Disconnect active clients -->
+  <action id="io.lamco.RdpServer.disconnect">
+    <description>Disconnect RDP clients</description>
+    <message>Authentication is required to disconnect RDP clients</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+  </action>
+</policyconfig>

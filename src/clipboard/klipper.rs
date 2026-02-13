@@ -31,8 +31,11 @@
 //! multiple MIME types. For full clipboard integration, Portal/data-control
 //! protocols are required.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicBool, AtomicU64, Ordering},
+    Arc,
+};
+
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 use zbus::Connection;
@@ -47,7 +50,7 @@ const KLIPPER_PATH: &str = "/klipper";
 const KLIPPER_INTERFACE: &str = "org.kde.klipper.klipper";
 
 /// Klipper detection and monitoring result
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct KlipperInfo {
     /// Whether klipper service was detected
     pub detected: bool,
@@ -63,18 +66,6 @@ pub struct KlipperInfo {
 
     /// Last update timestamp (unix millis)
     pub last_update_ms: u64,
-}
-
-impl Default for KlipperInfo {
-    fn default() -> Self {
-        Self {
-            detected: false,
-            responsive: false,
-            plasma_version: None,
-            history_updates: 0,
-            last_update_ms: 0,
-        }
-    }
 }
 
 /// Klipper diagnostic event
@@ -229,12 +220,12 @@ impl KlipperMonitor {
     pub async fn start_monitoring(
         &self,
     ) -> Result<mpsc::UnboundedReceiver<KlipperEvent>, zbus::Error> {
-        let (tx, rx) = mpsc::unbounded_channel();
+        let (_tx, rx) = mpsc::unbounded_channel();
 
         let connection = self.connection.clone();
         let active = Arc::clone(&self.active);
-        let event_count = Arc::clone(&self.event_count);
-        let last_event_ms = Arc::clone(&self.last_event_ms);
+        let _event_count = Arc::clone(&self.event_count);
+        let _last_event_ms = Arc::clone(&self.last_event_ms);
 
         self.active.store(true, Ordering::SeqCst);
 
@@ -242,8 +233,7 @@ impl KlipperMonitor {
             info!("Klipper signal monitor starting...");
 
             let rule = format!(
-                "type='signal',interface='{}',member='clipboardHistoryUpdated'",
-                KLIPPER_INTERFACE
+                "type='signal',interface='{KLIPPER_INTERFACE}',member='clipboardHistoryUpdated'"
             );
 
             if let Err(e) = connection

@@ -2,12 +2,12 @@
 //!
 //! Keyboard, mouse, and touch input settings.
 
-use iced::widget::{column, pick_list, space};
-use iced::{Element, Length};
+use iced::{
+    widget::{column, pick_list},
+    Element, Length,
+};
 
-use crate::gui::message::Message;
-use crate::gui::state::AppState;
-use crate::gui::widgets;
+use crate::gui::{message::Message, state::AppState, widgets, widgets::space};
 
 const KEYBOARD_LAYOUTS: &[&str] = &[
     "auto", "us", // US English

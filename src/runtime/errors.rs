@@ -57,7 +57,7 @@ pub fn format_user_error(error: &anyhow::Error) -> String {
     .ok();
     writeln!(&mut output, "Technical Details:").ok();
     writeln!(&mut output).ok();
-    writeln!(&mut output, "{:#}", error).ok();
+    writeln!(&mut output, "{error:#}").ok();
     writeln!(&mut output).ok();
 
     // Footer with help
@@ -292,7 +292,7 @@ fn format_generic_error(output: &mut String, error: &str) {
     writeln!(output).ok();
     writeln!(output, "An error occurred while running the server.").ok();
     writeln!(output).ok();
-    writeln!(output, "Error: {}", error).ok();
+    writeln!(output, "Error: {error}").ok();
     writeln!(output).ok();
     writeln!(output, "Troubleshooting:").ok();
     writeln!(output).ok();

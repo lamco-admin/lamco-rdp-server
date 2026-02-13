@@ -2,28 +2,31 @@
 //!
 //! Implements the Elm Architecture pattern: State -> View -> Message -> Update -> State
 
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{path::PathBuf, sync::Arc, time::Duration};
 
-use iced::widget::{button, column, container, image, row, scrollable, space, text};
-use iced::{Alignment, Element, Length, Subscription, Task};
+use iced::{
+    widget::{button, column, container, image, row, scrollable, text},
+    Alignment, Element, Length, Subscription, Task,
+};
 use tracing::{debug, info};
+
+use crate::gui::widgets::space;
 
 /// Lamb head logo icon (48x48 PNG)
 static LOGO_ICON: &[u8] = include_bytes!("../../assets/icons/io.lamco.rdp-server-48.png");
 use parking_lot::Mutex;
 use tokio::sync::mpsc;
 
-use crate::config::Config;
-use crate::gui::message::{DamageTrackingPreset, EgfxPreset, Message, PerformancePreset};
-use crate::gui::server_connection::{ConnectionMode, ServerConnection};
-use crate::gui::server_process::ServerLogLine;
-use crate::gui::state::{
-    AppState, CertGenState, LogLevel, LogLine, MessageLevel, Tab, TabCategory,
+use crate::{
+    config::Config,
+    gui::{
+        message::{DamageTrackingPreset, EgfxPreset, Message, PerformancePreset},
+        server_connection::{ConnectionMode, ServerConnection},
+        server_process::ServerLogLine,
+        state::{AppState, CertGenState, LogLevel, LogLine, MessageLevel, Tab, TabCategory},
+        tabs, theme as app_theme,
+    },
 };
-use crate::gui::tabs;
-use crate::gui::theme as app_theme;
 
 pub struct ConfigGuiApp {
     pub state: AppState,

@@ -20,13 +20,21 @@
 //!
 //! FUSE callbacks are synchronous (called from kernel), but RDP is async.
 //! We use channels to bridge: FUSE blocks on oneshot, async task fetches data.
+#![expect(
+    unsafe_code,
+    reason = "FUSE callbacks, unsafe Send/Sync impls, libc uid/gid"
+)]
 
-use std::collections::HashMap;
-use std::ffi::OsStr;
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::{
+    collections::HashMap,
+    ffi::OsStr,
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+    time::{Duration, SystemTime},
+};
 
 use fuser::{
     FileAttr, FileType, Filesystem, MountOption, ReplyAttr, ReplyData, ReplyDirectory, ReplyEntry,
@@ -74,7 +82,7 @@ impl VirtualFile {
         FileAttr {
             ino: self.inode,
             size: self.size,
-            blocks: (self.size + 511) / 512,
+            blocks: self.size.div_ceil(512),
             atime: now,
             mtime: now,
             ctime: now,
@@ -437,7 +445,7 @@ impl FuseMount {
         }
 
         std::fs::create_dir_all(&self.mount_point).map_err(|e| {
-            ClipboardError::FileIoError(format!("Failed to create FUSE mount point: {}", e))
+            ClipboardError::FileIoError(format!("Failed to create FUSE mount point: {e}"))
         })?;
 
         info!(
@@ -484,7 +492,7 @@ impl FuseMount {
         ];
 
         let session = fuser::spawn_mount2(create_fs(), &self.mount_point, &options_user_only)
-            .map_err(|e| ClipboardError::FileIoError(format!("Failed to mount FUSE: {}", e)))?;
+            .map_err(|e| ClipboardError::FileIoError(format!("Failed to mount FUSE: {e}")))?;
 
         self.session = Some(SendableSession(session));
         info!("FUSE clipboard filesystem mounted (user-only mode)");
@@ -760,7 +768,7 @@ impl Filesystem for FuseClipboardFsShared {
 pub fn get_mount_point() -> PathBuf {
     let uid = unsafe { libc::getuid() };
     let runtime_dir =
-        std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| format!("/run/user/{}", uid));
+        std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| format!("/run/user/{uid}"));
 
     PathBuf::from(runtime_dir).join("lamco-clipboard-fuse")
 }

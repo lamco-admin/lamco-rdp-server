@@ -124,19 +124,15 @@ impl DamageRegion {
         // Calculate horizontal gap (0 if overlapping)
         let gap_x = if other.x >= self_right {
             other.x - self_right
-        } else if self.x >= other_right {
-            self.x - other_right
         } else {
-            0 // Overlapping in x dimension
+            self.x.saturating_sub(other_right)
         };
 
         // Calculate vertical gap (0 if overlapping)
         let gap_y = if other.y >= self_bottom {
             other.y - self_bottom
-        } else if self.y >= other_bottom {
-            self.y - other_bottom
         } else {
-            0 // Overlapping in y dimension
+            self.y.saturating_sub(other_bottom)
         };
 
         // Adjacent if both gaps are within merge_distance
@@ -498,8 +494,7 @@ impl DamageDetector {
 
         let dimensions_changed = self
             .previous_dimensions
-            .map(|(w, h)| w != width || h != height)
-            .unwrap_or(true);
+            .map_or(true, |(w, h)| w != width || h != height);
 
         if self.previous_frame.is_none() || self.invalidated || dimensions_changed {
             self.update_tile_grid(width, height);
@@ -521,7 +516,7 @@ impl DamageDetector {
         let mut prev_frame = self.previous_frame.take().unwrap();
         let regions = self.detect_changes(&prev_frame, frame, width, height);
 
-        let damage_area: u64 = regions.iter().map(|r| r.area()).sum();
+        let damage_area: u64 = regions.iter().map(DamageRegion::area).sum();
 
         self.stats.frames_processed += 1;
         self.stats.total_damage_area += damage_area;
@@ -572,8 +567,8 @@ impl DamageDetector {
     }
 
     fn update_tile_grid(&mut self, width: u32, height: u32) {
-        self.tiles_x = ((width as usize) + self.config.tile_size - 1) / self.config.tile_size;
-        self.tiles_y = ((height as usize) + self.config.tile_size - 1) / self.config.tile_size;
+        self.tiles_x = (width as usize).div_ceil(self.config.tile_size);
+        self.tiles_y = (height as usize).div_ceil(self.config.tile_size);
         let total_tiles = self.tiles_x * self.tiles_y;
 
         if self.tile_dirty.len() != total_tiles {

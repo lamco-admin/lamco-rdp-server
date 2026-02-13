@@ -19,18 +19,23 @@
 //!
 //! See: docs/analysis/SESSION-FACTORY-PLAN-20260128.md
 
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
-use crate::services::ServiceRegistry;
-use crate::session::factory::{PortalSessionFactory, SessionFactory};
-use crate::session::strategy::{
-    PipeWireAccess, SessionHandle, SessionStrategy, SessionType, StreamInfo,
+use crate::{
+    services::ServiceRegistry,
+    session::{
+        factory::{PortalSessionFactory, SessionFactory},
+        strategy::{PipeWireAccess, SessionHandle, SessionStrategy, SessionType, StreamInfo},
+        Tokens,
+    },
 };
-use crate::session::Tokens;
 
 /// Portal session handle implementation
 ///
@@ -127,7 +132,7 @@ impl PortalSessionHandleImpl {
         let session_guard = self.session.read().await;
 
         match session_guard.close().await {
-            Ok(_) => {
+            Ok(()) => {
                 info!("Portal session closed successfully");
                 Ok(())
             }
@@ -169,14 +174,14 @@ impl SessionHandle for PortalSessionHandleImpl {
         {
             Ok(()) => Ok(()),
             Err(e) => {
-                let error_msg = format!("{}", e);
+                let error_msg = format!("{e}");
                 if error_msg.contains("non-existing session")
                     || error_msg.contains("non existing session")
                 {
                     error!("❌ Portal: Session destroyed during keyboard event");
                     self.session_valid.store(false, Ordering::Relaxed);
                     warn!("🔒 Portal session marked as invalid");
-                    Err(anyhow!("Portal session destroyed: {}", e))
+                    Err(anyhow!("Portal session destroyed: {e}"))
                 } else {
                     Err(e).context("Failed to inject keyboard keycode via Portal")
                 }
@@ -199,14 +204,14 @@ impl SessionHandle for PortalSessionHandleImpl {
         {
             Ok(()) => Ok(()),
             Err(e) => {
-                let error_msg = format!("{}", e);
+                let error_msg = format!("{e}");
                 if error_msg.contains("non-existing session")
                     || error_msg.contains("non existing session")
                 {
                     error!("❌ Portal: Session destroyed during pointer motion");
                     self.session_valid.store(false, Ordering::Relaxed);
                     warn!("🔒 Portal session marked as invalid");
-                    Err(anyhow!("Portal session destroyed: {}", e))
+                    Err(anyhow!("Portal session destroyed: {e}"))
                 } else {
                     Err(e).context("Failed to inject pointer motion via Portal")
                 }
@@ -229,14 +234,14 @@ impl SessionHandle for PortalSessionHandleImpl {
         {
             Ok(()) => Ok(()),
             Err(e) => {
-                let error_msg = format!("{}", e);
+                let error_msg = format!("{e}");
                 if error_msg.contains("non-existing session")
                     || error_msg.contains("non existing session")
                 {
                     error!("❌ Portal: Session destroyed during pointer button");
                     self.session_valid.store(false, Ordering::Relaxed);
                     warn!("🔒 Portal session marked as invalid");
-                    Err(anyhow!("Portal session destroyed: {}", e))
+                    Err(anyhow!("Portal session destroyed: {e}"))
                 } else {
                     Err(e).context("Failed to inject pointer button via Portal")
                 }
@@ -259,14 +264,14 @@ impl SessionHandle for PortalSessionHandleImpl {
         {
             Ok(()) => Ok(()),
             Err(e) => {
-                let error_msg = format!("{}", e);
+                let error_msg = format!("{e}");
                 if error_msg.contains("non-existing session")
                     || error_msg.contains("non existing session")
                 {
                     error!("❌ Portal: Session destroyed during pointer axis");
                     self.session_valid.store(false, Ordering::Relaxed);
                     warn!("🔒 Portal session marked as invalid");
-                    Err(anyhow!("Portal session destroyed: {}", e))
+                    Err(anyhow!("Portal session destroyed: {e}"))
                 } else {
                     Err(e).context("Failed to inject pointer axis via Portal")
                 }
@@ -337,7 +342,10 @@ impl SessionStrategy for PortalTokenStrategy {
         if !quirks.is_empty() {
             info!(
                 "Active initialization quirks: {:?}",
-                quirks.iter().map(|q| q.name()).collect::<Vec<_>>()
+                quirks
+                    .iter()
+                    .map(super::super::factory::quirks::InitQuirk::name)
+                    .collect::<Vec<_>>()
             );
         }
 

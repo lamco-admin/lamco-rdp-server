@@ -18,15 +18,12 @@
 
 use tracing::{debug, info, warn};
 
-use crate::config::HardwareEncodingConfig;
-
-use super::{HardwareEncoder, HardwareEncoderError, HardwareEncoderResult, QualityPreset};
-
-#[cfg(feature = "vaapi")]
-use super::vaapi::VaapiEncoder;
-
 #[cfg(feature = "nvenc")]
 use super::nvenc::NvencEncoder;
+#[cfg(feature = "vaapi")]
+use super::vaapi::VaapiEncoder;
+use super::{HardwareEncoder, HardwareEncoderError, HardwareEncoderResult, QualityPreset};
+use crate::config::HardwareEncodingConfig;
 
 /// Create a hardware encoder with automatic backend selection
 ///
@@ -242,8 +239,9 @@ fn probe_nvenc() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::path::PathBuf;
+
+    use super::*;
 
     fn test_config() -> HardwareEncodingConfig {
         HardwareEncodingConfig {

@@ -1,11 +1,12 @@
 [Desktop Entry]
-Name=Lamco RDP Server
-GenericName=Remote Desktop Server
-Comment=Remote desktop server for Wayland with graphical configuration
-Exec=lamco-rdp-server-gui
-Icon=io.lamco.rdp-server
-Terminal=false
 Type=Application
+Name=Lamco RDP Server
+GenericName=Remote Desktop Sharing
+Comment=Share your Linux desktop via RDP protocol
+Icon=io.lamco.rdp-server
+Exec=lamco-rdp-server-gui
+Terminal=false
 Categories=Network;RemoteAccess;
 Keywords=rdp;remote;desktop;wayland;screen;sharing;
 StartupNotify=true
+StartupWMClass=lamco-rdp-server-gui

@@ -1,7 +1,0 @@
-lamco-rdp-server (0.1.0-1) unstable; urgency=medium
-
-  * Initial release
-  * RHEL 9 platform quirk detection (AVC444 disabled, clipboard unavailable)
-  * Multi-platform support via OBS
-
- -- Greg <greg@lamco.ai>  Tue, 14 Jan 2026 12:00:00 +0000

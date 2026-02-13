@@ -10,11 +10,12 @@
 //! **Note:** Keeps "Manager" suffix because it implements the external D-Bus API
 //! contract `io.lamco.RdpServer.Manager`. Not a candidate for humanization rename.
 
-use std::collections::HashMap;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    collections::HashMap,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
-use zbus::interface;
-use zbus::zvariant::Value;
+use zbus::{interface, zvariant::Value};
 
 use super::{ClientInfo, SharedServerState};
 
@@ -49,11 +50,10 @@ impl RdpServerManager {
 
     pub async fn remove_client(&self, client_id: &str) -> Option<ClientInfo> {
         let mut clients = self.clients.write().await;
-        if let Some(pos) = clients.iter().position(|c| c.client_id == client_id) {
-            Some(clients.remove(pos))
-        } else {
-            None
-        }
+        clients
+            .iter()
+            .position(|c| c.client_id == client_id)
+            .map(|pos| clients.remove(pos))
     }
 }
 
@@ -163,7 +163,7 @@ impl RdpServerManager {
         }
 
         if let Err(e) = config.parse::<toml::Table>() {
-            return (false, format!("Invalid TOML: {}", e));
+            return (false, format!("Invalid TOML: {e}"));
         }
 
         match std::fs::write(&config_path, &config) {
@@ -171,7 +171,7 @@ impl RdpServerManager {
                 tracing::info!("Configuration updated via D-Bus");
                 (true, String::new())
             }
-            Err(e) => (false, format!("Failed to write config: {}", e)),
+            Err(e) => (false, format!("Failed to write config: {e}")),
         }
     }
 

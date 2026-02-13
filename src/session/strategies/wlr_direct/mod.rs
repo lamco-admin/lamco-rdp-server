@@ -43,25 +43,30 @@
 mod keyboard;
 mod pointer;
 
+use std::{
+    sync::{Arc, Mutex},
+    time::{SystemTime, UNIX_EPOCH},
+};
+
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
-use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+// Re-export for external use
+pub use keyboard::VirtualKeyboard as WlrVirtualKeyboard;
+use keyboard::{KeyState, VirtualKeyboard};
+pub use pointer::VirtualPointer as WlrVirtualPointer;
+use pointer::{Axis, AxisSource, ButtonState, VirtualPointer};
 use tracing::{debug, error, info, warn};
-use wayland_client::protocol::{wl_registry, wl_seat::WlSeat};
-use wayland_client::{globals::registry_queue_init, Connection, Dispatch, QueueHandle};
+use wayland_client::{
+    globals::registry_queue_init,
+    protocol::{wl_registry, wl_seat::WlSeat},
+    Connection, Dispatch, QueueHandle,
+};
 use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1;
 use wayland_protocols_wlr::virtual_pointer::v1::client::zwlr_virtual_pointer_manager_v1::ZwlrVirtualPointerManagerV1;
 
 use crate::session::strategy::{
     ClipboardComponents, PipeWireAccess, SessionHandle, SessionStrategy, SessionType, StreamInfo,
 };
-use keyboard::{KeyState, VirtualKeyboard};
-use pointer::{Axis, AxisSource, ButtonState, VirtualPointer};
-
-// Re-export for external use
-pub use keyboard::VirtualKeyboard as WlrVirtualKeyboard;
-pub use pointer::VirtualPointer as WlrVirtualPointer;
 
 /// State for Wayland protocol dispatch
 struct WlrState {

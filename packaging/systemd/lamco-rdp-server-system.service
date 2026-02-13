@@ -1,0 +1,62 @@
+# Lamco RDP Server - Systemd System Service
+#
+# This service runs the RDP server as a system service. It requires
+# a dedicated user account with access to a graphical session.
+#
+# NOTE: System-level RDP service requires special setup:
+# - Create a dedicated lamco-rdp user
+# - Configure session access via logind seat
+# - Consider security implications of system-wide remote access
+#
+# For most use cases, the user service (lamco-rdp-server.service) is preferred.
+#
+# Installation:
+#   sudo cp lamco-rdp-server-system.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable lamco-rdp-server-system
+#   sudo systemctl start lamco-rdp-server-system
+
+[Unit]
+Description=Lamco RDP Server (System)
+Documentation=https://github.com/anthropics/lamco-rdp-server
+After=graphical.target
+Wants=graphical.target
+
+[Service]
+Type=dbus
+BusName=io.lamco.RdpServer.System
+
+# Run as dedicated user (create with: sudo useradd -r -s /sbin/nologin lamco-rdp)
+User=lamco-rdp
+Group=lamco-rdp
+
+# Main executable with D-Bus service mode on system bus
+ExecStart=/usr/bin/lamco-rdp-server --dbus-service --system
+
+# Restart on failure
+Restart=on-failure
+RestartSec=10
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+# Environment
+Environment=RUST_LOG=info
+Environment=XDG_RUNTIME_DIR=/run/user/%U
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+
+# Config directory
+ConfigurationDirectory=lamco-rdp-server
+StateDirectory=lamco-rdp-server
+RuntimeDirectory=lamco-rdp-server
+
+[Install]
+WantedBy=multi-user.target

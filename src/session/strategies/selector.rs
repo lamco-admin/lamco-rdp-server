@@ -10,16 +10,16 @@
 //! 4. Portal + Token (universal, one-time dialog)
 //! 5. Basic Portal (fallback, dialog each time)
 
-use anyhow::Result;
 use std::sync::Arc;
+
+use anyhow::Result;
 use tracing::{debug, info, warn};
 
-use crate::services::{ServiceId, ServiceLevel, ServiceRegistry};
-use crate::session::strategy::SessionStrategy;
-use crate::session::Tokens;
-
-use super::mutter_direct::MutterDirectStrategy;
-use super::portal_token::PortalTokenStrategy;
+use super::{mutter_direct::MutterDirectStrategy, portal_token::PortalTokenStrategy};
+use crate::{
+    services::{ServiceId, ServiceLevel, ServiceRegistry},
+    session::{strategy::SessionStrategy, Tokens},
+};
 
 /// Session strategy selector
 ///
@@ -228,6 +228,7 @@ impl SessionStrategySelector {
 
     async fn enumerate_drm_connectors() -> anyhow::Result<Vec<String>> {
         use std::path::Path;
+
         use tokio::fs;
 
         let mut connectors = Vec::new();
@@ -278,9 +279,11 @@ mod tests {
     #[tokio::test]
     async fn test_strategy_selector_creation() {
         // Create minimal service registry for testing
-        use crate::compositor::{CompositorType, PortalCapabilities};
-        use crate::services::ServiceRegistry;
-        use crate::session::CredentialStorageMethod;
+        use crate::{
+            compositor::{CompositorType, PortalCapabilities},
+            services::ServiceRegistry,
+            session::CredentialStorageMethod,
+        };
 
         let compositor = CompositorType::Unknown { session_info: None };
         let portal = PortalCapabilities::default();
@@ -302,10 +305,13 @@ mod tests {
 
     #[test]
     fn test_strategy_selection_logic() {
-        use crate::compositor::{CompositorCapabilities, CompositorType, PortalCapabilities};
-        use crate::services::ServiceRegistry;
-        use crate::session::{CredentialStorageMethod, DeploymentContext};
         use std::sync::Arc;
+
+        use crate::{
+            compositor::{CompositorCapabilities, CompositorType, PortalCapabilities},
+            services::ServiceRegistry,
+            session::{CredentialStorageMethod, DeploymentContext},
+        };
 
         // Test 1: Flatpak deployment constraint (should recommend Portal)
         {

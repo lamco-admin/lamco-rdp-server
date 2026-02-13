@@ -29,11 +29,11 @@
 //! 3. **ServerEvent::Egfx** - Routes the resulting DVC messages to the wire
 
 use std::sync::{Arc, Mutex};
-use tokio::sync::RwLock;
 
 use ironrdp_egfx::server::{GraphicsPipelineHandler, GraphicsPipelineServer};
 use ironrdp_graphics::zgfx::CompressionMode;
 use ironrdp_server::{GfxDvcBridge, GfxServerFactory, GfxServerHandle};
+use tokio::sync::RwLock;
 
 use crate::egfx::LamcoGraphicsHandler;
 

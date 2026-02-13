@@ -3,17 +3,16 @@
 //! This module contains the logic to translate detected compositor
 //! capabilities into advertised services with appropriate levels.
 
-use crate::compositor::{
-    BufferType, CompositorCapabilities, CompositorType, CursorMode, Quirk, SourceType,
-};
-
 use super::{
     rdp_capabilities::RdpCapability,
     service::{AdvertisedService, PerformanceHints, ServiceId, ServiceLevel},
     wayland_features::{DamageMethod, DrmFormat, WaylandFeature},
 };
+use crate::compositor::{
+    BufferType, CompositorCapabilities, CompositorType, CursorMode, Quirk, SourceType,
+};
 
-pub fn translate_capabilities(caps: &CompositorCapabilities) -> Vec<AdvertisedService> {
+pub(super) fn translate_capabilities(caps: &CompositorCapabilities) -> Vec<AdvertisedService> {
     let mut services = Vec::new();
 
     services.push(translate_damage_tracking(caps));
@@ -297,8 +296,7 @@ fn translate_clipboard_manager(caps: &CompositorCapabilities) -> AdvertisedServi
                 };
 
                 let notes = format!(
-                    "Klipper detected (Plasma {}) - mitigation strategies enabled",
-                    plasma_version
+                    "Klipper detected (Plasma {plasma_version}) - mitigation strategies enabled"
                 );
 
                 AdvertisedService::best_effort(ServiceId::ClipboardManager, feature)
@@ -413,8 +411,7 @@ fn translate_video_capture(caps: &CompositorCapabilities) -> AdvertisedService {
 // ============================================================================
 
 fn translate_session_persistence(caps: &CompositorCapabilities) -> AdvertisedService {
-    use crate::services::wayland_features::TokenStorageMethod;
-    use crate::session::CredentialStorageMethod;
+    use crate::{services::wayland_features::TokenStorageMethod, session::CredentialStorageMethod};
 
     let portal = &caps.portal;
 

@@ -2,8 +2,10 @@
 //!
 //! Generates self-signed TLS certificates for RDP server authentication.
 
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use rcgen::generate_simple_self_signed;
 use time::{Duration, OffsetDateTime};

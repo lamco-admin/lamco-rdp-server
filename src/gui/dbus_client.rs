@@ -6,13 +6,10 @@
 //! - Management without process lifecycle concerns
 //! - Proper service architecture (GUI as client, server as service)
 
-use std::collections::HashMap;
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 
 use tokio::sync::mpsc;
-use zbus::proxy;
-use zbus::zvariant::OwnedValue;
-use zbus::Connection;
+use zbus::{proxy, zvariant::OwnedValue, Connection};
 
 use super::server_process::{LogLevel, ServerLogLine};
 

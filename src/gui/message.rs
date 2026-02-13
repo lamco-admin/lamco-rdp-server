@@ -4,10 +4,12 @@
 
 use std::path::PathBuf;
 
-use crate::config::Config;
-use crate::gui::server_connection::ConnectionMode;
-use crate::gui::state::{
-    DetectedCapabilities, GpuInfo, ServerStatus, Tab, TabCategory, ValidationResult,
+use crate::{
+    config::Config,
+    gui::{
+        server_connection::ConnectionMode,
+        state::{DetectedCapabilities, GpuInfo, ServerStatus, Tab, TabCategory, ValidationResult},
+    },
 };
 
 /// Main application message type

@@ -19,9 +19,9 @@
 //! - Deployment mode (Flatpak vs Native)
 //! - Protocol availability (Portal, ext-data-control-v1)
 
-use tracing::{debug, info};
+use tracing::info;
 
-use crate::services::{ServiceId, ServiceRegistry};
+use crate::services::ServiceRegistry;
 
 /// Clipboard integration mode
 ///

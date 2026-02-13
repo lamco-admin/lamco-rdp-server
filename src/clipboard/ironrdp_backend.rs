@@ -8,17 +8,17 @@
 //! Server-specific factory wrapping lamco-rdp-clipboard's backend.
 //! Integrates with the server's ClipboardOrchestrator for event routing.
 
+use std::sync::Arc;
+
 use ironrdp_cliprdr::backend::CliprdrBackendFactory;
 use ironrdp_server::ServerEventSender;
-use std::sync::Arc;
-use tokio::sync::{mpsc, Mutex};
-use tracing::{debug, info};
-
 // Re-export library backend and types
 pub use lamco_rdp_clipboard::{
     ClipboardEvent, ClipboardEventReceiver, ClipboardEventSender, ClipboardGeneralCapabilityFlags,
     RdpCliprdrBackend, RdpCliprdrFactory as LibRdpCliprdrFactory,
 };
+use tokio::sync::{mpsc, Mutex};
+use tracing::{debug, info};
 
 use crate::clipboard::manager::ClipboardOrchestrator;
 
@@ -268,7 +268,9 @@ mod tests {
     #[tokio::test]
     async fn test_factory_creation() {
         let config = ClipboardOrchestratorConfig::default();
-        let manager = Arc::new(Mutex::new(ClipboardManager::new(config).await.unwrap()));
+        let manager = Arc::new(Mutex::new(
+            ClipboardOrchestrator::new(config).await.unwrap(),
+        ));
 
         let factory = LamcoCliprdrFactory::new(manager);
         let _backend = factory.build_cliprdr_backend();
@@ -278,7 +280,9 @@ mod tests {
     #[tokio::test]
     async fn test_factory_with_bridge() {
         let config = ClipboardOrchestratorConfig::default();
-        let manager = Arc::new(Mutex::new(ClipboardManager::new(config).await.unwrap()));
+        let manager = Arc::new(Mutex::new(
+            ClipboardOrchestrator::new(config).await.unwrap(),
+        ));
 
         let factory = LamcoCliprdrFactory::new(manager);
 

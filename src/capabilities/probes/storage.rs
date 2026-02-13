@@ -84,8 +84,7 @@ impl StorageProbe {
         let selected = backends.first().cloned();
         let service_level = selected
             .as_ref()
-            .map(|s| s.service_level())
-            .unwrap_or(ServiceLevel::Fallback);
+            .map_or(ServiceLevel::Fallback, StorageBackend::service_level);
 
         info!(
             "Storage service level: {:?}, backend: {:?}",

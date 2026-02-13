@@ -2,8 +2,10 @@
 //!
 //! Handles loading, saving, and exporting configuration files.
 
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use crate::config::{is_flatpak, Config};
 
@@ -357,8 +359,9 @@ pub fn diff_configs(a: &Config, b: &Config) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use tempfile::tempdir;
+
+    use super::*;
 
     #[test]
     fn test_save_and_load_config() {

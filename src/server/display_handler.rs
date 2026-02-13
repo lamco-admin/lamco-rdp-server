@@ -64,29 +64,34 @@
 //! - **Frame rate:** Non-blocking, supports up to 144Hz
 //! - **Memory:** Zero-copy where possible (Arc<Vec<u8>>)
 
+use std::{
+    num::{NonZeroU16, NonZeroUsize},
+    sync::Arc,
+    time::Instant,
+};
+
 use anyhow::Result;
 use bytes::Bytes;
 use ironrdp_server::{
     BitmapUpdate as IronBitmapUpdate, DesktopSize, DisplayUpdate, GfxServerHandle,
     PixelFormat as IronPixelFormat, RdpServerDisplay, RdpServerDisplayUpdates, ServerEvent,
 };
-use std::num::{NonZeroU16, NonZeroUsize};
-use std::sync::Arc;
-use std::time::Instant;
 use tokio::sync::{mpsc, Mutex, RwLock};
 use tracing::{debug, error, info, trace, warn};
 
-use crate::damage::{DamageConfig, DamageDetector, DamageRegion};
-use crate::egfx::{Avc420Encoder, Avc444Encoder, ColorSpaceConfig, EncoderConfig};
-use crate::performance::{AdaptiveFpsController, EncodingDecision, LatencyGovernor, LatencyMode};
-use crate::pipewire::{PipeWireThreadCommand, PipeWireThreadManager, VideoFrame};
-use crate::portal::StreamInfo;
-use crate::server::egfx_sender::EgfxFrameSender;
-use crate::server::event_multiplexer::GraphicsFrame;
-use crate::server::gfx_factory::HandlerState;
-use crate::server::input_handler::LamcoInputHandler;
-use crate::services::{ServiceId, ServiceRegistry};
-use crate::video::{BitmapConverter, BitmapUpdate, RdpPixelFormat};
+use crate::{
+    damage::{DamageConfig, DamageDetector, DamageRegion},
+    egfx::{Avc420Encoder, Avc444Encoder, ColorSpaceConfig, EncoderConfig},
+    performance::{AdaptiveFpsController, EncodingDecision, LatencyGovernor, LatencyMode},
+    pipewire::{PipeWireThreadCommand, PipeWireThreadManager, VideoFrame},
+    portal::StreamInfo,
+    server::{
+        egfx_sender::EgfxFrameSender, event_multiplexer::GraphicsFrame, gfx_factory::HandlerState,
+        input_handler::LamcoInputHandler,
+    },
+    services::{ServiceId, ServiceRegistry},
+    video::{BitmapConverter, BitmapUpdate, RdpPixelFormat},
+};
 
 /// Video encoder abstraction for codec-agnostic frame encoding
 ///
@@ -306,12 +311,12 @@ impl LamcoDisplayHandler {
 
         let pipewire_thread = Arc::new(Mutex::new(
             PipeWireThreadManager::new(pipewire_fd)
-                .map_err(|e| anyhow::anyhow!("Failed to create PipeWire thread: {}", e))?,
+                .map_err(|e| anyhow::anyhow!("Failed to create PipeWire thread: {e}"))?,
         ));
 
         for (idx, stream) in stream_info.iter().enumerate() {
             let config = lamco_pipewire::StreamConfig {
-                name: format!("monitor-{}", idx),
+                name: format!("monitor-{idx}"),
                 width: stream.size.0,
                 height: stream.size.1,
                 framerate: 60,
@@ -332,12 +337,12 @@ impl LamcoDisplayHandler {
                 .lock()
                 .await
                 .send_command(cmd)
-                .map_err(|e| anyhow::anyhow!("Failed to send create stream command: {}", e))?;
+                .map_err(|e| anyhow::anyhow!("Failed to send create stream command: {e}"))?;
 
             response_rx
                 .recv_timeout(std::time::Duration::from_secs(5))
                 .map_err(|_| anyhow::anyhow!("Timeout creating stream"))?
-                .map_err(|e| anyhow::anyhow!("Stream creation failed: {}", e))?;
+                .map_err(|e| anyhow::anyhow!("Stream creation failed: {e}"))?;
 
             debug!("Stream {} created successfully", stream.node_id);
         }
@@ -1066,7 +1071,7 @@ impl LamcoDisplayHandler {
                         // VALIDATION TEST: 27fps to stay within Level 3.2 constraint (108,000 MB/s)
                         // 1280×800 = 4,000 MBs × 27fps = 108,000 MB/s (exactly at limit)
                         // TODO: Replace with proper level management after validation
-                        let timestamp_ms = (frames_sent * 37) as u64; // ~27fps timing
+                        let timestamp_ms = (frames_sent * 37); // ~27fps timing
 
                         // PipeWire sometimes sends zero-size buffers
                         let expected_size = (frame.width * frame.height * 4) as usize;
@@ -1115,7 +1120,10 @@ impl LamcoDisplayHandler {
 
                         let damage_ratio = if !damage_regions.is_empty() {
                             let frame_area = (frame.width * frame.height) as u64;
-                            let damage_area: u64 = damage_regions.iter().map(|r| r.area()).sum();
+                            let damage_area: u64 = damage_regions
+                                .iter()
+                                .map(super::super::damage::DamageRegion::area)
+                                .sum();
                             damage_area as f32 / frame_area as f32
                         } else {
                             0.0
@@ -1351,7 +1359,7 @@ impl LamcoDisplayHandler {
         let mut converter = self.bitmap_converter.lock().await;
         converter
             .convert_frame(&frame)
-            .map_err(|e| anyhow::anyhow!("Bitmap conversion failed: {}", e))
+            .map_err(|e| anyhow::anyhow!("Bitmap conversion failed: {e}"))
     }
 
     /// Convert our BitmapUpdate format to IronRDP's BitmapUpdate format
@@ -1389,15 +1397,15 @@ impl LamcoDisplayHandler {
 
             let bytes_per_pixel = iron_format.bytes_per_pixel() as usize;
             let stride = NonZeroUsize::new(width as usize * bytes_per_pixel)
-                .ok_or_else(|| anyhow::anyhow!("Invalid stride calculation: width={}", width))?;
+                .ok_or_else(|| anyhow::anyhow!("Invalid stride calculation: width={width}"))?;
 
             let iron_bitmap = IronBitmapUpdate {
                 x: rect_data.rectangle.left,
                 y: rect_data.rectangle.top,
                 width: NonZeroU16::new(width)
-                    .ok_or_else(|| anyhow::anyhow!("Invalid width: {}", width))?,
+                    .ok_or_else(|| anyhow::anyhow!("Invalid width: {width}"))?,
                 height: NonZeroU16::new(height)
-                    .ok_or_else(|| anyhow::anyhow!("Invalid height: {}", height))?,
+                    .ok_or_else(|| anyhow::anyhow!("Invalid height: {height}"))?,
                 format: iron_format,
                 data: Bytes::from(rect_data.data.clone()),
                 stride,

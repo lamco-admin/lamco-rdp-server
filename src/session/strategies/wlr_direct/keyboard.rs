@@ -35,13 +35,19 @@
 //! virtual-keyboard-unstable-v1 protocol (zwp namespace), supported by most
 //! Wayland compositors including wlroots, GNOME (via RemoteDesktop portal),
 //! and KDE (via RemoteDesktop portal).
+#![expect(
+    unsafe_code,
+    reason = "OwnedFd::from_raw_fd for XKB keymap shared memory"
+)]
+
+use std::os::{
+    fd::{AsRawFd, OwnedFd},
+    unix::io::FromRawFd,
+};
 
 use anyhow::{anyhow, Context, Result};
-use std::os::fd::{AsRawFd, OwnedFd};
-use std::os::unix::io::FromRawFd;
 use tracing::{debug, info, warn};
-use wayland_client::protocol::wl_seat::WlSeat;
-use wayland_client::QueueHandle;
+use wayland_client::{protocol::wl_seat::WlSeat, QueueHandle};
 use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::{
     zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1,
     zwp_virtual_keyboard_v1::{self, ZwpVirtualKeyboardV1},
@@ -244,10 +250,12 @@ fn generate_xkb_keymap(layout: &str) -> Result<String> {
 /// Requires Linux 3.17+ (memfd_create syscall).
 /// This is available on all modern distributions (Ubuntu 14.04+, RHEL 7+, etc.)
 fn create_keymap_fd(keymap: &str) -> Result<OwnedFd> {
-    use nix::sys::memfd::{memfd_create, MemFdCreateFlag};
-    use nix::unistd::write;
-    use std::ffi::CString;
-    use std::os::fd::AsFd;
+    use std::{ffi::CString, os::fd::AsFd};
+
+    use nix::{
+        sys::memfd::{memfd_create, MemFdCreateFlag},
+        unistd::write,
+    };
 
     let name = CString::new("xkb-keymap")?;
     let fd = memfd_create(
@@ -353,8 +361,9 @@ mod tests {
         match create_keymap_fd(test_keymap) {
             Ok(fd) => {
                 // Verify we can read back the data
-                use nix::unistd::{lseek, read, Whence};
                 use std::os::fd::AsFd;
+
+                use nix::unistd::{lseek, read, Whence};
                 let mut buffer = vec![0u8; test_keymap.len()];
 
                 // Seek to start before reading

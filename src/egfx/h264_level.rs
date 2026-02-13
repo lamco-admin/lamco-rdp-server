@@ -145,7 +145,7 @@ impl H264Level {
 
     /// Select minimum level for given resolution and framerate
     pub fn for_config(width: u16, height: u16, fps: f32) -> Self {
-        let mbs = ((width as u32 + 15) / 16) * ((height as u32 + 15) / 16);
+        let mbs = (width as u32).div_ceil(16) * (height as u32).div_ceil(16);
         let required_mbs_per_sec = mbs as f32 * fps;
 
         // Try levels in ascending order
@@ -229,7 +229,7 @@ pub struct LevelConstraints {
 
 impl LevelConstraints {
     pub fn new(width: u16, height: u16) -> Self {
-        let mbs = ((width as u32 + 15) / 16) * ((height as u32 + 15) / 16);
+        let mbs = (width as u32).div_ceil(16) * (height as u32).div_ceil(16);
         Self {
             width,
             height,
@@ -320,8 +320,7 @@ impl fmt::Display for ConstraintViolation {
                 level,
             } => write!(
                 f,
-                "Frame size {} MBs exceeds {} max {} MBs",
-                macroblocks, level, max_macroblocks
+                "Frame size {macroblocks} MBs exceeds {level} max {max_macroblocks} MBs"
             ),
             ConstraintViolation::MacroblocksPerSecondExceeded {
                 required,

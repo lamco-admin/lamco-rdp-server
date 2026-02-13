@@ -10,17 +10,22 @@
 //!
 //! NO STUBS - All backends fully functional for production use.
 
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
+
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
-use std::fs;
-use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
 use zeroize::Zeroizing;
 
-use super::credentials::{detect_deployment_context, CredentialStorageMethod};
-use super::flatpak_secret::FlatpakSecrets;
-use super::secret_service::AsyncSecretServiceClient;
-use super::tpm_store::AsyncTpmCredentialStore;
+use super::{
+    credentials::{detect_deployment_context, CredentialStorageMethod},
+    flatpak_secret::FlatpakSecrets,
+    secret_service::AsyncSecretServiceClient,
+    tpm_store::AsyncTpmCredentialStore,
+};
 
 /// Token metadata for debugging and validation
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -57,7 +62,7 @@ impl Tokens {
         let storage_path = if Path::new("/.flatpak-info").exists() {
             let home = std::env::var("HOME").context("HOME not set")?;
             let xdg_data =
-                std::env::var("XDG_DATA_HOME").unwrap_or_else(|_| format!("{}/.local/share", home));
+                std::env::var("XDG_DATA_HOME").unwrap_or_else(|_| format!("{home}/.local/share"));
 
             PathBuf::from(xdg_data)
                 .join("lamco-rdp-server")
@@ -140,7 +145,7 @@ impl Tokens {
             session_id, self.storage_method
         );
 
-        let key = format!("lamco-rdp-session-{}", session_id);
+        let key = format!("lamco-rdp-session-{session_id}");
         let token_zeroized = Zeroizing::new(token.to_string());
 
         match self.storage_method {
@@ -227,7 +232,7 @@ impl Tokens {
             session_id, self.storage_method
         );
 
-        let key = format!("lamco-rdp-session-{}", session_id);
+        let key = format!("lamco-rdp-session-{session_id}");
 
         let token = match self.storage_method {
             CredentialStorageMethod::GnomeKeyring
@@ -317,7 +322,7 @@ impl Tokens {
     pub async fn delete_token(&self, session_id: &str) -> Result<()> {
         info!("Deleting restore token for session: {}", session_id);
 
-        let key = format!("lamco-rdp-session-{}", session_id);
+        let key = format!("lamco-rdp-session-{session_id}");
 
         match self.storage_method {
             CredentialStorageMethod::GnomeKeyring
@@ -370,7 +375,7 @@ impl Tokens {
 
     async fn save_token_to_file(&self, session_id: &str, token: &str) -> Result<()> {
         let encrypted = self.encrypt_token(token)?;
-        let path = self.storage_path.join(format!("{}.token", session_id));
+        let path = self.storage_path.join(format!("{session_id}.token"));
 
         fs::write(&path, &encrypted).context("Failed to write token file")?;
 
@@ -387,7 +392,7 @@ impl Tokens {
     }
 
     async fn load_token_from_file(&self, session_id: &str) -> Result<Option<String>> {
-        let path = self.storage_path.join(format!("{}.token", session_id));
+        let path = self.storage_path.join(format!("{session_id}.token"));
 
         if !path.exists() {
             debug!("Token file does not exist: {:?}", path);
@@ -402,12 +407,12 @@ impl Tokens {
     }
 
     fn delete_token_file(&self, session_id: &str) -> Result<()> {
-        let path = self.storage_path.join(format!("{}.token", session_id));
+        let path = self.storage_path.join(format!("{session_id}.token"));
         if path.exists() {
             fs::remove_file(&path).context("Failed to delete token file")?;
         }
 
-        let metadata_path = self.storage_path.join(format!("{}.json", session_id));
+        let metadata_path = self.storage_path.join(format!("{session_id}.json"));
         if metadata_path.exists() {
             fs::remove_file(&metadata_path).context("Failed to delete metadata file")?;
         }
@@ -416,8 +421,10 @@ impl Tokens {
     }
 
     fn encrypt_token(&self, token: &str) -> Result<Vec<u8>> {
-        use aes_gcm::aead::{Aead, KeyInit, OsRng};
-        use aes_gcm::{Aes256Gcm, Key, Nonce};
+        use aes_gcm::{
+            aead::{Aead, KeyInit, OsRng},
+            Aes256Gcm, Key, Nonce,
+        };
 
         let key_bytes = derive_machine_key()?;
         let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key_bytes));
@@ -429,7 +436,7 @@ impl Tokens {
 
         let ciphertext = cipher
             .encrypt(nonce, token.as_bytes())
-            .map_err(|e| anyhow!("Encryption failed: {}", e))?;
+            .map_err(|e| anyhow!("Encryption failed: {e}"))?;
 
         // Prepend nonce to ciphertext for storage
         let mut result = nonce_bytes.to_vec();
@@ -444,8 +451,10 @@ impl Tokens {
             return Err(anyhow!("Invalid encrypted data (too short)"));
         }
 
-        use aes_gcm::aead::{Aead, KeyInit};
-        use aes_gcm::{Aes256Gcm, Key, Nonce};
+        use aes_gcm::{
+            aead::{Aead, KeyInit},
+            Aes256Gcm, Key, Nonce,
+        };
 
         let key_bytes = derive_machine_key()?;
         let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key_bytes));
@@ -455,7 +464,7 @@ impl Tokens {
 
         let plaintext = cipher
             .decrypt(nonce, ciphertext)
-            .map_err(|e| anyhow!("Decryption failed: {}", e))?;
+            .map_err(|e| anyhow!("Decryption failed: {e}"))?;
 
         String::from_utf8(plaintext).context("Token contains invalid UTF-8")
     }
@@ -478,7 +487,7 @@ impl Tokens {
             },
         };
 
-        let path = self.storage_path.join(format!("{}.json", session_id));
+        let path = self.storage_path.join(format!("{session_id}.json"));
         let json = serde_json::to_string_pretty(&metadata)?;
 
         fs::write(&path, json).context("Failed to write metadata")?;

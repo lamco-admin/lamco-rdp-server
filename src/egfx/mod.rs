@@ -53,35 +53,27 @@ mod h264_level;
 mod handler;
 mod video_handler;
 
+pub use avc444_encoder::{Avc444Encoder, Avc444Frame, Avc444Stats, Avc444Timing};
+pub use color_convert::{bgra_to_yuv444, subsample_chroma_420, ColorMatrix, Yuv444Frame};
+pub use color_space::{
+    ColorRange, ColorSpaceConfig, ColourPrimaries, MatrixCoefficients, TransferCharacteristics,
+};
 pub use encoder::{
     align_to_16, annex_b_to_avc, Avc420Encoder, EncoderConfig, EncoderError, EncoderResult,
     EncoderStats, H264Frame,
 };
-
-pub use avc444_encoder::{Avc444Encoder, Avc444Frame, Avc444Stats, Avc444Timing};
-
-pub use color_convert::{bgra_to_yuv444, subsample_chroma_420, ColorMatrix, Yuv444Frame};
-
-pub use color_space::{
-    ColorRange, ColorSpaceConfig, ColourPrimaries, MatrixCoefficients, TransferCharacteristics,
-};
-
-pub use yuv444_packing::{
-    pack_auxiliary_view, pack_dual_views, pack_main_view, validate_dimensions, Yuv420Frame,
-};
-
 pub use h264_level::{ConstraintViolation, H264Level, LevelConstraints};
-
 // LamcoGraphicsHandler implements ironrdp_egfx::GraphicsPipelineHandler internally
 // but that trait is not part of our public API
 pub use handler::{LamcoGraphicsHandler, SharedGraphicsHandler};
-
-pub use video_handler::{EgfxVideoConfig, EgfxVideoHandler, EncodedFrame, EncodingStats};
-
 #[cfg(any(feature = "vaapi", feature = "nvenc"))]
 pub use hardware::{
     create_hardware_encoder, HardwareEncoder, HardwareEncoderError, HardwareEncoderResult,
     HardwareEncoderStats, QualityPreset,
+};
+pub use video_handler::{EgfxVideoConfig, EgfxVideoHandler, EncodedFrame, EncodingStats};
+pub use yuv444_packing::{
+    pack_auxiliary_view, pack_dual_views, pack_main_view, validate_dimensions, Yuv420Frame,
 };
 
 // Note: IronRDP EGFX types (Avc420Region, GraphicsPipelineServer, etc.) are NOT

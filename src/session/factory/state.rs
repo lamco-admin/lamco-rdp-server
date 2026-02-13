@@ -5,8 +5,7 @@
 
 use std::sync::Arc;
 
-use crate::portal::PortalManager;
-use crate::session::strategy::SessionHandle;
+use crate::{portal::PortalManager, session::strategy::SessionHandle};
 
 /// Failure reasons during session creation
 #[derive(Debug, Clone)]
@@ -162,10 +161,10 @@ impl std::fmt::Debug for SessionCreationState {
             Self::ResourcesAllocated { .. } => write!(f, "ResourcesAllocated"),
             Self::FirstAttempt { .. } => write!(f, "FirstAttempt"),
             Self::RetryPending { attempt_number, .. } => {
-                write!(f, "RetryPending(attempt={})", attempt_number)
+                write!(f, "RetryPending(attempt={attempt_number})")
             }
             Self::RetryAttempt { attempt_number, .. } => {
-                write!(f, "RetryAttempt(attempt={})", attempt_number)
+                write!(f, "RetryAttempt(attempt={attempt_number})")
             }
             Self::Complete { .. } => write!(f, "Complete"),
             Self::Failed { error } => write!(f, "Failed({})", error.message),

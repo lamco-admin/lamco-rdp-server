@@ -3,9 +3,7 @@
 //! Detects system capabilities by running the server binary with --show-capabilities
 //! and parsing the JSON output.
 
-use std::path::PathBuf;
-use std::process::Command;
-use std::time::SystemTime;
+use std::{path::PathBuf, process::Command, time::SystemTime};
 
 use crate::gui::state::{
     DeploymentContext, DetectedCapabilities, PlatformQuirk, ServiceInfo, ServiceLevel,

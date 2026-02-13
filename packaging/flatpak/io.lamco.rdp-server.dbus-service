@@ -1,0 +1,10 @@
+# D-Bus Service File for Lamco RDP Server (Flatpak)
+#
+# This file enables D-Bus service activation within Flatpak.
+# Installed to: /app/share/dbus-1/services/io.lamco.rdp-server.service
+#
+# The Flatpak runtime handles sandbox setup automatically.
+
+[D-BUS Service]
+Name=io.lamco.rdp-server
+Exec=/app/bin/lamco-rdp-server --dbus-service

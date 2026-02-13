@@ -597,7 +597,7 @@ fn parse_full_dibv5(data: &[u8]) -> ClipboardResult<DynamicImage> {
 }
 
 /// Convert 32-bit DIBV5 pixel data using color masks.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "DIB format requires all mask/dimension params")]
 fn convert_32bit_dibv5(
     pixel_data: &[u8],
     width: u32,

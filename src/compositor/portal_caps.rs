@@ -5,8 +5,7 @@
 //! and clipboard access.
 
 use anyhow::{Context, Result};
-use ashpd::desktop::screencast::CursorMode as AshpdCursorMode;
-use ashpd::desktop::screencast::SourceType as AshpdSourceType;
+use ashpd::desktop::screencast::{CursorMode as AshpdCursorMode, SourceType as AshpdSourceType};
 use tracing::{debug, warn};
 use zbus::Connection;
 
@@ -53,7 +52,7 @@ impl From<AshpdSourceType> for SourceType {
 }
 
 /// Portal capability information
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct PortalCapabilities {
     /// Portal interface version
     pub version: u32,
@@ -82,22 +81,6 @@ pub struct PortalCapabilities {
 
     /// Maximum persist mode available (0=none, 1=transient, 2=permanent)
     pub max_persist_mode: u8,
-}
-
-impl Default for PortalCapabilities {
-    fn default() -> Self {
-        Self {
-            version: 0,
-            supports_screencast: false,
-            supports_remote_desktop: false,
-            supports_clipboard: false,
-            available_cursor_modes: vec![],
-            available_source_types: vec![],
-            backend: None,
-            supports_restore_tokens: false,
-            max_persist_mode: 0,
-        }
-    }
 }
 
 impl PortalCapabilities {
@@ -340,10 +323,10 @@ where
         .await?;
 
     let interface_name = InterfaceName::try_from(interface)
-        .map_err(|e| anyhow::anyhow!("Invalid interface name: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("Invalid interface name: {e}"))?;
 
     let value = proxy.get(interface_name, property).await?;
-    T::try_from(value).map_err(|e| anyhow::anyhow!("Property conversion failed: {}", e))
+    T::try_from(value).map_err(|e| anyhow::anyhow!("Property conversion failed: {e}"))
 }
 
 /// Check if a D-Bus interface exists

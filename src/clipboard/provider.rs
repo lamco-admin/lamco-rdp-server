@@ -90,7 +90,6 @@ pub trait ClipboardProvider: Send + Sync {
 ///
 /// NOTE: Not currently used. ClipboardManager uses Portal directly.
 /// Defined for trait completeness and future provider abstraction work.
-#[allow(dead_code)]
 pub struct PortalClipboardProvider {
     _phantom: std::marker::PhantomData<()>,
 }
@@ -101,14 +100,12 @@ pub struct PortalClipboardProvider {
 /// Lower latency, more control, but only works in native (non-Flatpak) mode.
 ///
 /// Status: Not yet implemented. Placeholder for Sprint 3-4 work.
-#[allow(dead_code)]
 pub struct DirectDataControlProvider {
     _phantom: std::marker::PhantomData<()>,
 }
 
 impl DirectDataControlProvider {
     /// Create new Direct provider (not yet implemented)
-    #[allow(dead_code)]
     pub fn new() -> Result<Self> {
         Err(crate::clipboard::error::ClipboardError::PortalError(
             "Direct data-control provider not yet implemented (Sprint 3-4)".to_string(),

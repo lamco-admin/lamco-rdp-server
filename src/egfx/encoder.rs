@@ -25,7 +25,6 @@ use openh264::encoder::{
 };
 #[cfg(feature = "h264")]
 use openh264::formats::{BgraSliceU8, YUVBuffer};
-
 use thiserror::Error;
 #[cfg(feature = "h264")]
 use tracing::{debug, trace, warn};
@@ -375,7 +374,7 @@ impl Avc420Encoder {
 
             let nal_header = data[nal_start];
             let nal_type = nal_header & 0x1F;
-            let nal_ref_idc = (nal_header >> 5) & 0x03;
+            let _ = (nal_header >> 5) & 0x03; // nal_ref_idc, parsed but unused
 
             // Find next start code
             let mut nal_end = data.len();
@@ -402,7 +401,7 @@ impl Avc420Encoder {
                 _ => "Other",
             };
 
-            nal_types.push(format!("{}({}b)", type_name, nal_size));
+            nal_types.push(format!("{type_name}({nal_size}b)"));
 
             i = nal_end;
             if i == data.len() {
@@ -448,7 +447,7 @@ impl Avc420Encoder {
 
         let encoder =
             Encoder::with_api_config(openh264::OpenH264API::from_source(), encoder_config)
-                .map_err(|e| EncoderError::InitFailed(format!("OpenH264 init failed: {:?}", e)))?;
+                .map_err(|e| EncoderError::InitFailed(format!("OpenH264 init failed: {e:?}")))?;
 
         Ok(Self {
             encoder,
@@ -488,7 +487,7 @@ impl Avc420Encoder {
         let bitstream = self
             .encoder
             .encode(&yuv)
-            .map_err(|e| EncoderError::EncodeFailed(format!("OpenH264 encode failed: {:?}", e)))?;
+            .map_err(|e| EncoderError::EncodeFailed(format!("OpenH264 encode failed: {e:?}")))?;
 
         let annex_b_data = bitstream.to_vec();
         if annex_b_data.is_empty() {

@@ -38,8 +38,10 @@
 //! - P1-P3: Fast/low-latency
 //! - P4: Balanced (default)
 //! - P5-P7: Quality/slow
-
-use tracing::{debug, info, warn};
+#![expect(
+    unsafe_code,
+    reason = "NVENC GPU API requires unsafe FFI and unsafe Send impl"
+)]
 
 use cudarc::driver::CudaContext;
 use nvidia_video_codec_sdk::{
@@ -52,15 +54,17 @@ use nvidia_video_codec_sdk::{
     },
     Bitstream, Buffer, EncodePictureParams, Encoder, EncoderInitParams, Session,
 };
-
-use crate::config::HardwareEncodingConfig;
-use crate::egfx::color_space::{
-    ColorRange, ColorSpaceConfig, ColourPrimaries, MatrixCoefficients, TransferCharacteristics,
-};
+use tracing::{debug, info, warn};
 
 use super::{
     error::NvencError, EncodeTimer, H264Frame, HardwareEncoder, HardwareEncoderError,
     HardwareEncoderResult, HardwareEncoderStats, QualityPreset,
+};
+use crate::{
+    config::HardwareEncodingConfig,
+    egfx::color_space::{
+        ColorRange, ColorSpaceConfig, ColourPrimaries, MatrixCoefficients, TransferCharacteristics,
+    },
 };
 
 /// Number of input/output buffers for pipelining
@@ -776,7 +780,7 @@ pub fn is_nvidia_available() -> bool {
     false
 }
 
-#[allow(dead_code)]
+#[expect(dead_code, reason = "diagnostic utility for NVENC troubleshooting")]
 fn get_nvidia_info() -> Option<(String, String)> {
     // Read driver version from /proc
     if let Ok(version) = std::fs::read_to_string("/proc/driver/nvidia/version") {
@@ -794,8 +798,9 @@ fn get_nvidia_info() -> Option<(String, String)> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::path::PathBuf;
+
+    use super::*;
 
     fn test_config() -> HardwareEncodingConfig {
         HardwareEncodingConfig {

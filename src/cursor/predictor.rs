@@ -21,9 +21,9 @@
 //! velocity_smooth = α * velocity_new + (1 - α) * velocity_old
 //! ```
 
+use std::{collections::VecDeque, time::Instant};
+
 use serde::{Deserialize, Serialize};
-use std::collections::VecDeque;
-use std::time::Instant;
 use tracing::trace;
 
 /// Configuration for cursor predictor
@@ -340,9 +340,9 @@ impl CursorPredictor {
 
 #[cfg(test)]
 mod tests {
+    use std::{thread::sleep, time::Duration};
+
     use super::*;
-    use std::thread::sleep;
-    use std::time::Duration;
 
     #[test]
     fn test_default_config() {

@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Method used for damage tracking
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum DamageMethod {
     /// Portal provides damage hints
     Portal,
@@ -15,16 +15,11 @@ pub enum DamageMethod {
     NativeScreencopy,
 
     /// Frame differencing in software
+    #[default]
     FrameDiff,
 
     /// Hybrid: use damage hints when available, fall back to diff
     Hybrid,
-}
-
-impl Default for DamageMethod {
-    fn default() -> Self {
-        Self::FrameDiff
-    }
 }
 
 /// DRM format for DMA-BUF
@@ -58,9 +53,10 @@ impl DrmFormat {
 }
 
 /// HDR transfer function
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum HdrTransfer {
     /// Standard dynamic range (sRGB)
+    #[default]
     Sdr,
 
     /// Perceptual Quantizer (HDR10)
@@ -71,12 +67,6 @@ pub enum HdrTransfer {
 
     /// Extended sRGB (scRGB)
     ScRgb,
-}
-
-impl Default for HdrTransfer {
-    fn default() -> Self {
-        Self::Sdr
-    }
 }
 
 /// Detectable Wayland feature with associated metadata
@@ -314,37 +304,33 @@ impl std::fmt::Display for WaylandFeature {
                 method,
                 compositor_hints,
             } => {
-                write!(
-                    f,
-                    "DamageTracking({:?}, hints={})",
-                    method, compositor_hints
-                )
+                write!(f, "DamageTracking({method:?}, hints={compositor_hints})")
             }
             Self::DmaBufZeroCopy { formats, .. } => {
                 write!(f, "DmaBuf({} formats)", formats.len())
             }
             Self::ExplicitSync { version } => {
-                write!(f, "ExplicitSync(v{})", version)
+                write!(f, "ExplicitSync(v{version})")
             }
             Self::FractionalScaling { max_scale } => {
-                write!(f, "FractionalScale(max={}x)", max_scale)
+                write!(f, "FractionalScale(max={max_scale}x)")
             }
             Self::MetadataCursor { .. } => write!(f, "MetadataCursor"),
             Self::MultiMonitor { max_monitors, .. } => {
-                write!(f, "MultiMonitor(max={})", max_monitors)
+                write!(f, "MultiMonitor(max={max_monitors})")
             }
             Self::WindowCapture { .. } => write!(f, "WindowCapture"),
             Self::HdrColorSpace { transfer, .. } => {
-                write!(f, "HDR({:?})", transfer)
+                write!(f, "HDR({transfer:?})")
             }
             Self::Clipboard { portal_version } => {
-                write!(f, "Clipboard(portal v{})", portal_version)
+                write!(f, "Clipboard(portal v{portal_version})")
             }
             Self::ClipboardManager {
                 manager_type,
                 version,
             } => {
-                write!(f, "ClipboardManager({} v{})", manager_type, version)
+                write!(f, "ClipboardManager({manager_type} v{version})")
             }
             Self::RemoteInput {
                 keyboard,
@@ -354,12 +340,11 @@ impl std::fmt::Display for WaylandFeature {
             } => {
                 write!(
                     f,
-                    "RemoteInput(kbd={}, ptr={}, touch={})",
-                    keyboard, pointer, touch
+                    "RemoteInput(kbd={keyboard}, ptr={pointer}, touch={touch})"
                 )
             }
             Self::PipeWireStream { buffer_type, .. } => {
-                write!(f, "PipeWire({})", buffer_type)
+                write!(f, "PipeWire({buffer_type})")
             }
             // Session persistence
             Self::SessionPersistence {
@@ -370,8 +355,7 @@ impl std::fmt::Display for WaylandFeature {
             } => {
                 write!(
                     f,
-                    "SessionPersist(portal v{}, tokens={}, mode={})",
-                    portal_version, restore_token_supported, max_persist_mode
+                    "SessionPersist(portal v{portal_version}, tokens={restore_token_supported}, mode={max_persist_mode})"
                 )
             }
             Self::MutterDirectAPI {
@@ -394,8 +378,7 @@ impl std::fmt::Display for WaylandFeature {
             } => {
                 write!(
                     f,
-                    "CredStorage({}, {}, accessible={})",
-                    method, encryption, is_accessible
+                    "CredStorage({method}, {encryption}, accessible={is_accessible})"
                 )
             }
             Self::UnattendedAccess {
@@ -404,8 +387,7 @@ impl std::fmt::Display for WaylandFeature {
             } => {
                 write!(
                     f,
-                    "Unattended(no_dialog={}, creds={})",
-                    can_avoid_dialog, can_store_credentials
+                    "Unattended(no_dialog={can_avoid_dialog}, creds={can_store_credentials})"
                 )
             }
             Self::WlrScreencopy {
@@ -415,8 +397,7 @@ impl std::fmt::Display for WaylandFeature {
             } => {
                 write!(
                     f,
-                    "wlr-screencopy(v{}, dmabuf={}, damage={})",
-                    version, dmabuf_supported, damage_supported
+                    "wlr-screencopy(v{version}, dmabuf={dmabuf_supported}, damage={damage_supported})"
                 )
             }
             Self::WlrDirectInput {
@@ -427,8 +408,7 @@ impl std::fmt::Display for WaylandFeature {
             } => {
                 write!(
                     f,
-                    "wlr-direct(kbd=v{}, ptr=v{}, mods={}, touch={})",
-                    keyboard_version, pointer_version, supports_modifiers, supports_touch
+                    "wlr-direct(kbd=v{keyboard_version}, ptr=v{pointer_version}, mods={supports_modifiers}, touch={supports_touch})"
                 )
             }
             Self::LibeiInput {
@@ -440,8 +420,7 @@ impl std::fmt::Display for WaylandFeature {
             } => {
                 write!(
                     f,
-                    "libei(portal=v{}, eis={}, kbd={}, ptr={}, touch={})",
-                    portal_version, has_connect_to_eis, keyboard, pointer, touch
+                    "libei(portal=v{portal_version}, eis={has_connect_to_eis}, kbd={keyboard}, ptr={pointer}, touch={touch})"
                 )
             }
             // Authentication
@@ -449,7 +428,7 @@ impl std::fmt::Display for WaylandFeature {
                 method,
                 supports_nla,
             } => {
-                write!(f, "Auth(method={}, nla={})", method, supports_nla)
+                write!(f, "Auth(method={method}, nla={supports_nla})")
             }
         }
     }

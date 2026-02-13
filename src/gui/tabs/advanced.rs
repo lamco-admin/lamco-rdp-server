@@ -3,13 +3,17 @@
 //! Combines damage tracking, hardware encoding, display/multimon, video pipeline,
 //! logging, advanced video, and cursor settings.
 
-use iced::widget::{button, column, container, pick_list, row, slider, space, text};
-use iced::{Alignment, Element, Length};
+use iced::{
+    widget::{button, column, container, pick_list, row, slider, text},
+    Alignment, Element, Length,
+};
 
-use crate::gui::message::{DamageTrackingPreset, Message, MultimonPreset};
-use crate::gui::state::AppState;
-use crate::gui::theme;
-use crate::gui::widgets;
+use crate::gui::{
+    message::{DamageTrackingPreset, Message, MultimonPreset},
+    state::AppState,
+    theme, widgets,
+    widgets::space,
+};
 
 const DAMAGE_METHODS: &[&str] = &["diff", "pipewire", "hybrid"];
 const HW_QUALITY_PRESETS: &[&str] = &["speed", "balanced", "quality"];

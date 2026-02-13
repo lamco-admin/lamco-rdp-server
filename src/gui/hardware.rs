@@ -2,8 +2,7 @@
 //!
 //! Detects available GPUs and hardware encoding capabilities for VA-API and NVENC.
 
-use std::path::PathBuf;
-use std::process::Command;
+use std::{path::PathBuf, process::Command};
 
 /// GPU information for hardware detection
 #[derive(Debug, Clone)]

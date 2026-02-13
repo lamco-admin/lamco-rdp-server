@@ -9,15 +9,20 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use tracing::{debug, info, trace, warn};
 
-use crate::portal::PortalManager;
-use crate::services::{ServiceId, ServiceRegistry};
-use crate::session::strategies::PortalSessionHandleImpl;
-use crate::session::strategy::{SessionHandle, SessionType, StreamInfo};
-use crate::session::{DeploymentContext, Tokens};
-
-use super::quirks::{InitQuirk, InitQuirkRegistry, SessionStrategyType};
-use super::state::{SessionCreationError, SessionCreationFailure};
-use super::{SessionFactory, SessionFactoryCapabilities};
+use super::{
+    quirks::{InitQuirk, InitQuirkRegistry, SessionStrategyType},
+    state::SessionCreationFailure,
+    SessionFactory, SessionFactoryCapabilities,
+};
+use crate::{
+    portal::PortalManager,
+    services::{ServiceId, ServiceRegistry},
+    session::{
+        strategies::PortalSessionHandleImpl,
+        strategy::{SessionHandle, SessionType, StreamInfo},
+        DeploymentContext, Tokens,
+    },
+};
 
 /// Portal-based session factory
 ///
@@ -49,7 +54,10 @@ impl PortalSessionFactory {
         info!(
             "PortalSessionFactory created with {} quirks: {:?}",
             quirks.len(),
-            quirks.iter().map(|q| q.name()).collect::<Vec<_>>()
+            quirks
+                .iter()
+                .map(super::quirks::InitQuirk::name)
+                .collect::<Vec<_>>()
         );
 
         Self {
@@ -196,7 +204,7 @@ impl PortalSessionFactory {
         let result = portal_manager
             .create_session(
                 session_id.clone(),
-                clipboard_mgr.as_ref().map(|c| c.as_ref()),
+                clipboard_mgr.as_ref().map(std::convert::AsRef::as_ref),
             )
             .await?;
 
@@ -211,7 +219,7 @@ impl PortalSessionFactory {
     }
 
     fn parse_failure(&self, error: &anyhow::Error) -> SessionCreationFailure {
-        let msg = format!("{:#}", error);
+        let msg = format!("{error:#}");
 
         if msg.contains("cannot persist") || msg.contains("InvalidArgument") {
             SessionCreationFailure::PersistenceRejected { error_message: msg }
@@ -233,7 +241,10 @@ impl SessionFactory for PortalSessionFactory {
         info!("PortalSessionFactory: Creating session");
         info!(
             "  Quirks: {:?}",
-            self.quirks.iter().map(|q| q.name()).collect::<Vec<_>>()
+            self.quirks
+                .iter()
+                .map(super::quirks::InitQuirk::name)
+                .collect::<Vec<_>>()
         );
 
         // Skip first session if GNOME (always rejects persistence)

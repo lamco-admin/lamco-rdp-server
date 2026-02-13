@@ -88,7 +88,7 @@ pub use pipeline::{AudioPipeline, FrameBuffer, PipelineConfig, PipelineState, Pi
 
 pub fn audio_available() -> bool {
     if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
-        let socket_path = format!("{}/pipewire-0", runtime_dir);
+        let socket_path = format!("{runtime_dir}/pipewire-0");
         if std::path::Path::new(&socket_path).exists() {
             return true;
         }

@@ -201,13 +201,13 @@ pub fn run_diagnostics(caps: &SystemCapabilities) -> DiagnosticReport {
         service_level: caps.rendering.service_level,
         status: match &caps.rendering.recommendation {
             crate::capabilities::RenderingRecommendation::UseGpu { reason } => {
-                format!("GPU: {}", reason)
+                format!("GPU: {reason}")
             }
             crate::capabilities::RenderingRecommendation::UseSoftware { reason } => {
-                format!("Software: {}", reason)
+                format!("Software: {reason}")
             }
             crate::capabilities::RenderingRecommendation::NoGui { reason, .. } => {
-                format!("Unavailable: {}", reason)
+                format!("Unavailable: {reason}")
             }
         },
         working: {
@@ -236,15 +236,15 @@ pub fn run_diagnostics(caps: &SystemCapabilities) -> DiagnosticReport {
     };
     subsystems.push(rendering_report);
 
-    if caps.rendering.service_level == ServiceLevel::Fallback {
-        if caps.rendering.virtualization.is_some() {
-            recommendations.push(Recommendation {
-                priority: 1,
-                subsystem: Subsystem::Rendering,
-                action: "Enable GPU passthrough in VM settings".into(),
-                benefit: "Better GUI performance".into(),
-            });
-        }
+    if caps.rendering.service_level == ServiceLevel::Fallback
+        && caps.rendering.virtualization.is_some()
+    {
+        recommendations.push(Recommendation {
+            priority: 1,
+            subsystem: Subsystem::Rendering,
+            action: "Enable GPU passthrough in VM settings".into(),
+            benefit: "Better GUI performance".into(),
+        });
     }
 
     let network_report = SubsystemReport {
@@ -308,14 +308,14 @@ impl DiagnosticReport {
             if !report.working.is_empty() {
                 output.push_str("   Working:\n");
                 for item in &report.working {
-                    output.push_str(&format!("     ✅ {}\n", item));
+                    output.push_str(&format!("     ✅ {item}\n"));
                 }
             }
 
             if !report.not_working.is_empty() {
                 output.push_str("   Not working:\n");
                 for item in &report.not_working {
-                    output.push_str(&format!("     ❌ {}\n", item));
+                    output.push_str(&format!("     ❌ {item}\n"));
                 }
             }
             output.push('\n');
@@ -341,7 +341,7 @@ impl DiagnosticReport {
                 output.push_str(&format!("  ❌ {} - {}\n", issue.issue, issue.reason));
                 output.push_str("    Suggestions:\n");
                 for sug in &issue.suggestions {
-                    output.push_str(&format!("      • {}\n", sug));
+                    output.push_str(&format!("      • {sug}\n"));
                 }
             }
             output.push('\n');

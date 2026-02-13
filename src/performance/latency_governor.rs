@@ -18,8 +18,9 @@
 //! 2. Time since first damage (prevents starvation)
 //! 3. Mode-specific thresholds
 
-use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
+
+use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -72,7 +73,7 @@ impl std::str::FromStr for LatencyMode {
             "interactive" | "low" | "fast" => Ok(Self::Interactive),
             "balanced" | "default" | "normal" => Ok(Self::Balanced),
             "quality" | "high" | "slow" => Ok(Self::Quality),
-            _ => Err(format!("Unknown latency mode: {}", s)),
+            _ => Err(format!("Unknown latency mode: {s}")),
         }
     }
 }
@@ -168,8 +169,7 @@ impl FrameAccumulator {
 
     fn elapsed_ms(&self) -> f32 {
         self.first_damage_time
-            .map(|t| t.elapsed().as_secs_f32() * 1000.0)
-            .unwrap_or(0.0)
+            .map_or(0.0, |t| t.elapsed().as_secs_f32() * 1000.0)
     }
 }
 

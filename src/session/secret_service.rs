@@ -5,9 +5,10 @@
 //!
 //! PRODUCTION-READY implementation using secret-service v5.x async API.
 
+use std::collections::HashMap;
+
 use anyhow::{anyhow, Context, Result};
 use secret_service::{EncryptionType, SecretService};
-use std::collections::HashMap;
 use tracing::{debug, info, warn};
 use zeroize::Zeroizing;
 
@@ -74,7 +75,7 @@ impl AsyncSecretServiceClient {
             attrs.insert(k.as_str(), v.as_str());
         }
 
-        let label = format!("lamco-rdp-server: {}", key);
+        let label = format!("lamco-rdp-server: {key}");
 
         let secret_bytes = Zeroizing::new(secret.as_bytes().to_vec());
 
@@ -111,7 +112,7 @@ impl AsyncSecretServiceClient {
             .context("Failed to search Secret Service")?;
 
         if items.unlocked.is_empty() && items.locked.is_empty() {
-            return Err(anyhow!("Secret not found: {}", key));
+            return Err(anyhow!("Secret not found: {key}"));
         }
 
         if !items.unlocked.is_empty() {
@@ -121,8 +122,8 @@ impl AsyncSecretServiceClient {
                 .await
                 .context("Failed to retrieve secret value")?;
 
-            let secret = String::from_utf8(secret_bytes.to_vec())
-                .context("Secret contains invalid UTF-8")?;
+            let secret =
+                String::from_utf8(secret_bytes.clone()).context("Secret contains invalid UTF-8")?;
 
             debug!("Secret retrieved successfully from unlocked item");
             return Ok(secret);
@@ -140,14 +141,14 @@ impl AsyncSecretServiceClient {
                 .await
                 .context("Failed to retrieve secret value after unlock")?;
 
-            let secret = String::from_utf8(secret_bytes.to_vec())
-                .context("Secret contains invalid UTF-8")?;
+            let secret =
+                String::from_utf8(secret_bytes.clone()).context("Secret contains invalid UTF-8")?;
 
             debug!("Secret retrieved successfully after unlock");
             return Ok(secret);
         }
 
-        Err(anyhow!("Secret not found: {}", key))
+        Err(anyhow!("Secret not found: {key}"))
     }
 
     pub async fn delete_secret(&self, key: String) -> Result<()> {

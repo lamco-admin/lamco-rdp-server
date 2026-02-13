@@ -2,13 +2,17 @@
 //!
 //! Clipboard synchronization settings, rate limiting, and MIME type filtering.
 
-use iced::widget::{button, column, row, space, text, text_input};
-use iced::{Alignment, Element, Length};
+use iced::{
+    widget::{button, column, row, text, text_input},
+    Alignment, Element, Length,
+};
 
-use crate::gui::message::{ClipboardPreset, Message};
-use crate::gui::state::AppState;
-use crate::gui::theme;
-use crate::gui::widgets;
+use crate::gui::{
+    message::{ClipboardPreset, Message},
+    state::AppState,
+    theme, widgets,
+    widgets::space,
+};
 
 pub fn view_clipboard_tab(state: &AppState) -> Element<'_, Message> {
     // Join allowed types for text area display

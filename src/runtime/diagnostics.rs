@@ -4,6 +4,7 @@
 //! for debugging and monitoring.
 
 use std::time::{Duration, Instant};
+
 use sysinfo::System;
 use tracing::info;
 
@@ -105,7 +106,7 @@ impl RuntimeStats {
         let hours = secs / 3600;
         let minutes = (secs % 3600) / 60;
         let seconds = secs % 60;
-        format!("{:02}:{:02}:{:02}", hours, minutes, seconds)
+        format!("{hours:02}:{minutes:02}:{seconds:02}")
     }
 
     /// Log current status
@@ -136,7 +137,7 @@ pub fn detect_compositor() -> Option<String> {
 
     // Try to detect from Wayland display
     if let Ok(display) = std::env::var("WAYLAND_DISPLAY") {
-        return Some(format!("Wayland ({})", display));
+        return Some(format!("Wayland ({display})"));
     }
 
     None

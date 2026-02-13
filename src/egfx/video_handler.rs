@@ -30,6 +30,7 @@
 //! which encoding to use based on client capabilities and frame characteristics.
 
 use std::time::Instant;
+
 #[cfg(feature = "h264")]
 use tokio::sync::Mutex;
 use tokio::sync::{mpsc, RwLock};
@@ -37,8 +38,10 @@ use tracing::{debug, error, info, trace, warn};
 
 #[cfg(feature = "h264")]
 use crate::egfx::encoder::{Avc420Encoder, EncoderConfig};
-use crate::egfx::encoder::{EncoderError, EncoderResult};
-use crate::pipewire::VideoFrame;
+use crate::{
+    egfx::encoder::{EncoderError, EncoderResult},
+    pipewire::VideoFrame,
+};
 
 /// Configuration for EGFX video handling
 #[derive(Debug, Clone)]
@@ -307,16 +310,16 @@ impl EgfxVideoHandler {
     }
 }
 
-pub struct EgfxVideoHandlerFactory {
+pub(super) struct EgfxVideoHandlerFactory {
     config: EgfxVideoConfig,
 }
 
 impl EgfxVideoHandlerFactory {
-    pub fn new(config: EgfxVideoConfig) -> Self {
+    pub(super) fn new(config: EgfxVideoConfig) -> Self {
         Self { config }
     }
 
-    pub fn build_handler(
+    pub(super) fn build_handler(
         &self,
         #[cfg_attr(not(feature = "h264"), allow(unused_variables))] width: u32,
         #[cfg_attr(not(feature = "h264"), allow(unused_variables))] height: u32,
@@ -347,7 +350,7 @@ impl EgfxVideoHandlerFactory {
         }
     }
 
-    pub fn is_available(&self) -> bool {
+    pub(super) fn is_available(&self) -> bool {
         cfg!(feature = "h264")
     }
 }

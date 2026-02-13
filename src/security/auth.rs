@@ -21,7 +21,10 @@ pub enum AuthMethod {
 
 impl AuthMethod {
     /// Parse authentication method from string
-    #[allow(clippy::should_implement_trait)] // We don't want FromStr trait as this never fails
+    #[expect(
+        clippy::should_implement_trait,
+        reason = "infallible parse — FromStr requires Result"
+    )]
     pub fn from_str(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "pam" => Self::Pam,
@@ -37,7 +40,6 @@ impl AuthMethod {
 /// User authenticator
 pub struct UserAuthenticator {
     method: AuthMethod,
-    #[allow(dead_code)] // Used when pam-auth feature is enabled
     service_name: String,
 }
 
@@ -79,7 +81,7 @@ impl UserAuthenticator {
         auth.get_handler().set_credentials(username, password);
 
         match auth.authenticate() {
-            Ok(_) => {
+            Ok(()) => {
                 info!("User '{}' authenticated successfully", username);
 
                 // Open session (required for complete authentication)

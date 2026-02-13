@@ -15,9 +15,9 @@
 
 mod manager;
 
-pub use manager::{ManagerInterface, RdpServerManager};
-
 use std::sync::Arc;
+
+pub use manager::{ManagerInterface, RdpServerManager};
 use tokio::sync::RwLock;
 use zbus::Connection;
 

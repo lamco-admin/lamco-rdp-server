@@ -7,14 +7,18 @@
 //!
 //! Manages monitor discovery, tracking, and lifecycle with Portal integration.
 
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
+
 use tokio::sync::RwLock;
 use tracing::{debug, info};
 
-use crate::multimon::layout::{Layout, LayoutCalculator, LayoutStrategy};
-use crate::multimon::Result;
-use crate::portal::StreamInfo;
+use crate::{
+    multimon::{
+        layout::{Layout, LayoutCalculator, LayoutStrategy},
+        Result,
+    },
+    portal::StreamInfo,
+};
 
 #[derive(Debug, Clone)]
 pub struct MonitorInfo {

@@ -6,9 +6,10 @@
 //! - libei/EIS (wlroots via Portal, Flatpak-compatible)
 //! - wlr-direct (wlroots native protocols, no Flatpak)
 
+use std::sync::Arc;
+
 use anyhow::Result;
 use async_trait::async_trait;
-use std::sync::Arc;
 use tokio::sync::RwLock;
 
 /// Portal clipboard components

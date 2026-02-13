@@ -74,11 +74,11 @@
 //! # }
 //! ```
 
+use std::{sync::Arc, time::Instant};
+
 use ironrdp_server::{
     KeyboardEvent as IronKeyboardEvent, MouseEvent as IronMouseEvent, RdpServerInputHandler,
 };
-use std::sync::Arc;
-use std::time::Instant;
 use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, error, info, trace, warn};
 
@@ -178,7 +178,7 @@ impl LamcoInputHandler {
                         }
                     }
 
-                    _ = tokio::time::sleep_until(tokio::time::Instant::from_std(last_flush + batch_interval)) => {
+                    () = tokio::time::sleep_until(tokio::time::Instant::from_std(last_flush + batch_interval)) => {
                         // Process keyboard batch
                         if !keyboard_batch.is_empty() {
                             trace!("🔄 Input batching: flushing {} keyboard events", keyboard_batch.len());
@@ -303,8 +303,7 @@ impl LamcoInputHandler {
                     other => {
                         error!("handle_key_down returned unexpected event: {:?}", other);
                         return Err(InputError::InvalidKeyEvent(format!(
-                            "Unexpected event type: {:?}",
-                            other
+                            "Unexpected event type: {other:?}"
                         )));
                     }
                 };

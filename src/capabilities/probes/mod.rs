@@ -7,6 +7,8 @@ mod network;
 mod rendering;
 mod storage;
 
+use std::{path::Path, process::Command};
+
 pub use display::{CompositorInfo, DisplayCapabilities, DisplayProbe, PortalInfo};
 pub use encoding::{
     EncoderBackend, EncoderBackendType, EncoderCapabilities, EncodingCapabilities, EncodingProbe,
@@ -18,12 +20,9 @@ pub use rendering::{
 };
 pub use storage::{StorageBackend, StorageCapabilities, StorageProbe};
 
-use std::path::Path;
-use std::process::Command;
-
 /// Environment detection (virtualization, display server, command availability)
 pub mod environment {
-    use super::*;
+    use super::{Command, Path};
 
     pub fn path_exists(path: impl AsRef<Path>) -> bool {
         path.as_ref().exists()
@@ -43,8 +42,7 @@ pub mod environment {
         if output.status.success() {
             Ok(String::from_utf8_lossy(&output.stdout).to_string())
         } else {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            Err(std::io::Error::other(
                 String::from_utf8_lossy(&output.stderr).to_string(),
             ))
         }

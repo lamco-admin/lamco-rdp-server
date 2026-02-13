@@ -10,14 +10,15 @@
 //!
 //! GNOME-specific, zero-dialog operation.
 
+use std::sync::Arc;
+
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
-use std::sync::Arc;
 use tracing::{debug, info};
 
-use crate::mutter::{MutterSessionHandle, MutterSessionManager};
-use crate::session::strategy::{
-    PipeWireAccess, SessionHandle, SessionStrategy, SessionType, StreamInfo,
+use crate::{
+    mutter::{MutterSessionHandle, MutterSessionManager},
+    session::strategy::{PipeWireAccess, SessionHandle, SessionStrategy, SessionType, StreamInfo},
 };
 
 /// Mutter session handle wrapper
@@ -65,7 +66,7 @@ impl SessionHandle for MutterSessionHandleImpl {
             .context("Failed to inject keyboard keycode via Mutter")
     }
 
-    async fn notify_pointer_motion_absolute(&self, stream_id: u32, x: f64, y: f64) -> Result<()> {
+    async fn notify_pointer_motion_absolute(&self, _stream_id: u32, x: f64, y: f64) -> Result<()> {
         let rd_session = crate::mutter::MutterRemoteDesktopSession::new(
             &self.mutter_handle.connection,
             self.mutter_handle.remote_desktop_session.clone(),
@@ -200,7 +201,7 @@ impl SessionStrategy for MutterDirectStrategy {
         Ok(Arc::new(handle))
     }
 
-    async fn cleanup(&self, session: &dyn SessionHandle) -> Result<()> {
+    async fn cleanup(&self, _session: &dyn SessionHandle) -> Result<()> {
         info!("Cleaning up Mutter session");
 
         // Mutter sessions clean up automatically when D-Bus objects are dropped

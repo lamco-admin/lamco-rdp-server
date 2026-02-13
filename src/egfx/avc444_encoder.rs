@@ -60,14 +60,15 @@ use openh264::encoder::{
 };
 #[cfg(feature = "h264")]
 use openh264::formats::YUVSlices;
-
-use super::color_convert::{bgra_to_yuv444, ColorMatrix};
-use super::color_space::{ColorRange, ColorSpaceConfig};
-use super::encoder::{EncoderConfig, EncoderError, EncoderResult};
-use super::yuv444_packing::pack_dual_views;
-
 #[cfg(feature = "h264")]
 use tracing::{debug, info, trace};
+
+use super::{
+    color_convert::{bgra_to_yuv444, ColorMatrix},
+    color_space::{ColorRange, ColorSpaceConfig},
+    encoder::{EncoderConfig, EncoderError, EncoderResult},
+    yuv444_packing::pack_dual_views,
+};
 
 /// AVC444 encoded frame (dual H.264 bitstreams)
 ///
@@ -260,7 +261,7 @@ impl Avc444Encoder {
         // Determine color space configuration:
         // 1. Use explicit config if provided
         // 2. Otherwise, auto-select based on resolution (BT.709 for HD, BT.601 for SD)
-        let color_space = config.color_space.unwrap_or_else(|| {
+        let color_space = config.color_space.unwrap_or({
             match (config.width, config.height) {
                 (Some(w), Some(h)) if w >= 1280 && h >= 720 => ColorSpaceConfig::BT709_FULL,
                 (Some(_), Some(_)) => ColorSpaceConfig::BT601_LIMITED,
@@ -281,7 +282,7 @@ impl Avc444Encoder {
         let vui = match (color_space.matrix, color_space.range) {
             (ColorMatrix::BT709, ColorRange::Full) => VuiConfig::bt709_full(),
             (ColorMatrix::BT709, ColorRange::Limited) => VuiConfig::bt709(),
-            (ColorMatrix::BT601, _) | (ColorMatrix::OpenH264, _) => VuiConfig::bt601(),
+            (ColorMatrix::BT601 | ColorMatrix::OpenH264, _) => VuiConfig::bt601(),
         };
 
         // NOTE: No explicit QP range - let OpenH264 use full range (0-51) for optimal quality
@@ -307,7 +308,7 @@ impl Avc444Encoder {
         let encoder =
             Encoder::with_api_config(openh264::OpenH264API::from_source(), encoder_config)
                 .map_err(|e| {
-                    EncoderError::InitFailed(format!("AVC444 single encoder init failed: {:?}", e))
+                    EncoderError::InitFailed(format!("AVC444 single encoder init failed: {e:?}"))
                 })?;
 
         debug!(
@@ -533,7 +534,7 @@ impl Avc444Encoder {
 
         // Step 2: YUV444 → Dual YUV420
         let (main_yuv420, aux_yuv420) = pack_dual_views(&yuv444);
-        let pack_time = start.elapsed() - convert_time;
+        let pack_time = start.elapsed().checked_sub(convert_time).unwrap();
 
         // Step 3: Encode both views using direct YUV input
         // OPTIMIZATION: Use YUVSlices for zero-copy encoding instead of
@@ -583,7 +584,7 @@ impl Avc444Encoder {
             strides,
         );
         let main_bitstream = self.encoder.encode(&main_yuv_slices).map_err(|e| {
-            EncoderError::EncodeFailed(format!("Main subframe encoding failed: {:?}", e))
+            EncoderError::EncodeFailed(format!("Main subframe encoding failed: {e:?}"))
         })?;
 
         // Convert main bitstream immediately to release borrow before should_send_aux call
@@ -645,7 +646,7 @@ impl Avc444Encoder {
                 aux_strides,
             );
             let aux_bitstream = self.encoder.encode(&aux_yuv_slices).map_err(|e| {
-                EncoderError::EncodeFailed(format!("Aux subframe encoding failed: {:?}", e))
+                EncoderError::EncodeFailed(format!("Aux subframe encoding failed: {e:?}"))
             })?;
 
             // CRITICAL FIX: Check if aux encoder skipped the frame (0 bytes)
@@ -671,11 +672,17 @@ impl Avc444Encoder {
             None
         };
 
-        let encode_time = start.elapsed() - convert_time - pack_time;
+        let encode_time = start
+            .elapsed()
+            .checked_sub(convert_time)
+            .and_then(|d| d.checked_sub(pack_time))
+            .unwrap_or_default();
 
         // Convert main bitstream (always present)
         // Aux might be None (omitted for bandwidth optimization)
-        let stream2_data_opt = aux_bitstream_opt.as_ref().map(|bs| bs.to_vec());
+        let stream2_data_opt = aux_bitstream_opt
+            .as_ref()
+            .map(openh264::encoder::EncodedBitStream::to_vec);
 
         // Handle empty main bitstream (encoder skip)
         if stream1_data.is_empty() {
@@ -684,10 +691,9 @@ impl Avc444Encoder {
         }
 
         // Check aux frame type (if encoded)
-        let aux_is_keyframe = aux_bitstream_opt
+        let _aux_is_keyframe = aux_bitstream_opt
             .as_ref()
-            .map(|bs| matches!(bs.frame_type(), FrameType::IDR | FrameType::I))
-            .unwrap_or(false);
+            .is_some_and(|bs| matches!(bs.frame_type(), FrameType::IDR | FrameType::I));
 
         // === PHASE 1: DIAGNOSTIC LOGGING ===
         // Log omission statistics for bandwidth analysis
@@ -712,7 +718,7 @@ impl Avc444Encoder {
         // Handle SPS/PPS caching for P-frames
         // With single encoder, SPS/PPS is shared across both subframes
         stream1_data = self.handle_sps_pps(stream1_data, main_is_keyframe);
-        let mut stream2_data_opt = stream2_data_opt.map(|data| {
+        let stream2_data_opt = stream2_data_opt.map(|data| {
             // Strip SPS/PPS from aux (already in main)
             Self::strip_sps_pps(data)
         });
@@ -720,7 +726,7 @@ impl Avc444Encoder {
         // Update statistics
         self.frame_count += 1;
         let total_size =
-            stream1_data.len() + stream2_data_opt.as_ref().map(|d| d.len()).unwrap_or(0);
+            stream1_data.len() + stream2_data_opt.as_ref().map_or(0, std::vec::Vec::len);
         self.bytes_encoded += total_size as u64;
 
         let total_time = start.elapsed();
@@ -735,7 +741,7 @@ impl Avc444Encoder {
 
         // Periodic logging with omission statistics
         if self.frame_count % 30 == 0 {
-            let aux_size_display = stream2_data_opt.as_ref().map(|d| d.len()).unwrap_or(0);
+            let aux_size_display = stream2_data_opt.as_ref().map_or(0, std::vec::Vec::len);
             let omission_status = if stream2_data_opt.is_some() {
                 "sent"
             } else {
@@ -917,8 +923,10 @@ impl Avc444Encoder {
     /// - 1440p: ~0.8ms
     /// - 4K: ~1.5ms
     fn hash_yuv420(frame: &super::yuv444_packing::Yuv420Frame) -> u64 {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
+        use std::{
+            collections::hash_map::DefaultHasher,
+            hash::{Hash, Hasher},
+        };
 
         let mut hasher = DefaultHasher::new();
 

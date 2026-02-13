@@ -14,8 +14,7 @@
 //!
 //! See: docs/analysis/CLIPBOARD-FLATPAK-ANALYSIS-20260128.md
 
-use crate::compositor::CompositorType;
-use crate::session::DeploymentContext;
+use crate::{compositor::CompositorType, session::DeploymentContext};
 
 /// Initialization quirks that affect session creation behavior
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

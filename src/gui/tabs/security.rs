@@ -2,13 +2,12 @@
 //!
 //! TLS certificates, authentication, NLA settings.
 
-use iced::widget::{button, column, container, pick_list, row, space, text, text_input};
-use iced::{Element, Length};
+use iced::{
+    widget::{button, column, container, pick_list, row, text, text_input},
+    Element, Length,
+};
 
-use crate::gui::message::Message;
-use crate::gui::state::AppState;
-use crate::gui::theme;
-use crate::gui::widgets;
+use crate::gui::{message::Message, state::AppState, theme, widgets, widgets::space};
 
 /// Default authentication methods (used when capabilities not yet detected)
 /// "none" is first as it's the default and always available

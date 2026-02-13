@@ -9,10 +9,9 @@
 //! This module extends the base errors from [`lamco_clipboard_core::ClipboardError`]
 //! with server-specific error recovery policy.
 
-use thiserror::Error;
-
 // Re-export base error from library
 pub use lamco_clipboard_core::ClipboardError as CoreClipboardError;
+use thiserror::Error;
 
 /// Result type for clipboard operations
 pub type Result<T> = std::result::Result<T, ClipboardError>;
@@ -133,7 +132,6 @@ fn classify_core_error(error: &CoreClipboardError) -> ErrorType {
         CoreClipboardError::LoopDetected => ErrorType::Loop,
 
         // Catch-all for any other variants
-        #[allow(unreachable_patterns)]
         _ => ErrorType::Unknown,
     }
 }

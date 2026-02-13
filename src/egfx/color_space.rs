@@ -27,8 +27,9 @@
 //! | `matrix_coefficients` | RGB↔YUV conversion matrix |
 //! | `video_full_range_flag` | Limited (0: 16-235) vs Full (1: 0-255) |
 
-use crate::egfx::color_convert::ColorMatrix;
 use serde::{Deserialize, Serialize};
+
+use crate::egfx::color_convert::ColorMatrix;
 
 /// Color range for Y'CbCr encoding
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -289,7 +290,7 @@ impl ColorSpaceConfig {
             ColorRange::Limited => "limited",
             ColorRange::Full => "full",
         };
-        format!("{} {}", matrix_name, range_name)
+        format!("{matrix_name} {range_name}")
     }
 }
 

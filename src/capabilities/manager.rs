@@ -7,19 +7,19 @@
 //!
 //! Provides centralized capability state management with singleton access pattern.
 
-use chrono::Utc;
 use std::sync::{Arc, OnceLock};
 
+use chrono::Utc;
 use thiserror::Error;
 use tokio::sync::RwLock;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
-use crate::capabilities::probes::{
-    DisplayProbe, EncodingProbe, InputProbe, NetworkProbe, RenderingProbe, StorageProbe,
-};
-use crate::capabilities::state::{
-    BlockingIssue, Degradation, MinimumViableConfig, ServiceLevel, Subsystem, SystemCapabilities,
-    UserImpact,
+use crate::capabilities::{
+    probes::{DisplayProbe, EncodingProbe, InputProbe, NetworkProbe, RenderingProbe, StorageProbe},
+    state::{
+        BlockingIssue, Degradation, MinimumViableConfig, ServiceLevel, Subsystem,
+        SystemCapabilities, UserImpact,
+    },
 };
 
 static INSTANCE: OnceLock<Arc<RwLock<Capabilities>>> = OnceLock::new();
@@ -261,7 +261,7 @@ impl Capabilities {
         display: &crate::capabilities::probes::DisplayCapabilities,
         encoding: &crate::capabilities::probes::EncodingCapabilities,
         input: &crate::capabilities::probes::InputCapabilities,
-        rendering: &crate::capabilities::probes::RenderingCapabilities,
+        _rendering: &crate::capabilities::probes::RenderingCapabilities,
     ) -> Vec<BlockingIssue> {
         let mut issues = Vec::new();
 
@@ -363,8 +363,7 @@ impl Capabilities {
             "❌"
         };
         summary.push_str(&format!(
-            "│  Server: {} GUI: {}                       │\n",
-            can_server, can_gui
+            "│  Server: {can_server} GUI: {can_gui}                       │\n"
         ));
         summary.push_str("╰───────────────────────────────────────────╯");
 
