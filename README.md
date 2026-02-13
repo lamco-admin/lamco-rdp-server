@@ -1,220 +1,147 @@
 # lamco-rdp-server
 
-**Professional RDP Server for Wayland/Linux Desktop Sharing**
+### Wayland-native RDP server for Linux desktop sharing
 
-Production-ready RDP server that provides secure remote desktop access to Linux systems running Wayland, using the XDG Desktop Portal for screen capture and input injection.
+Connect to your Linux desktop from any RDP client (Windows, macOS, Linux, iOS, Android). Built in Rust on [IronRDP](https://github.com/Devolutions/IronRDP) with native Wayland support via XDG Desktop Portal and PipeWire.
 
-## Overview
+**[Product Page](https://lamco.ai/products/lamco-rdp-server/)** &nbsp;|&nbsp; **[Download](https://lamco.ai/download/)** &nbsp;|&nbsp; **[Open Source Crates](https://lamco.ai/open-source/)**
 
-`lamco-rdp-server` is a modern, production-tested remote desktop server for Wayland-based Linux desktops. It implements the Remote Desktop Protocol (RDP) with native Wayland support via XDG Desktop Portal and PipeWire, enabling secure remote access without X11 dependencies.
+---
 
-Built in Rust with a focus on security, performance, and compatibility with modern Linux desktop environments (GNOME, KDE Plasma, etc.).
+## Highlights
 
-## Repository Purpose
+- **Wayland-first** -- XDG Desktop Portal for screen capture and input, no X11 required
+- **H.264 via EGFX** -- AVC420 and AVC444 for crystal-clear text at full chroma resolution
+- **Hardware encoding** -- VA-API (Intel/AMD) and NVENC (NVIDIA) support
+- **Adaptive streaming** -- SIMD-optimized damage detection, 5-60 FPS based on activity
+- **Clipboard sync** -- bidirectional text and image clipboard via Portal or Klipper
+- **GUI configuration** -- graphical settings tool built with iced
+- **355 tests passing** -- comprehensive test coverage across all modules
 
-This is the **development repository** containing clean source code only. For releases, packaging, and distribution, see the [lamco-admin](https://github.com/lamco-admin/lamco-admin) pipeline.
+## Downloads
 
-**What's here:**
-- Source code (`src/`)
-- Bundled crates (`bundled-crates/`)
-- Tests (`tests/`)
-- Benchmarks (`benches/`)
-- Cargo configuration
+Pre-built packages are available from [GitHub Releases](https://github.com/lamco-admin/lamco-rdp-server/releases) and [lamco.ai/download](https://lamco.ai/download/).
 
-**What's NOT here:**
-- Flatpak manifests (see lamco-admin/projects/lamco-rdp-server/packaging/)
-- OBS/RPM specs (see lamco-admin)
-- Vendor tarballs (generated during build)
-- Release artifacts
+| Format | Distro | Install |
+|--------|--------|---------|
+| **Flatpak** | Any Linux | `flatpak install --user lamco-rdp-server-*.flatpak` |
+| **RPM** | Fedora 42 | `sudo dnf install ./lamco-rdp-server-*.fc42.x86_64.rpm` |
+| **RPM** | openSUSE Tumbleweed | `sudo zypper install ./lamco-rdp-server-*.suse-tw.x86_64.rpm` |
+| **RPM** | RHEL 9 / AlmaLinux 9 | `sudo dnf install ./lamco-rdp-server-*.el9.x86_64.rpm` |
+| **DEB** | Debian 13 (Trixie) | `sudo dpkg -i lamco-rdp-server_*_amd64.deb` |
+| **Source** | Any (Rust 1.85+) | `cargo build --release --offline` |
 
-## Features
+The source tarball on the Releases page includes vendored dependencies for offline builds.
 
-### Core Features
-- **RDP Protocol Support**: Full RDP 10.x server implementation via IronRDP
-- **Wayland Native**: Portal mode using XDG Desktop Portal (no X11 required)
-- **PipeWire Screen Capture**: Zero-copy DMA-BUF support for efficient streaming
-- **H.264 Video Encoding**: EGFX channel with AVC420/AVC444 codec support
-- **Secure Authentication**: TLS 1.3 and Network Level Authentication (NLA)
-- **Input Handling**: Full keyboard and mouse support with 200+ key mappings
-- **Clipboard Sharing**: Bidirectional clipboard sync (text and images)
-- **Multi-Monitor**: Layout negotiation and display management
-- **Damage Detection**: SIMD-optimized tile-based frame differencing
+## Platform Support
 
-### Optional Features
-- **GUI Configuration**: `--features gui` adds graphical configuration interface
-- **Hardware Encoding (VA-API)**: Intel/AMD GPU acceleration (`--features vaapi`)
-- **Hardware Encoding (NVENC)**: NVIDIA GPU acceleration (`--features nvenc`)
-- **wlr-direct**: Native wlroots protocols (`--features wayland`)
-- **libei/EIS**: Portal + EIS for Flatpak wlroots support (`--features libei`)
+| Desktop Environment | Video | Input | Clipboard | Deployment |
+|---------------------|:-----:|:-----:|:---------:|------------|
+| **GNOME 45+** (Ubuntu 24.04, Fedora 42) | AVC444 | Portal+EIS | Portal | Flatpak or native |
+| **GNOME 40-44** (RHEL 9, AlmaLinux 9) | AVC444 | Portal+EIS | -- | Flatpak or native |
+| **KDE Plasma 6.3+** (openSUSE TW, Debian 13) | AVC444 | Portal+EIS | Klipper | Flatpak or native |
+| **Sway / River** (wlroots) | AVC444 | wlr-direct | wl-clipboard | Native only |
+| **Hyprland** (official portal) | AVC444 | wlr-direct | wl-clipboard | Native only |
+| **Hyprland** (hypr-remote community portal) | AVC444 | Portal | Portal | Flatpak or native |
 
-## Building
+**Notes:**
+- GNOME 40-44 (RHEL 9) lacks Portal clipboard because RemoteDesktop v1 predates the clipboard API.
+- KDE Portal clipboard has a known bug ([KDE#515465](https://bugs.kde.org/show_bug.cgi?id=515465)) on Plasma 6.3.90-6.5.5. Klipper D-Bus cooperation works on all KDE versions as a fallback.
+- wlroots compositors need native install for input and clipboard; Flatpak provides video-only on these desktops.
+- COSMIC and Niri support is blocked on upstream [Smithay libei](https://github.com/Smithay/smithay/pull/1388).
 
-### Prerequisites
+For the full compatibility matrix with portal versions, session persistence, and deployment recommendations, see the [product page](https://lamco.ai/products/lamco-rdp-server/).
 
-- Rust 1.77 or later
-- OpenSSL development libraries
-- PipeWire development libraries
-- For H.264: `nasm` (3x speedup for OpenH264)
-
-### Development Build
+## Quick Start
 
 ```bash
-# Default build (software H.264 encoding)
-cargo build
+# Generate TLS certificates
+./scripts/generate-certs.sh
 
-# With GUI
-cargo build --features gui
+# Start the server
+lamco-rdp-server -c config.toml -vv
 
-# Release build
-cargo build --release
+# Or use the GUI
+lamco-rdp-server-gui
 ```
 
-### Feature Combinations
+Then connect from any RDP client (Windows Remote Desktop, FreeRDP, Remmina, etc.) to port 3389.
+
+## Building from Source
+
+**Requirements:** Rust 1.85+, OpenSSL dev, PipeWire dev, `nasm` (optional, 3x faster OpenH264)
 
 ```bash
-# Native wlroots compositor support
-cargo build --features "wayland"
-
-# Flatpak-compatible build
-cargo build --no-default-features --features "h264,libei"
-
-# Full-featured native build
-cargo build --features "gui,wayland,libei,vaapi"
+cargo build --release                                    # software H.264
+cargo build --release --features gui                     # with configuration GUI
+cargo build --release --features "gui,vaapi"             # with VA-API hardware encoding
+cargo build --release --features "gui,wayland,libei"     # full-featured for wlroots
 ```
 
-## Running
+| Feature flag | What it enables |
+|-------------|-----------------|
+| `gui` | Graphical configuration tool (iced) |
+| `vaapi` | VA-API hardware encoding (Intel/AMD) |
+| `nvenc` | NVENC hardware encoding (NVIDIA) |
+| `wayland` | Native wlroots protocol support (wlr-direct) |
+| `libei` | Portal + EIS input for Flatpak on wlroots |
+| `pam-auth` | PAM authentication (native only, not in Flatpak) |
 
-### Prerequisites for Running
-
-1. **TLS Certificates** in `certs/` directory (or generate with `./scripts/generate-certs.sh`)
-2. **D-Bus Session**: `export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u)/bus"`
-3. **PipeWire** running for screen capture
-
-### Development Run
-
-```bash
-# Run with local configuration
-cargo run -- -c config.toml.example -vv
-
-# Run GUI
-cargo run --features gui --bin lamco-rdp-server-gui
-```
-
-## Testing
-
-```bash
-# Run all tests
-cargo test
-
-# Run with output
-cargo test -- --nocapture
-
-# Run benchmarks
-cargo bench
-```
-
-## Project Structure
+## Architecture
 
 ```
-lamco-rdp-server-dev/
-├── src/
-│   ├── lib.rs          # Library root
-│   ├── main.rs         # CLI entry point
-│   ├── gui/            # GUI application (optional)
-│   ├── server/         # Main server implementation
-│   ├── rdp/            # RDP channel management
-│   ├── egfx/           # EGFX video pipeline
-│   ├── clipboard/      # Clipboard orchestration
-│   ├── damage/         # Damage region detection
-│   ├── session/        # Session persistence
-│   └── ...
-├── bundled-crates/     # Locally bundled dependencies
-│   ├── lamco-clipboard-core/
-│   └── lamco-rdp-clipboard/
-├── tests/              # Integration tests
-├── benches/            # Performance benchmarks
-├── Cargo.toml          # Dependencies and features
-└── config.toml.example # Example configuration
+lamco-rdp-server/
+  src/
+    server/         RDP listener, TLS, session management
+    rdp/            Channel multiplexing (EGFX, clipboard, audio, input)
+    egfx/           H.264 encoding pipeline (OpenH264, VA-API, NVENC)
+    clipboard/      Clipboard orchestration (Portal, Klipper, wl-clipboard)
+    damage/         SIMD tile-based frame differencing
+    session/        XDG Desktop Portal strategies and persistence
+    gui/            Configuration GUI (iced)
+  bundled-crates/
+    lamco-clipboard-core/     Clipboard protocol core
+    lamco-rdp-clipboard/      IronRDP clipboard backend
+  packaging/        Flatpak manifest, systemd units, polkit, D-Bus config
 ```
 
-## Dependencies
+## Open Source Foundation
 
-### Published Lamco Crates (crates.io)
-- `lamco-wayland` - Wayland protocol bindings
-- `lamco-rdp` - Core RDP utilities
-- `lamco-portal` - XDG Desktop Portal integration
-- `lamco-pipewire` - PipeWire screen capture
-- `lamco-video` - Video frame processing
-- `lamco-rdp-input` - Input event translation
+lamco-rdp-server is built on a set of published Rust crates available on [crates.io](https://crates.io/search?q=lamco):
 
-### Bundled Crates
-- `lamco-clipboard-core` - Clipboard protocol core
-- `lamco-rdp-clipboard` - IronRDP clipboard backend
+| Crate | Purpose |
+|-------|---------|
+| [lamco-portal](https://crates.io/crates/lamco-portal) | XDG Desktop Portal integration |
+| [lamco-pipewire](https://crates.io/crates/lamco-pipewire) | PipeWire screen capture with DMA-BUF |
+| [lamco-video](https://crates.io/crates/lamco-video) | Video frame processing |
+| [lamco-rdp](https://crates.io/crates/lamco-rdp) | Core RDP protocol types |
+| [lamco-rdp-input](https://crates.io/crates/lamco-rdp-input) | Input event translation (200+ key mappings) |
+| [lamco-wayland](https://crates.io/crates/lamco-wayland) | Wayland protocol bindings |
 
-These are bundled because they implement traits from our IronRDP fork.
+These crates are MIT/Apache-2.0 licensed. See [lamco.ai/open-source](https://lamco.ai/open-source/) for documentation and details.
 
-### Forked Dependencies
-**IronRDP Fork:** `https://github.com/lamco-admin/IronRDP`
-- Includes MS-RDPEGFX Graphics Pipeline Extension
-- Clipboard file transfer methods
-
-## Release Process
-
-Releases are managed through the lamco-admin pipeline:
-
-1. **Development**: Work in this repo
-2. **Build**: `lamco-admin/pipelines/lamco-rdp-server/build/` creates vendor tarballs, Flatpak bundles
-3. **Test**: `lamco-admin/pipelines/lamco-rdp-server/test/` deploys to VMs for verification
-4. **Publish**: `lamco-admin/pipelines/lamco-rdp-server/publish/` creates GitHub releases, triggers OBS
-
-See lamco-admin for detailed pipeline documentation.
+The server also depends on a [fork of IronRDP](https://github.com/lamco-admin/IronRDP) that adds MS-RDPEGFX Graphics Pipeline Extension and clipboard file transfer support. Contributions to upstream IronRDP are in progress.
 
 ## Troubleshooting
 
-### First Connection Fails, Second Succeeds
+**First connection fails, second succeeds** -- Normal TLS behavior. The RDP client rejects the self-signed certificate on first attempt, then retries after accepting it. The acceptance is cached for subsequent connections.
 
-**Symptom**: The first RDP connection attempt fails with "connection reset by peer" or error 0x904, but the second connection succeeds.
+**Clipboard not working (Flatpak)** -- Portal clipboard requires RemoteDesktop v2 (GNOME 45+, KDE Plasma 6.3+). On RHEL 9 and other older distributions with RemoteDesktop v1, clipboard is unavailable in Portal mode.
 
-**Cause**: This is expected TLS certificate behavior, not a bug. The RDP client initially rejects the server's self-signed certificate as untrusted. The client then reconnects accepting the certificate, and the second connection succeeds.
+**Permission dialog on every start** -- GNOME deliberately does not persist RemoteDesktop sessions. This is a compositor policy decision, not a bug. KDE Plasma supports session tokens.
 
-**Resolution**: This is normal operation. The certificate acceptance is cached by the client for future connections.
-
-### Clipboard Not Working (Flatpak)
-
-**Symptom**: Clipboard sync doesn't work when running as Flatpak.
-
-**Cause**: Portal clipboard support requires Portal RemoteDesktop v2 or higher. Older Portal versions (v1, found on RHEL 9 and some older distributions) don't expose the clipboard API.
-
-**Resolution**:
-- Upgrade to a distribution with Portal v2+ (GNOME 44+, KDE Plasma 5.27+)
-- For RHEL 9, clipboard is not available in Portal mode
-
-### "Unknown (not in Wayland session?)" in Diagnostics
-
-**Symptom**: Server logs show "Compositor: Unknown (not in Wayland session?)"
-
-**Cause**: The `XDG_CURRENT_DESKTOP` environment variable is not set, which can happen inside Flatpak sandboxes.
-
-**Resolution**: This is usually cosmetic. The server now queries D-Bus directly for Portal version to determine clipboard support, bypassing environment variable detection.
-
-### Permission Dialog Appears Every Time
-
-**Symptom**: The screen sharing permission dialog appears on every server start.
-
-**Cause**: Some Portal backends (notably GNOME's) don't support session persistence for RemoteDesktop sessions. This is a deliberate policy, not a bug.
-
-**Resolution**: This is expected behavior on GNOME. The server automatically detects this and continues without persistence.
+**"Unknown (not in Wayland session?)"** -- Cosmetic. Flatpak sandboxes hide `XDG_CURRENT_DESKTOP`. The server queries D-Bus directly for portal capabilities regardless.
 
 ## License
 
-`lamco-rdp-server` is licensed under the **Business Source License 1.1 (BSL)**.
+[Business Source License 1.1 (BSL)](LICENSE)
 
-- Free for non-profits and small businesses (<3 employees, <$1M revenue)
-- Commercial license: $49.99/year or $99.00 perpetual per server
-- Converts to Apache License 2.0 on 2028-12-31
+- **Free** for non-profits and small businesses (<3 employees, <$1M revenue)
+- **Commercial license:** $49.99/year or $99.00 perpetual per server
+- **Converts** to Apache License 2.0 on 2028-12-31
 
-See [LICENSE](LICENSE) for complete terms.
+See [lamco.ai/products/lamco-rdp-server](https://lamco.ai/products/lamco-rdp-server/) for pricing details.
 
 ## Contributing
 
-Contributions are welcome! Please open an issue before starting significant work.
+Contributions welcome. Please open an issue before starting significant work.
