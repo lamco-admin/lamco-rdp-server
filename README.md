@@ -4,7 +4,7 @@
 
 Connect to your Linux desktop from any RDP client (Windows, macOS, Linux, iOS, Android). Built in Rust on [IronRDP](https://github.com/Devolutions/IronRDP) with native Wayland support via XDG Desktop Portal and PipeWire.
 
-**[Product Page](https://lamco.ai/products/lamco-rdp-server/)** &nbsp;|&nbsp; **[Download](https://lamco.ai/download/)** &nbsp;|&nbsp; **[Open Source Crates](https://lamco.ai/open-source/)**
+**[Product Page](https://www.lamco.ai/products/lamco-rdp-server/)** &nbsp;|&nbsp; **[Download](https://www.lamco.ai/download/)** &nbsp;|&nbsp; **[Open Source Crates](https://www.lamco.ai/open-source/)**
 
 ---
 
@@ -20,12 +20,14 @@ Connect to your Linux desktop from any RDP client (Windows, macOS, Linux, iOS, A
 
 ## Downloads
 
-Pre-built packages are available from [GitHub Releases](https://github.com/lamco-admin/lamco-rdp-server/releases) and [lamco.ai/download](https://lamco.ai/download/).
+Pre-built packages are available from [GitHub Releases](https://github.com/lamco-admin/lamco-rdp-server/releases) and [lamco.ai/download](https://www.lamco.ai/download/).
 
 | Format | Distro | Install |
 |--------|--------|---------|
+| **Snap** | Any Linux | `sudo snap install lamco-rdp-server` |
+| **AUR** | Arch Linux | `yay -S lamco-rdp-server` |
 | **Flatpak** | Any Linux | `flatpak install --user lamco-rdp-server-*.flatpak` |
-| **RPM** | Fedora 42 | `sudo dnf install ./lamco-rdp-server-*.fc42.x86_64.rpm` |
+| **RPM** | Fedora 42+ | `sudo dnf install ./lamco-rdp-server-*.fc42.x86_64.rpm` |
 | **RPM** | openSUSE Tumbleweed | `sudo zypper install ./lamco-rdp-server-*.suse-tw.x86_64.rpm` |
 | **RPM** | RHEL 9 / AlmaLinux 9 | `sudo dnf install ./lamco-rdp-server-*.el9.x86_64.rpm` |
 | **DEB** | Debian 13 (Trixie) | `sudo dpkg -i lamco-rdp-server_*_amd64.deb` |
@@ -50,7 +52,7 @@ The source tarball on the Releases page includes vendored dependencies for offli
 - wlroots compositors need native install for input and clipboard; Flatpak provides video-only on these desktops.
 - COSMIC and Niri support is blocked on upstream [Smithay libei](https://github.com/Smithay/smithay/pull/1388).
 
-For the full compatibility matrix with portal versions, session persistence, and deployment recommendations, see the [product page](https://lamco.ai/products/lamco-rdp-server/).
+For the full compatibility matrix with portal versions, session persistence, and deployment recommendations, see the [product page](https://www.lamco.ai/products/lamco-rdp-server/).
 
 ## Quick Start
 
@@ -118,7 +120,7 @@ lamco-rdp-server is built on a set of published Rust crates available on [crates
 | [lamco-rdp-input](https://crates.io/crates/lamco-rdp-input) | Input event translation (200+ key mappings) |
 | [lamco-wayland](https://crates.io/crates/lamco-wayland) | Wayland protocol bindings |
 
-These crates are MIT/Apache-2.0 licensed. See [lamco.ai/open-source](https://lamco.ai/open-source/) for documentation and details.
+These crates are MIT/Apache-2.0 licensed. See [lamco.ai/open-source](https://www.lamco.ai/open-source/) for documentation and details.
 
 The server also depends on a [fork of IronRDP](https://github.com/lamco-admin/IronRDP) that adds MS-RDPEGFX Graphics Pipeline Extension and clipboard file transfer support. Contributions to upstream IronRDP are in progress.
 
@@ -140,7 +142,7 @@ The server also depends on a [fork of IronRDP](https://github.com/lamco-admin/Ir
 - **Commercial license:** $49.99/year or $99.00 perpetual per server
 - **Converts** to Apache License 2.0 on 2028-12-31
 
-See [lamco.ai/products/lamco-rdp-server](https://lamco.ai/products/lamco-rdp-server/) for pricing details.
+See [lamco.ai/products/lamco-rdp-server](https://www.lamco.ai/products/lamco-rdp-server/) for pricing details.
 
 ## Contributing
 
