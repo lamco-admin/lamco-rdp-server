@@ -9,7 +9,7 @@ Thank you for your interest in contributing to lamco-rdp-server!
 Please note that lamco-rdp-server is licensed under the **Business Source License 1.1 (BUSL-1.1)**, which means:
 
 - The code is **source-available** but not fully open source
-- Free use is granted for non-profits and small businesses (see LICENSE for details)
+- Free use is granted for single-server deployments and non-profits (see LICENSE for details)
 - Commercial use by larger organizations requires a license
 - The code will automatically convert to **Apache License 2.0** on **December 31, 2028**
 

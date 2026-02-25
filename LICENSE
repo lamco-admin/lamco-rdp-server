@@ -5,21 +5,47 @@ Parameters
 Licensor:             Lamco Development
 
 Licensed Work:        lamco-rdp-server
-                      The Licensed Work is (c) 2025 Lamco Development
+                      The Licensed Work is (c) 2025-2026 Lamco Development
 
-Additional Use Grant: You may make production use of the Licensed Work if you meet
-                      ALL of the following conditions:
+Additional Use Grant: You may make production use of the Licensed Work,
+                      provided Your use does not include a Competitive Use
+                      (as defined below).
 
-                      1. You are a non-profit organization, OR
-                      2. You are a for-profit organization with ALL of:
-                         - 3 or fewer employees, AND
-                         - Less than $1,000,000 USD in annual revenue, AND
-                      3. Your use does not include creating a competitive
-                         or derivative RDP server product or VDI solution.
+                      In addition, You may make production use of the
+                      Licensed Work without purchasing a commercial license
+                      if any of the following apply:
 
-                      For all other production use, you must purchase a
-                      commercial license from Lamco Development.
-                      Contact: office@lamco.io
+                      1. You are a non-profit organization.
+                      2. Your use is limited to a single server instance.
+
+                      All other production use requires a commercial license
+                      from Lamco Development. Visit https://lamco.ai for
+                      pricing, or contact office@lamco.io.
+
+                      A "Competitive Use" means using the Licensed Work to
+                      create, offer, host, or distribute a Competitive
+                      Product. A "Competitive Product" is any product or
+                      service made available to third parties that provides
+                      RDP server, remote desktop, virtual desktop
+                      infrastructure (VDI), or remote access functionality
+                      where such functionality is substantially derived from
+                      the Licensed Work.
+
+                      The following are not Competitive Uses:
+
+                      (a) Using the Licensed Work to provide managed
+                          services, cloud hosting, or IT infrastructure
+                          where the Licensed Work is a tool used in
+                          delivering those services rather than the basis
+                          of a competing product.
+                      (b) Using the Licensed Work for internal purposes
+                          within Your organization, including use by Your
+                          employees, contractors, and affiliates under
+                          common control.
+                      (c) Using the Licensed Work for non-commercial
+                          education or research.
+                      (d) Redistributing the Licensed Work in unmodified
+                          source form with this License intact.
 
 Change Date:          2028-12-31
 
@@ -36,7 +62,7 @@ please visit https://lamco.ai or contact office@lamco.io.
 
 -----------------------------------------------------------------------------
 
-License text copyright © 2017 MariaDB Corporation Ab, All Rights Reserved.
+License text copyright (c) 2017 MariaDB Corporation Ab, All Rights Reserved.
 "Business Source License" is a trademark of MariaDB Corporation Ab.
 
 Terms

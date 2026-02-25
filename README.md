@@ -31,7 +31,7 @@ Pre-built packages are available from [GitHub Releases](https://github.com/lamco
 | **RPM** | openSUSE Tumbleweed | `sudo zypper install ./lamco-rdp-server-*.suse-tw.x86_64.rpm` |
 | **RPM** | RHEL 9 / AlmaLinux 9 | `sudo dnf install ./lamco-rdp-server-*.el9.x86_64.rpm` |
 | **DEB** | Debian 13 (Trixie) | `sudo dpkg -i lamco-rdp-server_*_amd64.deb` |
-| **Source** | Any (Rust 1.85+) | `cargo build --release --offline` |
+| **Source** | Any (Rust 1.88+) | `cargo build --release --offline` |
 
 The source tarball on the Releases page includes vendored dependencies for offline builds.
 
@@ -71,7 +71,7 @@ Then connect from any RDP client (Windows Remote Desktop, FreeRDP, Remmina, etc.
 
 ## Building from Source
 
-**Requirements:** Rust 1.85+, OpenSSL dev, PipeWire dev, `nasm` (optional, 3x faster OpenH264)
+**Requirements:** Rust 1.88+, OpenSSL dev, PipeWire dev, `nasm` (optional, 3x faster OpenH264)
 
 ```bash
 cargo build --release                                    # software H.264
@@ -138,11 +138,20 @@ The server also depends on a [fork of IronRDP](https://github.com/lamco-admin/Ir
 
 [Business Source License 1.1 (BSL)](LICENSE)
 
-- **Free** for non-profits and small businesses (<3 employees, <$1M revenue)
-- **Commercial license:** $49.99/year or $99.00 perpetual per server
-- **Converts** to Apache License 2.0 on 2028-12-31
+**Free** for personal use (single server instance) and non-profit organizations.
 
-See [lamco.ai/products/lamco-rdp-server](https://www.lamco.ai/products/lamco-rdp-server/) for pricing details.
+| Plan | Price | Servers |
+|------|-------|---------|
+| Community | Free | 1 |
+| Personal | $4.99/mo or $49/yr | 1 |
+| Team | $149/yr | Up to 5 |
+| Business | $499/yr | Up to 25 |
+| Corporate | $1,499/yr | Up to 100 |
+| Enterprise | Custom | Unlimited |
+
+**Converts** to Apache License 2.0 on 2028-12-31.
+
+See [lamco.ai](https://www.lamco.ai) for full pricing and licensing details.
 
 ## Contributing
 
