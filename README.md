@@ -14,7 +14,7 @@ Connect to your Linux desktop from any RDP client (Windows, macOS, Linux, iOS, A
 - **H.264 via EGFX** -- AVC420 and AVC444 for crystal-clear text at full chroma resolution
 - **Hardware encoding** -- VA-API (Intel/AMD) and NVENC (NVIDIA) support
 - **Adaptive streaming** -- SIMD-optimized damage detection, 5-60 FPS based on activity
-- **Clipboard sync** -- bidirectional text and image clipboard via Portal or Klipper
+- **Clipboard sync** -- bidirectional clipboard via Portal, Klipper, or wl-data-control (direction depends on deployment)
 - **GUI configuration** -- graphical settings tool built with iced
 - **355 tests passing** -- comprehensive test coverage across all modules
 
@@ -22,16 +22,27 @@ Connect to your Linux desktop from any RDP client (Windows, macOS, Linux, iOS, A
 
 Pre-built packages are available from [GitHub Releases](https://github.com/lamco-admin/lamco-rdp-server/releases) and [lamco.ai/download](https://www.lamco.ai/download/).
 
+### Community Edition (free to use)
+
 | Format | Distro | Install |
 |--------|--------|---------|
-| **Snap** | Any Linux | `sudo snap install lamco-rdp-server` |
-| **AUR** | Arch Linux | `yay -S lamco-rdp-server` |
 | **Flatpak** | Any Linux | `flatpak install --user lamco-rdp-server-*.flatpak` |
+| **Snap** | Any Linux | `sudo snap install lamco-rdp-server` |
+
+Community Edition runs fully sandboxed via XDG Desktop Portals. Clipboard is supported from Windows to Linux; Linux to Windows clipboard requires a native install. See [Clipboard](#clipboard-flatpak-vs-native) below.
+
+### Native / Distribution Packages
+
+| Format | Distro | Install |
+|--------|--------|---------|
+| **AUR** | Arch Linux | `yay -S lamco-rdp-server` |
 | **RPM** | Fedora 42+ | `sudo dnf install ./lamco-rdp-server-*.fc42.x86_64.rpm` |
 | **RPM** | openSUSE Tumbleweed | `sudo zypper install ./lamco-rdp-server-*.suse-tw.x86_64.rpm` |
 | **RPM** | RHEL 9 / AlmaLinux 9 | `sudo dnf install ./lamco-rdp-server-*.el9.x86_64.rpm` |
 | **DEB** | Debian 13 (Trixie) | `sudo dpkg -i lamco-rdp-server_*_amd64.deb` |
 | **Source** | Any (Rust 1.88+) | `cargo build --release --offline` |
+
+Native installs provide full bidirectional clipboard, hardware GPU encoding, and all compositor integration strategies. Free for single-server use and non-profits; commercial license required for multi-server deployments.
 
 The source tarball on the Releases page includes vendored dependencies for offline builds.
 
@@ -128,26 +139,43 @@ The server also depends on a [fork of IronRDP](https://github.com/lamco-admin/Ir
 
 **First connection fails, second succeeds** -- Normal TLS behavior. The RDP client rejects the self-signed certificate on first attempt, then retries after accepting it. The acceptance is cached for subsequent connections.
 
-**Clipboard not working (Flatpak)** -- Portal clipboard requires RemoteDesktop v2 (GNOME 45+, KDE Plasma 6.3+). On RHEL 9 and other older distributions with RemoteDesktop v1, clipboard is unavailable in Portal mode.
+**Clipboard: Linux to Windows not working (Flatpak)** -- This is expected. The Portal clipboard API does not notify sandboxed applications when local desktop apps copy content. Use a native install for full bidirectional clipboard. Windows to Linux paste works in Flatpak.
+
+**Clipboard not working at all (Flatpak)** -- Portal clipboard requires RemoteDesktop v2 (GNOME 45+, KDE Plasma 6.3+). On RHEL 9 and other older distributions with RemoteDesktop v1, clipboard is unavailable in Portal mode.
 
 **Permission dialog on every start** -- GNOME deliberately does not persist RemoteDesktop sessions. This is a compositor policy decision, not a bug. KDE Plasma supports session tokens.
 
 **"Unknown (not in Wayland session?)"** -- Cosmetic. Flatpak sandboxes hide `XDG_CURRENT_DESKTOP`. The server queries D-Bus directly for portal capabilities regardless.
 
+## Clipboard: Flatpak vs Native {#clipboard-flatpak-vs-native}
+
+| Direction | Community Edition (Flatpak/Snap) | Native Install |
+|-----------|--------------------------------|---------------|
+| Windows → Linux (text) | Supported | Supported |
+| Windows → Linux (files) | Supported | Supported |
+| Linux → Windows (text) | Not available | Supported |
+| Linux → Windows (files) | Not available | Supported |
+
+The Community Edition fully embraces the Flatpak/Snap sandbox philosophy, using only standard XDG Desktop Portal APIs. The Portal clipboard API does not provide intra-session clipboard change notifications, which prevents Linux-to-Windows clipboard transfer. This is a Portal specification boundary, not a bug. Native installs bypass this limitation through direct Wayland protocol access.
+
 ## License
 
 [Business Source License 1.1 (BSL)](LICENSE)
 
-**Free** for personal use (single server instance) and non-profit organizations.
+**Community Edition** (Flatpak, Snap): **Free to use** -- no license purchase required.
 
-| Plan | Price | Servers |
-|------|-------|---------|
-| Community | Free | 1 |
-| Personal | $4.99/mo or $49/yr | 1 |
-| Team | $149/yr | Up to 5 |
-| Business | $499/yr | Up to 25 |
-| Corporate | $1,499/yr | Up to 100 |
-| Enterprise | Custom | Unlimited |
+**Native / distribution packages:** Free for single-server use and non-profit organizations.
+
+| Plan | Price | Servers | Applies To |
+|------|-------|---------|-----------|
+| Community Edition | Free | Unlimited | Flatpak, Snap |
+| Single Instance | Free | 1 | Any |
+| Non-profit | Free | Unlimited | Any |
+| Personal | $4.99/mo or $49/yr | 1 | Native/distro |
+| Team | $149/yr | Up to 5 | Native/distro |
+| Business | $499/yr | Up to 25 | Native/distro |
+| Corporate | $1,499/yr | Up to 100 | Native/distro |
+| Enterprise | Custom | Unlimited | Native/distro |
 
 **Converts** to Apache License 2.0 on 2028-12-31.
 
