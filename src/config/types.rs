@@ -18,6 +18,12 @@ pub struct ServerConfig {
 
     /// Use XDG Desktop Portals for screen capture
     pub use_portals: bool,
+
+    /// View-only mode: video streaming without input injection or clipboard.
+    /// When true, forces ScreenCast-only strategy regardless of available capabilities.
+    /// RDP clients can see the desktop but cannot control it.
+    #[serde(default)]
+    pub view_only: bool,
 }
 
 /// Security and authentication configuration
@@ -616,6 +622,7 @@ pub struct EgfxConfig {
     /// - "bt709": BT.709 for HD content
     /// - "bt601": BT.601 for SD content
     /// - "srgb": sRGB for computer graphics
+    ///
     /// Default: "auto" (OpenH264-compatible for AVC420/AVC444 consistency)
     #[serde(default = "default_color_matrix")]
     pub color_matrix: String,
@@ -624,6 +631,7 @@ pub struct EgfxConfig {
     /// - "auto": Use matrix default (limited for broadcast compatibility)
     /// - "limited": TV range (Y: 16-235, UV: 16-240) - recommended
     /// - "full": PC range (Y: 0-255, UV: 0-255) - maximum dynamic range
+    ///
     /// Default: "auto" (limited range for compatibility)
     #[serde(default = "default_color_range")]
     pub color_range: String,
@@ -646,6 +654,7 @@ pub struct EgfxConfig {
     /// - 10-20: Responsive to color changes, higher bandwidth
     /// - 30-40: Balanced (recommended)
     /// - 60-120: Aggressive omission, static content optimized
+    ///
     /// Default: 30 frames (1 second @ 30fps)
     #[serde(default = "default_aux_interval")]
     pub avc444_max_aux_interval: u32,
@@ -655,6 +664,7 @@ pub struct EgfxConfig {
     /// - 0.0: Any change triggers update
     /// - 0.05: 5% changed (balanced, recommended)
     /// - 0.1: 10% changed (aggressive)
+    ///
     /// Default: 0.05 (5%)
     #[serde(default = "default_aux_threshold")]
     pub avc444_aux_change_threshold: f32,
@@ -1069,6 +1079,30 @@ pub struct GuiStateConfig {
     /// Close behavior: true = closing GUI stops server (default), false = GUI closes but server keeps running
     #[serde(default = "default_true")]
     pub close_stops_server: bool,
+}
+
+/// Notification configuration (Flatpak portal notifications)
+///
+/// Controls which server events trigger desktop notifications.
+/// Only effective in Flatpak mode — native installs use logs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NotificationConfig {
+    /// Notify on server errors (default: true)
+    #[serde(default = "default_true")]
+    pub on_error: bool,
+
+    /// Notify on certificate expiry warnings (default: true)
+    #[serde(default = "default_true")]
+    pub on_cert_expiry: bool,
+}
+
+impl Default for NotificationConfig {
+    fn default() -> Self {
+        Self {
+            on_error: true,
+            on_cert_expiry: true,
+        }
+    }
 }
 
 fn default_log_filter() -> String {

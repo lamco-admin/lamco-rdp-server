@@ -5,7 +5,7 @@
 use anyhow::Result;
 use clap::Parser;
 use lamco_rdp_server::{config::Config, server::LamcoRdpServer};
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 /// Command-line arguments for lamco-rdp-server
@@ -14,8 +14,8 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 #[command(version, about = "Wayland Remote Desktop Server", long_about = None)]
 pub struct Args {
     /// Configuration file path
-    #[arg(short, long, default_value = "/etc/lamco-rdp-server/config.toml")]
-    pub config: String,
+    #[arg(short, long)]
+    pub config: Option<String>,
 
     /// Listen address
     #[arg(short, long, env = "LAMCO_RDP_LISTEN_ADDR")]
@@ -97,12 +97,27 @@ pub struct Args {
 }
 
 #[tokio::main]
+#[expect(
+    clippy::expect_used,
+    reason = "top-level entry point: panics on infallible config defaults"
+)]
 async fn main() -> Result<()> {
     let args = Args::parse();
 
+    // Resolve config path: CLI flag, then Flatpak-aware default, then /etc fallback
+    let config_path = args.config.clone().unwrap_or_else(|| {
+        let dir = lamco_rdp_server::config::get_cert_config_dir();
+        let candidate = dir.join("config.toml");
+        if candidate.exists() {
+            candidate.display().to_string()
+        } else {
+            "/etc/lamco-rdp-server/config.toml".to_string()
+        }
+    });
+
     // Load configuration first (needed for logging settings)
     // Silently fall back to defaults if config doesn't exist yet
-    let config = Config::load(&args.config)
+    let config = Config::load(&config_path)
         .unwrap_or_else(|_| Config::default_config().expect("Default config should always work"));
 
     // Initialize logging (uses config.logging, CLI args override)
@@ -163,7 +178,7 @@ async fn main() -> Result<()> {
 
         {
             let mut s = state.write().await;
-            s.config_path.clone_from(&args.config);
+            s.config_path.clone_from(&config_path);
         }
 
         match lamco_rdp_server::dbus::start_service(args.system, state).await {
@@ -188,13 +203,27 @@ async fn main() -> Result<()> {
     };
 
     info!("Initializing server");
-    let server = match LamcoRdpServer::new(config).await {
+    let mut server = match LamcoRdpServer::new(config).await {
         Ok(s) => s,
         Err(e) => {
+            error!("Server initialization failed: {e:#}");
             eprintln!("{}", lamco_rdp_server::runtime::format_user_error(&e));
             return Err(e);
         }
     };
+
+    // Wire D-Bus signal relay if D-Bus service is active
+    if let Some(ref dbus_conn) = _dbus_connection {
+        if let Some(event_rx) = server.take_event_receiver() {
+            let dbus_state = lamco_rdp_server::dbus::new_shared_state();
+            let _relay_handle = lamco_rdp_server::dbus::events::start_signal_relay(
+                dbus_conn.clone(),
+                event_rx,
+                dbus_state,
+            );
+            info!("D-Bus signal relay started");
+        }
+    }
 
     info!("Starting server");
 
@@ -223,6 +252,7 @@ async fn main() -> Result<()> {
     });
 
     if let Err(e) = server.run().await {
+        error!("Server exited with error: {e:#}");
         eprintln!("{}", lamco_rdp_server::runtime::format_user_error(&e));
         return Err(e);
     }
@@ -269,6 +299,10 @@ async fn show_capabilities(format: &str) -> Result<()> {
 }
 
 /// Output capabilities in JSON format for GUI integration
+#[expect(
+    clippy::expect_used,
+    reason = "JSON serialization of known-valid struct"
+)]
 fn output_capabilities_json(
     caps: &lamco_rdp_server::compositor::CompositorCapabilities,
     deployment: &lamco_rdp_server::session::DeploymentContext,
@@ -453,7 +487,10 @@ fn output_capabilities_json(
         }
     });
 
-    println!("{}", serde_json::to_string_pretty(&json).unwrap());
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json).expect("JSON serialization of capabilities")
+    );
 }
 
 /// Output capabilities in human-readable text format
@@ -727,27 +764,40 @@ fn init_logging(
         ))
     });
 
-    // CLI --log-file overrides config.log_dir
+    // CLI --log-file overrides config.log_dir.
+    // In Flatpak, always log to the sandbox data directory even if log_dir isn't
+    // explicitly configured — the GUI shows this path as the fixed log location.
     let log_file_path: Option<String> = if let Some(cli_path) = &args.log_file {
         Some(cli_path.clone())
-    } else if let Some(log_dir) = &logging_config.log_dir {
-        if let Err(e) = fs::create_dir_all(log_dir) {
-            eprintln!(
-                "Warning: Cannot create log directory {}: {e}",
-                log_dir.display()
-            );
-            None
-        } else {
-            let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
-            Some(
-                log_dir
-                    .join(format!("lamco-rdp-server-{timestamp}.log"))
-                    .display()
-                    .to_string(),
-            )
-        }
     } else {
-        None
+        let resolved = if logging_config.log_dir.is_some() || lamco_rdp_server::config::is_flatpak()
+        {
+            Some(lamco_rdp_server::config::resolve_log_dir(
+                &logging_config.log_dir,
+            ))
+        } else {
+            None
+        };
+
+        if let Some(log_dir) = resolved {
+            if let Err(e) = fs::create_dir_all(&log_dir) {
+                eprintln!(
+                    "Warning: Cannot create log directory {}: {e}",
+                    log_dir.display()
+                );
+                None
+            } else {
+                let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
+                Some(
+                    log_dir
+                        .join(format!("lamco-rdp-server-{timestamp}.log"))
+                        .display()
+                        .to_string(),
+                )
+            }
+        } else {
+            None
+        }
     };
 
     // If log file is specified, write to both stdout and file

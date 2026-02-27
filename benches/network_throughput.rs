@@ -7,7 +7,7 @@ fn benchmark_placeholder(c: &mut Criterion) {
     c.bench_function("placeholder", |b| {
         b.iter(|| {
             // Placeholder benchmark
-        })
+        });
     });
 }
 

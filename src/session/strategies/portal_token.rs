@@ -24,11 +24,13 @@ use std::sync::{
     Arc,
 };
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use async_trait::async_trait;
+use futures_util::StreamExt;
 use tracing::{debug, error, info, warn};
 
 use crate::{
+    health::{HealthEvent, HealthReporter},
     services::ServiceRegistry,
     session::{
         factory::{PortalSessionFactory, SessionFactory},
@@ -74,6 +76,9 @@ pub struct PortalSessionHandleImpl {
     pub(crate) session_type: SessionType,
     /// Session validity flag - set to false when Portal session is destroyed
     pub(crate) session_valid: Arc<AtomicBool>,
+    /// Health reporter for session lifecycle events (set once after construction).
+    /// Arc-wrapped so spawned tasks (e.g., Closed listener) can read it lazily.
+    pub(crate) health_reporter: Arc<std::sync::OnceLock<HealthReporter>>,
 }
 
 impl PortalSessionHandleImpl {
@@ -99,7 +104,51 @@ impl PortalSessionHandleImpl {
             clipboard_manager,
             session_type: SessionType::Portal,
             session_valid: Arc::new(AtomicBool::new(true)),
+            health_reporter: Arc::new(std::sync::OnceLock::new()),
         }
+    }
+
+    /// Start listening for the Portal `Closed` D-Bus signal.
+    ///
+    /// When the compositor destroys the session (e.g., after PipeWire stream pause,
+    /// user logout, or screen lock), this sets `session_valid` to false immediately
+    /// instead of waiting for the next D-Bus call to fail.
+    ///
+    /// This is the key fix for Bug #6: the server learns about session destruction
+    /// proactively rather than discovering it through error strings.
+    pub async fn start_closed_listener(&self) {
+        let session_guard = self.session.read().await;
+        let closed_stream = match session_guard.receive_closed().await {
+            Ok(stream) => stream,
+            Err(e) => {
+                warn!("Failed to subscribe to Portal session Closed signal: {e}");
+                return;
+            }
+        };
+        drop(session_guard);
+
+        let session_valid = Arc::clone(&self.session_valid);
+        let health_reporter = Arc::clone(&self.health_reporter);
+
+        tokio::spawn(async move {
+            futures_util::pin_mut!(closed_stream);
+            // Stream yields () when the session is closed
+            closed_stream.next().await;
+
+            error!("Portal session Closed signal received — session destroyed by compositor");
+            session_valid.store(false, Ordering::Release);
+
+            // Read the reporter lazily — it may not have been set at spawn time,
+            // but will be populated by set_health_reporter() before the compositor
+            // destroys the session (which happens minutes/hours later).
+            if let Some(reporter) = health_reporter.get() {
+                reporter.report(HealthEvent::SessionClosed {
+                    reason: "Portal Closed signal received from compositor".into(),
+                });
+            }
+        });
+
+        info!("Portal session Closed listener started");
     }
 
     /// Close Portal session explicitly
@@ -145,8 +194,45 @@ impl PortalSessionHandleImpl {
     }
 }
 
+impl PortalSessionHandleImpl {
+    /// Handle an input injection error: if the session is destroyed, mark it
+    /// invalid and return a clear error. Otherwise propagate the original error.
+    fn handle_input_error<E: std::fmt::Display>(&self, error: E, operation: &str) -> anyhow::Error {
+        let msg = format!("{error}");
+        if msg.contains("non-existing session")
+            || msg.contains("non existing session")
+            || msg.contains("Invalid session")
+            || msg.contains("UnknownObject")
+        {
+            tracing::error!("Portal session destroyed during {operation}");
+            self.session_valid.store(false, Ordering::Release);
+
+            if let Some(reporter) = self.health_reporter.get() {
+                reporter.report(HealthEvent::SessionInvalidated {
+                    reason: format!("D-Bus error during {operation}: {msg}"),
+                });
+            }
+
+            anyhow!("Portal session destroyed: {msg}")
+        } else {
+            if let Some(reporter) = self.health_reporter.get() {
+                reporter.report(HealthEvent::InputFailed {
+                    reason: format!("{operation}: {msg}"),
+                    permanent: false,
+                });
+            }
+
+            anyhow!("Failed to inject {operation} via Portal: {msg}")
+        }
+    }
+}
+
 #[async_trait]
 impl SessionHandle for PortalSessionHandleImpl {
+    fn set_health_reporter(&self, reporter: HealthReporter) {
+        let _ = self.health_reporter.set(reporter);
+    }
+
     fn pipewire_access(&self) -> PipeWireAccess {
         PipeWireAccess::FileDescriptor(self.pipewire_fd)
     }
@@ -160,131 +246,71 @@ impl SessionHandle for PortalSessionHandleImpl {
     }
 
     async fn notify_keyboard_keycode(&self, keycode: i32, pressed: bool) -> Result<()> {
-        if !self.session_valid.load(Ordering::Relaxed) {
+        if !self.session_valid.load(Ordering::Acquire) {
             return Err(anyhow!(
-                "Portal session destroyed - cannot send keyboard event"
+                "Portal session invalid — cannot send keyboard event"
             ));
         }
 
         let session = self.session.read().await;
-        match self
-            .remote_desktop
+        self.remote_desktop
             .notify_keyboard_keycode(&session, keycode, pressed)
             .await
-        {
-            Ok(()) => Ok(()),
-            Err(e) => {
-                let error_msg = format!("{e}");
-                if error_msg.contains("non-existing session")
-                    || error_msg.contains("non existing session")
-                {
-                    error!("❌ Portal: Session destroyed during keyboard event");
-                    self.session_valid.store(false, Ordering::Relaxed);
-                    warn!("🔒 Portal session marked as invalid");
-                    Err(anyhow!("Portal session destroyed: {e}"))
-                } else {
-                    Err(e).context("Failed to inject keyboard keycode via Portal")
-                }
-            }
-        }
+            .map_err(|e| self.handle_input_error(e, "keyboard keycode"))
     }
 
     async fn notify_pointer_motion_absolute(&self, stream_id: u32, x: f64, y: f64) -> Result<()> {
-        if !self.session_valid.load(Ordering::Relaxed) {
+        if !self.session_valid.load(Ordering::Acquire) {
             return Err(anyhow!(
-                "Portal session destroyed - cannot send pointer motion"
+                "Portal session invalid — cannot send pointer motion"
             ));
         }
 
         let session = self.session.read().await;
-        match self
-            .remote_desktop
+        self.remote_desktop
             .notify_pointer_motion_absolute(&session, stream_id, x, y)
             .await
-        {
-            Ok(()) => Ok(()),
-            Err(e) => {
-                let error_msg = format!("{e}");
-                if error_msg.contains("non-existing session")
-                    || error_msg.contains("non existing session")
-                {
-                    error!("❌ Portal: Session destroyed during pointer motion");
-                    self.session_valid.store(false, Ordering::Relaxed);
-                    warn!("🔒 Portal session marked as invalid");
-                    Err(anyhow!("Portal session destroyed: {e}"))
-                } else {
-                    Err(e).context("Failed to inject pointer motion via Portal")
-                }
-            }
-        }
+            .map_err(|e| self.handle_input_error(e, "pointer motion"))
     }
 
     async fn notify_pointer_button(&self, button: i32, pressed: bool) -> Result<()> {
-        if !self.session_valid.load(Ordering::Relaxed) {
+        if !self.session_valid.load(Ordering::Acquire) {
             return Err(anyhow!(
-                "Portal session destroyed - cannot send pointer button"
+                "Portal session invalid — cannot send pointer button"
             ));
         }
 
         let session = self.session.read().await;
-        match self
-            .remote_desktop
+        self.remote_desktop
             .notify_pointer_button(&session, button, pressed)
             .await
-        {
-            Ok(()) => Ok(()),
-            Err(e) => {
-                let error_msg = format!("{e}");
-                if error_msg.contains("non-existing session")
-                    || error_msg.contains("non existing session")
-                {
-                    error!("❌ Portal: Session destroyed during pointer button");
-                    self.session_valid.store(false, Ordering::Relaxed);
-                    warn!("🔒 Portal session marked as invalid");
-                    Err(anyhow!("Portal session destroyed: {e}"))
-                } else {
-                    Err(e).context("Failed to inject pointer button via Portal")
-                }
-            }
-        }
+            .map_err(|e| self.handle_input_error(e, "pointer button"))
     }
 
     async fn notify_pointer_axis(&self, dx: f64, dy: f64) -> Result<()> {
-        if !self.session_valid.load(Ordering::Relaxed) {
-            return Err(anyhow!(
-                "Portal session destroyed - cannot send pointer axis"
-            ));
+        if !self.session_valid.load(Ordering::Acquire) {
+            return Err(anyhow!("Portal session invalid — cannot send pointer axis"));
         }
 
         let session = self.session.read().await;
-        match self
-            .remote_desktop
+        self.remote_desktop
             .notify_pointer_axis(&session, dx, dy)
             .await
-        {
-            Ok(()) => Ok(()),
-            Err(e) => {
-                let error_msg = format!("{e}");
-                if error_msg.contains("non-existing session")
-                    || error_msg.contains("non existing session")
-                {
-                    error!("❌ Portal: Session destroyed during pointer axis");
-                    self.session_valid.store(false, Ordering::Relaxed);
-                    warn!("🔒 Portal session marked as invalid");
-                    Err(anyhow!("Portal session destroyed: {e}"))
-                } else {
-                    Err(e).context("Failed to inject pointer axis via Portal")
-                }
-            }
-        }
+            .map_err(|e| self.handle_input_error(e, "pointer axis"))
     }
 
     fn portal_clipboard(&self) -> Option<crate::session::strategy::ClipboardComponents> {
-        // Always return Some for Portal strategy - session is always available
-        // Manager may be None on Portal v1 (no clipboard support)
+        // Don't hand out clipboard components if the session has been invalidated
+        // (e.g., compositor destroyed it after PipeWire stream pause)
+        if !self.session_valid.load(Ordering::Acquire) {
+            warn!("Portal session invalid — clipboard components unavailable");
+            return None;
+        }
+
         Some(crate::session::strategy::ClipboardComponents {
             manager: self.clipboard_manager.clone(),
             session: Arc::clone(&self.session),
+            session_valid: Arc::clone(&self.session_valid),
         })
     }
 }
@@ -353,19 +379,21 @@ impl SessionStrategy for PortalTokenStrategy {
         self.factory.create_session().await
     }
 
-    async fn cleanup(&self, _session: &dyn SessionHandle) -> Result<()> {
-        // Portal sessions clean up automatically when dropped
-        debug!("Portal session cleanup (automatic via Drop)");
+    async fn cleanup(&self, session: &dyn SessionHandle) -> Result<()> {
+        // Portal sessions do NOT auto-close on Drop (ashpd has no Drop impl).
+        // Explicit close happens in cleanup_resources() via close_portal_session().
+        // This method is a no-op — the server's cleanup_resources() handles it.
+        debug!("Portal session cleanup — deferred to cleanup_resources()");
+        let _ = session;
         Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
     #[tokio::test]
-    #[ignore] // Requires Wayland session with portal
+    #[ignore = "Requires Wayland session with portal"]
     async fn test_portal_token_strategy() {
         // Would require full environment
         // Tested via integration tests

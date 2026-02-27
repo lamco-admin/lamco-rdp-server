@@ -219,9 +219,11 @@ impl EncodingProbe {
     }
 
     fn parse_vaapi_caps(output: &str) -> EncoderCapabilities {
-        let mut caps = EncoderCapabilities::default();
-        caps.max_resolution = (4096, 4096);
-        caps.max_fps = 60;
+        let mut caps = EncoderCapabilities {
+            max_resolution: (4096, 4096),
+            max_fps: 60,
+            ..EncoderCapabilities::default()
+        };
 
         let _output_lower = output.to_lowercase();
 

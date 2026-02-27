@@ -17,11 +17,19 @@
 //! - Compositor type (GNOME, KDE, Sway, COSMIC)
 //! - Clipboard manager detected (Klipper, CopyQ, None)
 //! - Deployment mode (Flatpak vs Native)
-//! - Protocol availability (Portal, ext-data-control-v1)
+//! - Protocol availability (Portal, ext-data-control-v1, wlr-data-control-v1)
+//!
+//! # Data-Control Upgrade
+//!
+//! When `ServiceId::ClipboardDataControl` is usable (native mode, compositor
+//! exposes ext-data-control-v1 or wlr-data-control-v1), Portal modes are
+//! automatically upgraded to `WaylandDataControlMode`. This provides lower
+//! latency and direct clipboard ownership visibility. Flatpak is excluded
+//! because security-context-v1 blocks data-control access.
 
 use tracing::info;
 
-use crate::services::ServiceRegistry;
+use crate::services::{ServiceId, ServiceRegistry};
 
 /// Clipboard integration mode
 ///
@@ -74,11 +82,12 @@ pub enum ClipboardIntegrationMode {
     /// **Behavior**: Conservative, watch for ownership changes, no specific mitigation
     PortalWithDetection,
 
-    /// Wayland data-control protocol (Future: v1.4.0+)
+    /// Wayland data-control protocol (ext-data-control-v1 / wlr-data-control-v1)
     ///
-    /// **When used**: Native mode with data-control available
+    /// **When used**: Native mode with data-control protocol available
     /// **Benefits**: Full control, lower latency, immediate Klipper reclaim
-    /// **Status**: 🚧 UNIMPLEMENTED - Planned for v1.4.0+
+    /// **Providers**: `DataControlClipboardProvider` (portal-generic) or
+    ///               `WlClipboardProvider` (standalone wl-clipboard-rs)
     WaylandDataControlMode {
         /// Fall back to Portal if direct mode fails
         fallback_to_portal: bool,
@@ -123,7 +132,7 @@ impl ClipboardIntegrationMode {
         );
         info!("  Compositor: {:?}", caps.compositor);
 
-        let strategy = match manager_info {
+        let mut strategy = match manager_info {
             Some(info) => {
                 info!("  Clipboard Manager: {:?}", info.manager_type);
 
@@ -143,22 +152,25 @@ impl ClipboardIntegrationMode {
                         info!("  └─────────────────────────────────────────────────");
 
                         if in_flatpak {
-                            // Flatpak MUST use Portal
-                            Self::KlipperCooperationMode {
-                                use_prevention_tier1: config.kde_syncselection_hint,
-                                use_defensive_tier3: true,
-                                max_reannounce_per_copy: 2,
+                            // Flatpak: no D-Bus access to Klipper — use Portal only
+                            // Plasma 6.6+ fixes Portal Clipboard (KDE bug 515465)
+                            info!("  │ Flatpak: bypassing Klipper, using Portal Clipboard");
+                            Self::PortalDirect
+                        } else if registry
+                            .service_level(ServiceId::ClipboardDataControl)
+                            .is_usable()
+                        {
+                            // data-control sees Klipper reclaim immediately, avoids
+                            // Portal clipboard ownership bugs on KDE
+                            info!("  │ data-control available — using direct Wayland clipboard");
+                            info!(
+                                "  │ Benefits: immediate Klipper reclaim visibility, lower latency"
+                            );
+                            Self::WaylandDataControlMode {
+                                fallback_to_portal: true,
+                                klipper_cooperation: true,
                             }
                         } else {
-                            // Native: check if direct data-control available (future)
-                            // TODO(v1.4.0): Add ServiceId::ClipboardDataControl when implemented
-                            // if registry.has_service(ServiceId::ClipboardDataControl) {
-                            //     info!("  Note: Direct data-control available but not yet implemented");
-                            //     info!("        Using Portal with cooperation for now");
-                            // }
-
-                            // For now, use Portal even in native mode
-                            // TODO(v1.4.0): Implement DirectDataControl
                             Self::KlipperCooperationMode {
                                 use_prevention_tier1: config.kde_syncselection_hint,
                                 use_defensive_tier3: true,
@@ -198,6 +210,21 @@ impl ClipboardIntegrationMode {
                 Self::PortalDirect
             }
         };
+
+        // Upgrade Portal modes to data-control when available in native mode.
+        // data-control provides lower latency and direct ownership visibility.
+        if !in_flatpak
+            && matches!(strategy, Self::PortalDirect | Self::PortalWithDetection)
+            && registry
+                .service_level(ServiceId::ClipboardDataControl)
+                .is_usable()
+        {
+            info!("  ↑ Upgrading to data-control (available, lower latency)");
+            strategy = Self::WaylandDataControlMode {
+                fallback_to_portal: true,
+                klipper_cooperation: false,
+            };
+        }
 
         info!("  ─────────────────────────────────────────────────");
         info!("  Final Strategy: {:?}", strategy);

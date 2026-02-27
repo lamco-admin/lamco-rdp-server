@@ -187,7 +187,7 @@ impl Histogram {
 
         // Calculate percentiles
         let mut sorted = self.values.clone();
-        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
         let p50 = percentile(&sorted, 0.50);
         let p95 = percentile(&sorted, 0.95);
@@ -474,6 +474,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::float_cmp,
+        reason = "integer-valued test data has exact float representation"
+    )]
     fn test_percentile() {
         let values = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
 
@@ -483,6 +487,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::float_cmp,
+        reason = "integer-valued test data has exact float representation"
+    )]
     fn test_histogram_stats() {
         let mut hist = Histogram::new();
 

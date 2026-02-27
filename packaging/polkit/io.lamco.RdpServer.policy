@@ -12,8 +12,8 @@
     sudo cp io.lamco.RdpServer.policy /usr/share/polkit-1/actions/
 -->
 <policyconfig>
-  <vendor>Lamco</vendor>
-  <vendor_url>https://lamco.ai</vendor_url>
+  <vendor>Lamco Development</vendor>
+  <vendor_url>https://www.lamco.ai</vendor_url>
   <icon_name>io.lamco.RdpServer</icon_name>
 
   <!-- Start/stop the system RDP server -->

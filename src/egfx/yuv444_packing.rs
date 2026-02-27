@@ -159,10 +159,10 @@ impl Yuv420Frame {
     /// - Plane sizes match expected dimensions
     /// - Strides are valid
     pub fn validate_for_encoding(&self) -> Result<(), String> {
-        if self.width % 2 != 0 {
+        if !self.width.is_multiple_of(2) {
             return Err(format!("Width {} must be even for YUV420", self.width));
         }
-        if self.height % 2 != 0 {
+        if !self.height.is_multiple_of(2) {
             return Err(format!("Height {} must be even for YUV420", self.height));
         }
 
@@ -321,6 +321,7 @@ pub fn pack_auxiliary_view(yuv444: &Yuv444Frame) -> Yuv420Frame {
 /// AVC444 behave like AVC420 (reduced color quality but should be corruption-free).
 ///
 /// **Purpose**: Isolate whether corruption is caused by auxiliary view packing.
+#[expect(dead_code, reason = "diagnostic tool for AVC444 corruption debugging")]
 fn pack_auxiliary_view_minimal(yuv444: &Yuv444Frame) -> Yuv420Frame {
     let width = yuv444.width;
     let height = yuv444.height;
@@ -596,7 +597,8 @@ fn pack_auxiliary_view_spec_compliant(yuv444: &Yuv444Frame) -> Yuv420Frame {
         };
         static PREV_HASH: AtomicU64 = AtomicU64::new(0);
         static FRAME_NUM: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        static PREV_BUFFERS: OnceLock<Mutex<(Vec<u8>, Vec<u8>, Vec<u8>)>> = OnceLock::new();
+        type YuvBuffers = (Vec<u8>, Vec<u8>, Vec<u8>);
+        static PREV_BUFFERS: OnceLock<Mutex<YuvBuffers>> = OnceLock::new();
 
         let frame_num = FRAME_NUM.fetch_add(1, Ordering::Relaxed);
         let prev = PREV_HASH.swap(frame_hash, Ordering::Relaxed);
@@ -777,7 +779,7 @@ pub fn pack_dual_views(yuv444: &Yuv444Frame) -> (Yuv420Frame, Yuv420Frame) {
 /// Returns true if dimensions are even (required for 4:2:0 subsampling).
 #[inline]
 pub fn validate_dimensions(width: usize, height: usize) -> bool {
-    width % 2 == 0 && height % 2 == 0 && width > 0 && height > 0
+    width.is_multiple_of(2) && height.is_multiple_of(2) && width > 0 && height > 0
 }
 
 /// Align dimension to 16-pixel boundary (macroblock alignment)
@@ -785,6 +787,10 @@ pub fn validate_dimensions(width: usize, height: usize) -> bool {
 /// H.264 encoding works with 16×16 macroblocks, so dimensions should
 /// be aligned for optimal encoding.
 #[inline]
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "used when macroblock-aligned encoding is needed")
+)]
 pub(super) fn align_to_16(dim: usize) -> usize {
     (dim + 15) & !15
 }
@@ -872,8 +878,8 @@ mod tests {
         // Verify first macroblock structure (64x64 has 4 macroblocks vertically)
         // Row 0 of aux should be row 1 of U444
         for x in 0..64 {
-            let aux_idx = 0 * 64 + x; // Row 0
-            let u444_idx = 1 * 64 + x; // Row 1 of U444 (odd row)
+            let aux_idx = x; // Row 0
+            let u444_idx = 64 + x; // Row 1 of U444 (odd row)
             assert_eq!(
                 aux.y[aux_idx], yuv444.u[u444_idx],
                 "Auxiliary Y row 0 should be U444 row 1"
@@ -883,7 +889,7 @@ mod tests {
         // Row 8 of aux should be row 1 of V444
         for x in 0..64 {
             let aux_idx = 8 * 64 + x; // Row 8
-            let v444_idx = 1 * 64 + x; // Row 1 of V444 (odd row)
+            let v444_idx = 64 + x; // Row 1 of V444 (odd row)
             assert_eq!(
                 aux.y[aux_idx], yuv444.v[v444_idx],
                 "Auxiliary Y row 8 should be V444 row 1"
@@ -918,10 +924,10 @@ mod tests {
 
         // All pixels should be black (B=0, G=0, R=0, A=255)
         for i in 0..4 {
-            assert_eq!(bgra[i * 4], 0, "Pixel {} B should be 0", i);
-            assert_eq!(bgra[i * 4 + 1], 0, "Pixel {} G should be 0", i);
-            assert_eq!(bgra[i * 4 + 2], 0, "Pixel {} R should be 0", i);
-            assert_eq!(bgra[i * 4 + 3], 255, "Pixel {} A should be 255", i);
+            assert_eq!(bgra[i * 4], 0, "Pixel {i} B should be 0");
+            assert_eq!(bgra[i * 4 + 1], 0, "Pixel {i} G should be 0");
+            assert_eq!(bgra[i * 4 + 2], 0, "Pixel {i} R should be 0");
+            assert_eq!(bgra[i * 4 + 3], 255, "Pixel {i} A should be 255");
         }
     }
 
@@ -939,10 +945,10 @@ mod tests {
 
         // All pixels should be white (B=255, G=255, R=255, A=255)
         for i in 0..4 {
-            assert_eq!(bgra[i * 4], 255, "Pixel {} B should be 255", i);
-            assert_eq!(bgra[i * 4 + 1], 255, "Pixel {} G should be 255", i);
-            assert_eq!(bgra[i * 4 + 2], 255, "Pixel {} R should be 255", i);
-            assert_eq!(bgra[i * 4 + 3], 255, "Pixel {} A should be 255", i);
+            assert_eq!(bgra[i * 4], 255, "Pixel {i} B should be 255");
+            assert_eq!(bgra[i * 4 + 1], 255, "Pixel {i} G should be 255");
+            assert_eq!(bgra[i * 4 + 2], 255, "Pixel {i} R should be 255");
+            assert_eq!(bgra[i * 4 + 3], 255, "Pixel {i} A should be 255");
         }
     }
 
@@ -1105,7 +1111,7 @@ mod tests {
 
         // Luma should be perfectly preserved
         for i in 0..256 {
-            assert_eq!(main.y[i], i as u8, "Luma mismatch at {}", i);
+            assert_eq!(main.y[i], i as u8, "Luma mismatch at {i}");
         }
     }
 
@@ -1177,7 +1183,7 @@ mod tests {
             yuv444.v[i] = 150;
         }
 
-        let (main, aux) = pack_dual_views(&yuv444);
+        let (main, _aux) = pack_dual_views(&yuv444);
 
         // Main Y should be 128
         assert!(main.y.iter().all(|&v| v == 128));

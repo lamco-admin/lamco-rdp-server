@@ -18,7 +18,7 @@
 
 [Unit]
 Description=Lamco RDP Server (System)
-Documentation=https://github.com/anthropics/lamco-rdp-server
+Documentation=https://github.com/lamco-admin/lamco-rdp-server
 After=graphical.target
 Wants=graphical.target
 
@@ -43,20 +43,46 @@ StartLimitBurst=5
 Environment=RUST_LOG=info
 Environment=XDG_RUNTIME_DIR=/run/user/%U
 
-# Security hardening
+# Filesystem hardening
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
 PrivateDevices=yes
-ProtectKernelTunables=yes
-ProtectKernelModules=yes
-ProtectControlGroups=yes
+ProtectProc=invisible
+ProcSubset=pid
 
-# Config directory
+# State directories (systemd creates these with correct ownership)
 ConfigurationDirectory=lamco-rdp-server
 StateDirectory=lamco-rdp-server
 RuntimeDirectory=lamco-rdp-server
+
+# Kernel and device hardening
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+
+# Restrict namespace creation
+RestrictNamespaces=yes
+
+# Network: only TCP (RDP listening) and Unix (D-Bus, Wayland)
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# Drop all capabilities - RDP server doesn't need any
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+# Syscall filtering
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallArchitectures=native
 
 [Install]
 WantedBy=multi-user.target

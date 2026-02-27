@@ -243,9 +243,8 @@ impl ServerEventSender for LamcoCliprdrFactory {
         let manager = Arc::clone(&self.clipboard_manager);
         let sender_clone = sender;
         tokio::spawn(async move {
-            if let Ok(mgr) = manager.try_lock() {
-                mgr.set_server_event_sender(sender_clone).await;
-            }
+            let mgr = manager.lock().await;
+            mgr.set_server_event_sender(sender_clone).await;
         });
     }
 }

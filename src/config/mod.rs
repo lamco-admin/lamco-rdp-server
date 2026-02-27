@@ -51,6 +51,27 @@ pub fn get_cert_config_dir() -> PathBuf {
     }
 }
 
+/// Resolve log directory, enforcing sandbox containment in Flatpak.
+///
+/// In Flatpak mode the configured log_dir is ignored — logs always go to
+/// the sandbox data directory. In native mode the configured path is used,
+/// falling back to XDG_DATA_HOME/lamco-rdp-server/logs.
+pub fn resolve_log_dir(configured: &Option<PathBuf>) -> PathBuf {
+    if is_flatpak() {
+        // Sandbox: XDG_DATA_HOME is ~/.var/app/<app-id>/data in Flatpak
+        dirs::data_dir()
+            .unwrap_or_else(|| PathBuf::from("/app/data"))
+            .join("logs")
+    } else {
+        configured.clone().unwrap_or_else(|| {
+            dirs::data_dir().map_or_else(
+                || PathBuf::from("/tmp/lamco-rdp-server"),
+                |d| d.join("lamco-rdp-server/logs"),
+            )
+        })
+    }
+}
+
 pub fn default_cert_path() -> PathBuf {
     get_cert_config_dir().join("cert.pem")
 }
@@ -65,8 +86,8 @@ pub mod types;
 // Re-export types needed by other modules
 use types::{
     AdaptiveFpsConfig, AdvancedVideoConfig, ClipboardConfig, DamageTrackingConfig, DisplayConfig,
-    EgfxConfig, InputConfig, LatencyConfig, LoggingConfig, MultiMonitorConfig, PerformanceConfig,
-    SecurityConfig, ServerConfig, VideoConfig, VideoPipelineConfig,
+    EgfxConfig, InputConfig, LatencyConfig, LoggingConfig, MultiMonitorConfig, NotificationConfig,
+    PerformanceConfig, SecurityConfig, ServerConfig, VideoConfig, VideoPipelineConfig,
 };
 pub use types::{
     AudioConfig, CursorConfig, CursorPredictorConfig, GuiStateConfig, HardwareEncodingConfig,
@@ -114,6 +135,9 @@ pub struct Config {
     /// Audio configuration (RDPSND)
     #[serde(default)]
     pub audio: AudioConfig,
+    /// Notification configuration (Flatpak portal notifications)
+    #[serde(default)]
+    pub notifications: NotificationConfig,
     /// GUI state configuration (persisted between sessions)
     /// Optional - not required for server operation
     #[serde(default)]
@@ -140,6 +164,7 @@ impl Config {
                 max_connections: 10,
                 session_timeout: 0,
                 use_portals: true,
+                view_only: false,
             },
             security: SecurityConfig {
                 cert_path: default_cert_path(),
@@ -190,6 +215,7 @@ impl Config {
             advanced_video: AdvancedVideoConfig::default(),
             cursor: CursorConfig::default(),
             audio: AudioConfig::default(),
+            notifications: NotificationConfig::default(),
             gui_state: GuiStateConfig::default(),
         })
     }
@@ -355,6 +381,10 @@ impl Config {
 }
 
 impl Default for Config {
+    #[expect(
+        clippy::expect_used,
+        reason = "default config construction is infallible in practice"
+    )]
     fn default() -> Self {
         Self::default_config().expect("Failed to create default config")
     }

@@ -155,42 +155,46 @@ pub fn identify_compositor() -> CompositorType {
         };
     }
 
-    // Check for running compositor processes
-    if is_process_running("gnome-shell") {
-        return CompositorType::Gnome {
-            version: detect_gnome_version(),
-        };
-    }
+    // Check for running compositor processes.
+    // Skip in Flatpak: pgrep and host binaries aren't available in the sandbox,
+    // and the env var checks above are sufficient.
+    if !crate::config::is_flatpak() {
+        if is_process_running("gnome-shell") {
+            return CompositorType::Gnome {
+                version: detect_gnome_version(),
+            };
+        }
 
-    if is_process_running("kwin_wayland") {
-        return CompositorType::Kde {
-            version: detect_kde_version(),
-        };
-    }
+        if is_process_running("kwin_wayland") {
+            return CompositorType::Kde {
+                version: detect_kde_version(),
+            };
+        }
 
-    if is_process_running("sway") {
-        return CompositorType::Sway {
-            version: detect_sway_version(),
-        };
-    }
+        if is_process_running("sway") {
+            return CompositorType::Sway {
+                version: detect_sway_version(),
+            };
+        }
 
-    if is_process_running("Hyprland") {
-        return CompositorType::Hyprland {
-            version: detect_hyprland_version(),
-        };
-    }
+        if is_process_running("Hyprland") {
+            return CompositorType::Hyprland {
+                version: detect_hyprland_version(),
+            };
+        }
 
-    if is_process_running("weston") {
-        return CompositorType::Weston;
-    }
+        if is_process_running("weston") {
+            return CompositorType::Weston;
+        }
 
-    if is_process_running("cosmic-comp") {
-        return CompositorType::Cosmic;
-    }
+        if is_process_running("cosmic-comp") {
+            return CompositorType::Cosmic;
+        }
 
-    // Check for any wlroots-based compositor
-    if let Some(name) = detect_wlroots_compositor() {
-        return CompositorType::Wlroots { name };
+        // Check for any wlroots-based compositor
+        if let Some(name) = detect_wlroots_compositor() {
+            return CompositorType::Wlroots { name };
+        }
     }
 
     // Fall back to unknown with whatever info we have
@@ -354,11 +358,15 @@ impl OsRelease {
     }
 }
 
-/// Detect OS release information from /etc/os-release
+/// Detect OS release information from os-release files
 ///
 /// This parses the standard os-release file to identify the Linux distribution
 /// and version. This is critical for platform-specific quirks like the
 /// AVC444 blur issue on RHEL 9.
+///
+/// In Flatpak sandboxes, `/etc/os-release` returns the runtime identity
+/// (e.g. "Freedesktop SDK 25.08") rather than the host OS. We read
+/// `/run/host/os-release` first, which Flatpak exposes from the host.
 ///
 /// # Returns
 ///
@@ -367,7 +375,7 @@ impl OsRelease {
 /// # Example
 ///
 /// ```no_run
-/// use lamco_rdp_server::compositor::probing::detect_os_release;
+/// use lamco_rdp_server::compositor::detect_os_release;
 ///
 /// if let Some(os) = detect_os_release() {
 ///     if os.is_rhel9() {
@@ -376,8 +384,10 @@ impl OsRelease {
 /// }
 /// ```
 pub fn detect_os_release() -> Option<OsRelease> {
-    // Try /etc/os-release first (standard location)
-    let content = fs::read_to_string("/etc/os-release")
+    // In Flatpak, /etc/os-release is the runtime's file (e.g. Freedesktop SDK),
+    // not the host OS. /run/host/os-release gives us the actual host identity.
+    let content = fs::read_to_string("/run/host/os-release")
+        .or_else(|_| fs::read_to_string("/etc/os-release"))
         .or_else(|_| fs::read_to_string("/usr/lib/os-release"))
         .ok()?;
 
@@ -426,38 +436,36 @@ pub fn detect_os_release() -> Option<OsRelease> {
 /// a registry roundtrip. For most use cases, the Portal-based
 /// detection is sufficient.
 fn enumerate_wayland_globals() -> Result<Vec<WaylandGlobal>> {
-    // Try to get info from wlr-randr or other tools
-    // This is a simplified implementation - full Wayland enumeration
-    // would require wayland-client dependency
-
     let mut globals = Vec::new();
 
-    // Check for wlr-randr (indicates wlroots protocols)
-    if Command::new("which")
-        .arg("wlr-randr")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-    {
-        globals.push(WaylandGlobal {
-            interface: "zwlr_screencopy_manager_v1".to_string(),
-            version: 3,
-            name: 0,
-        });
-    }
+    // Check for wlroots tool presence (indicates wlroots protocols).
+    // Skip in Flatpak: host binaries aren't accessible in the sandbox.
+    if !crate::config::is_flatpak() {
+        if Command::new("which")
+            .arg("wlr-randr")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+        {
+            globals.push(WaylandGlobal {
+                interface: "zwlr_screencopy_manager_v1".to_string(),
+                version: 3,
+                name: 0,
+            });
+        }
 
-    // Check for slurp (indicates wlr protocols)
-    if Command::new("which")
-        .arg("slurp")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-    {
-        globals.push(WaylandGlobal {
-            interface: "zwlr_layer_shell_v1".to_string(),
-            version: 4,
-            name: 0,
-        });
+        if Command::new("which")
+            .arg("slurp")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+        {
+            globals.push(WaylandGlobal {
+                interface: "zwlr_layer_shell_v1".to_string(),
+                version: 4,
+                name: 0,
+            });
+        }
     }
 
     // Standard protocols we can assume exist in any Wayland compositor
@@ -489,7 +497,7 @@ mod tests {
         // This test depends on the actual environment
         // Just verify it doesn't panic and returns something
         let compositor = identify_compositor();
-        println!("Detected compositor: {:?}", compositor);
+        println!("Detected compositor: {compositor:?}");
     }
 
     #[test]

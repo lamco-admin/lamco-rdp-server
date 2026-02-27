@@ -1,6 +1,6 @@
 //! Clipboard Synchronization Module
 //!
-//! **Execution Path:** Portal Clipboard API + optional Klipper D-Bus cooperation
+//! **Execution Path:** ClipboardProvider trait + optional Klipper D-Bus cooperation
 //! **Status:** Active (v1.0.0+)
 //! **Platform:** Universal (Flatpak + Native)
 //! **Features:** Bidirectional sync, format conversion, loop prevention, Klipper cooperation
@@ -14,7 +14,6 @@
 //! This module uses the lamco crate ecosystem for clipboard primitives:
 //!
 //! - [`lamco_clipboard_core`] - Format conversion, loop detection, transfer engine
-//! - [`lamco_portal::dbus_clipboard`] - D-Bus GNOME clipboard bridge
 //! - [`lamco_rdp_clipboard`] - IronRDP clipboard backend
 //!
 //! The server adds:
@@ -38,7 +37,7 @@
 //!                                                    │
 //!                                                    └─────────────> Clipboard API
 //!
-//! Paste (Ctrl+V) <── Data Response <── Convert <── Get Data <──── DbusClipboardBridge
+//! Paste (Ctrl+V) <── Data Response <── Convert <── Get Data <──── ClipboardProvider
 //! ```
 //!
 //! # Features
@@ -48,6 +47,8 @@
 //! - **Loop Prevention**: Content hashing + state machine + echo protection
 //! - **Chunked Transfer**: Large data (>1MB) with progress tracking
 //! - **Error Recovery**: Policy-based retry and fallback strategies
+//! - **Data-Control**: Native Wayland clipboard via ext-data-control-v1 / wlr-data-control-v1
+//!   (feature: `portal-generic` or `wl-clipboard`, native-only)
 
 // Server-specific modules (policy and orchestration)
 pub mod cooperation;
@@ -58,6 +59,7 @@ pub mod klipper;
 pub mod klipper_monitor;
 pub mod manager;
 pub mod provider;
+pub mod providers;
 pub mod strategy;
 pub mod sync;
 
@@ -87,13 +89,15 @@ pub use lamco_clipboard_core::{
     TransferProgress,
     TransferState,
 };
-pub use lamco_portal::dbus_clipboard::{DbusClipboardBridge, DbusClipboardEvent};
 pub use lamco_rdp_clipboard::{
     ClipboardEvent as RdpClipboardEvent, ClipboardEventReceiver, ClipboardEventSender,
     ClipboardGeneralCapabilityFlags, RdpCliprdrBackend, RdpCliprdrFactory as LibRdpCliprdrFactory,
 };
 pub use manager::{ClipboardEvent, ClipboardOrchestrator, ClipboardOrchestratorConfig};
-pub use provider::{ClipboardProvider, ClipboardProviderEvent, PortalClipboardProvider};
+pub use provider::{ClipboardProvider, ClipboardProviderEvent};
+#[cfg(feature = "portal-generic")]
+pub use providers::DataControlClipboardProvider;
+pub use providers::{MutterClipboardProvider, PortalClipboardProvider};
 pub use strategy::ClipboardIntegrationMode;
 pub use sync::{ClipboardState, SyncDirection, SyncManager};
 

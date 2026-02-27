@@ -70,10 +70,11 @@
 //!
 //! The server can generate self-signed certificates programmatically:
 //!
-//! ```rust
+//! ```no_run
 //! use lamco_rdp_server::security::CertificateGenerator;
 //! use std::path::Path;
 //!
+//! # fn main() -> anyhow::Result<()> {
 //! // Generate and save to files
 //! CertificateGenerator::generate_and_save(
 //!     "rdp-server.example.com",  // Common Name
@@ -81,6 +82,8 @@
 //!     Path::new("/etc/lamco-rdp-server/cert.pem"),
 //!     Path::new("/etc/lamco-rdp-server/key.pem"),
 //! )?;
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! Generated certificates use:

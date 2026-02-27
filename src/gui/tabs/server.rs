@@ -37,7 +37,7 @@ pub fn view_server_tab(state: &AppState) -> Element<'_, Message> {
                 100.0,
                 Message::ServerMaxConnectionsChanged,
             ),
-            "IronRDP handles one client at a time",
+            "IronRDP processes one client at a time; queued connections not yet implemented",
         ),
         space().height(16.0),
         // Session Timeout
@@ -57,7 +57,7 @@ pub fn view_server_tab(state: &AppState) -> Element<'_, Message> {
                 .spacing(8)
                 .align_y(Alignment::Center)
             ),
-            "Needs idle tracking implementation",
+            "Idle timeout tracking not yet implemented (0 = no timeout)",
         ),
         space().height(16.0),
         // Use XDG Portals
@@ -66,6 +66,15 @@ pub fn view_server_tab(state: &AppState) -> Element<'_, Message> {
             state.config.server.use_portals,
             Message::ServerUsePortalsToggled,
             "Always enabled - required for Wayland",
+        ),
+        space().height(16.0),
+        // View-only mode
+        widgets::toggle_with_help(
+            "View-only mode",
+            state.config.server.view_only,
+            "Video streaming only. Disables input injection and clipboard. \
+             Useful for monitoring, presentations, or compositors without RemoteDesktop portal.",
+            Message::ServerViewOnlyToggled,
         ),
         space().height(20.0),
         // GUI Behavior section

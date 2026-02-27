@@ -637,7 +637,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore] // Requires Secret Service running
+    #[ignore = "Requires Secret Service running"]
     async fn test_secret_service_backend() {
         let manager = Tokens::new(CredentialStorageMethod::GnomeKeyring)
             .await
@@ -664,7 +664,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore] // Requires TPM 2.0 hardware
+    #[ignore = "Requires TPM 2.0 hardware"]
     async fn test_tpm_backend() {
         let manager = Tokens::new(CredentialStorageMethod::Tpm2)
             .await

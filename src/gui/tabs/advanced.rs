@@ -272,7 +272,7 @@ fn view_hardware_encoding_config(state: &AppState) -> Element<'_, Message> {
             "Enable Hardware Acceleration",
             hw.enabled,
             Message::HardwareEncodingEnabledToggled,
-            "Needs display handler integration",
+            "VA-API/NVENC encoder factory exists but not wired into display pipeline",
         ),
         space().height(12.0),
         // Display detected GPUs
@@ -307,28 +307,28 @@ fn view_hardware_encoding_config(state: &AppState) -> Element<'_, Message> {
             )
             .width(Length::Fixed(200.0))
             .into(),
-            "Factory exists but not integrated",
+            "Encoder factory supports device selection; awaiting pipeline integration",
         ),
         space().height(12.0),
         widgets::toggle_pending_with_note(
             "Enable DMA-BUF Zero-Copy",
             hw.enable_dmabuf_zerocopy,
             Message::HardwareEncodingDmabufZerocopyToggled,
-            "Requires VA-API integration",
+            "Requires VA-API encoder to be active for zero-copy buffer path",
         ),
         space().height(8.0),
         widgets::toggle_pending_with_note(
             "Fallback to Software",
             hw.fallback_to_software,
             Message::HardwareEncodingFallbackToSoftwareToggled,
-            "Requires hardware path first",
+            "Active once hardware encoding is integrated; falls back to OpenH264",
         ),
         space().height(8.0),
         widgets::toggle_pending_with_note(
             "Prefer NVENC over VA-API",
             hw.prefer_nvenc,
             Message::HardwareEncodingPreferNvencToggled,
-            "Factory supports this, needs integration",
+            "Encoder factory supports NVENC; awaiting pipeline integration",
         ),
         space().height(12.0),
         widgets::labeled_row_pending_with_note(
@@ -341,7 +341,7 @@ fn view_hardware_encoding_config(state: &AppState) -> Element<'_, Message> {
             )
             .width(Length::Fixed(150.0))
             .into(),
-            "Factory supports this, needs integration",
+            "Maps to VA-API/NVENC quality levels; awaiting pipeline integration",
         ),
     ]
     .padding([0, 16])
@@ -420,25 +420,25 @@ fn view_display_config(state: &AppState) -> Element<'_, Message> {
         // Display control subsection
         widgets::subsection_header("Display Control"),
         space().height(8.0),
-        widgets::toggle_pending_with_note(
+        widgets::toggle_with_help(
             "Allow Dynamic Resolution",
             display.allow_resize,
+            "Clients can request resolution changes via MS-RDPEDISP",
             Message::DisplayAllowResizeToggled,
-            "Portal handles resize negotiation",
         ),
         space().height(8.0),
         widgets::toggle_pending_with_note(
             "DPI Aware",
             display.dpi_aware,
             Message::DisplayDpiAwareToggled,
-            "Needs DPI tracking implementation",
+            "Portal doesn't expose DPI; needs per-monitor DPI detection",
         ),
         space().height(8.0),
         widgets::toggle_pending_with_note(
             "Allow Rotation",
             display.allow_rotation,
             Message::DisplayAllowRotationToggled,
-            "Needs rotation handling in pipeline",
+            "Rotation transform not yet handled in PipeWire capture pipeline",
         ),
         space().height(12.0),
         text("Allowed Resolutions (empty = all):")
@@ -634,11 +634,11 @@ fn view_advanced_video_config(state: &AppState) -> Element<'_, Message> {
 
     column![
         space().height(8.0),
-        widgets::toggle_pending_with_note(
+        widgets::toggle_with_help(
             "Enable Frame Skip",
             av.enable_frame_skip,
+            "Allow OpenH264 encoder to skip frames under load",
             Message::AdvancedVideoEnableFrameSkipToggled,
-            "OpenH264 handles frame skip internally",
         ),
         space().height(8.0),
         widgets::labeled_row_pending_with_note(
@@ -648,7 +648,7 @@ fn view_advanced_video_config(state: &AppState) -> Element<'_, Message> {
                 av.scene_change_threshold,
                 Message::AdvancedVideoSceneChangeThresholdChanged,
             ),
-            "Needs scene detection implementation",
+            "Scene detection not implemented; damage tracking handles this indirectly",
         ),
         space().height(8.0),
         widgets::labeled_row_pending_with_note(
@@ -665,14 +665,14 @@ fn view_advanced_video_config(state: &AppState) -> Element<'_, Message> {
             ]
             .align_y(Alignment::Center)
             .into(),
-            "Use periodic_idr_interval in EGFX tab instead",
+            "Use Periodic Keyframe in EGFX tab instead (controls IDR interval)",
         ),
         space().height(8.0),
         widgets::toggle_pending_with_note(
             "Enable Adaptive Quality",
             av.enable_adaptive_quality,
             Message::AdvancedVideoEnableAdaptiveQualityToggled,
-            "Needs rate control feedback loop",
+            "Needs network bandwidth feedback to dynamically adjust QP",
         ),
     ]
     .padding([0, 16])
@@ -691,7 +691,7 @@ fn view_cursor_config(state: &AppState) -> Element<'_, Message> {
                 color: Some(theme::colors::TEXT_MUTED),
             }),
         space().height(12.0),
-        widgets::labeled_row_pending_with_note(
+        widgets::labeled_row_with_help(
             "Cursor Mode:",
             150.0,
             pick_list(CURSOR_MODES.to_vec(), Some(cursor.mode.as_str()), |s| {
@@ -699,7 +699,7 @@ fn view_cursor_config(state: &AppState) -> Element<'_, Message> {
             },)
             .width(Length::Fixed(150.0))
             .into(),
-            "Only 'metadata' mode currently active",
+            "Metadata = client cursor, Painted = composited, Hidden = off, Predictive = physics",
         ),
         space().height(8.0),
         text(
@@ -713,14 +713,14 @@ fn view_cursor_config(state: &AppState) -> Element<'_, Message> {
             color: Some(theme::colors::TEXT_MUTED),
         }),
         space().height(12.0),
-        widgets::toggle_pending_with_note(
+        widgets::toggle_with_help(
             "Auto Mode Selection",
             cursor.auto_mode,
+            "Automatically switch cursor mode based on measured latency",
             Message::CursorAutoModeToggled,
-            "Needs mode switching logic",
         ),
         space().height(8.0),
-        widgets::labeled_row_pending_with_note(
+        widgets::labeled_row_with_help(
             "Predictive Threshold:",
             150.0,
             row![
@@ -734,7 +734,7 @@ fn view_cursor_config(state: &AppState) -> Element<'_, Message> {
             ]
             .align_y(Alignment::Center)
             .into(),
-            "For predictive mode",
+            "Latency above this triggers predictive cursor rendering",
         ),
         space().height(8.0),
         widgets::labeled_row_pending_with_note(
@@ -746,7 +746,7 @@ fn view_cursor_config(state: &AppState) -> Element<'_, Message> {
                 60.0,
                 Message::CursorUpdateFpsChanged,
             ),
-            "For painted mode",
+            "Painted mode cursor compositing not yet implemented",
         ),
         space().height(12.0),
         // Predictor sub-section
@@ -859,6 +859,48 @@ fn view_cursor_predictor_config(state: &AppState) -> Element<'_, Message> {
 
 /// Logging & Diagnostics configuration view
 fn view_logging_config(state: &AppState) -> Element<'_, Message> {
+    // Build the log directory widget before the column to avoid lifetime issues.
+    // Flatpak: read-only display with fixed sandbox path.
+    // Non-Flatpak: editable path input with browse/clear.
+    let log_dir_widget: Element<'_, Message> = if crate::config::is_flatpak() {
+        let dir_str = crate::config::resolve_log_dir(&None).display().to_string();
+        column![
+            container(text(dir_str).size(14))
+                .padding([8, 12])
+                .width(Length::Fill)
+                .style(theme::path_display_style),
+            space().height(4.0),
+            text("Log directory is fixed in Flatpak (sandbox policy)")
+                .size(11)
+                .style(|_theme| text::Style {
+                    color: Some(theme::colors::TEXT_MUTED),
+                }),
+        ]
+        .into()
+    } else {
+        column![
+            row![
+                widgets::path_input(
+                    &state.edit_strings.log_dir,
+                    "Leave empty for console-only",
+                    Message::LoggingLogDirChanged,
+                    Message::LoggingBrowseLogDir,
+                ),
+                space().width(8.0),
+                button(text("Clear"))
+                    .on_press(Message::LoggingClearLogDir)
+                    .padding([6, 12])
+                    .style(theme::secondary_button_style),
+            ],
+            space().height(4.0),
+            text("Leave empty for console-only logging")
+                .size(11)
+                .style(|_theme| text::Style {
+                    color: Some(theme::colors::TEXT_MUTED),
+                }),
+        ]
+        .into()
+    };
     column![
         space().height(8.0),
         // Log level
@@ -887,25 +929,7 @@ fn view_logging_config(state: &AppState) -> Element<'_, Message> {
         // Log directory (file logging)
         text("Log Directory (for file logging):").size(13),
         space().height(4.0),
-        row![
-            widgets::path_input(
-                &state.edit_strings.log_dir,
-                "Leave empty for console-only",
-                Message::LoggingLogDirChanged,
-                Message::LoggingBrowseLogDir,
-            ),
-            space().width(8.0),
-            button(text("Clear"))
-                .on_press(Message::LoggingClearLogDir)
-                .padding([6, 12])
-                .style(theme::secondary_button_style),
-        ],
-        space().height(4.0),
-        text("Leave empty for console-only logging")
-            .size(11)
-            .style(|_theme| text::Style {
-                color: Some(theme::colors::TEXT_MUTED),
-            }),
+        log_dir_widget,
         space().height(16.0),
         // Metrics toggle
         widgets::toggle_pending_with_note(

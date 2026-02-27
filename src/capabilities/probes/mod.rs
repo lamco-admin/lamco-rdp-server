@@ -106,15 +106,19 @@ pub mod environment {
             }
         }
 
-        if Path::new("/.dockerenv").exists() {
-            return VirtualizationType::Docker;
-        }
-        if let Ok(content) = std::fs::read_to_string("/proc/1/cgroup") {
-            if content.contains("docker") {
+        // In Flatpak, /.dockerenv and /proc/1/cgroup reflect the sandbox, not the host.
+        // The systemd-detect-virt and DMI checks above are sufficient for Flatpak.
+        if !crate::config::is_flatpak() {
+            if Path::new("/.dockerenv").exists() {
                 return VirtualizationType::Docker;
             }
-            if content.contains("lxc") {
-                return VirtualizationType::Lxc;
+            if let Ok(content) = std::fs::read_to_string("/proc/1/cgroup") {
+                if content.contains("docker") {
+                    return VirtualizationType::Docker;
+                }
+                if content.contains("lxc") {
+                    return VirtualizationType::Lxc;
+                }
             }
         }
 

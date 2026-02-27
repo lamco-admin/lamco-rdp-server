@@ -41,6 +41,9 @@
 
 mod encoder;
 
+#[cfg(feature = "h264")]
+mod openh264_compat;
+
 mod avc444_encoder;
 mod color_convert;
 mod color_space;
@@ -59,8 +62,7 @@ pub use color_space::{
     ColorRange, ColorSpaceConfig, ColourPrimaries, MatrixCoefficients, TransferCharacteristics,
 };
 pub use encoder::{
-    align_to_16, annex_b_to_avc, Avc420Encoder, EncoderConfig, EncoderError, EncoderResult,
-    EncoderStats, H264Frame,
+    align_to_16, Avc420Encoder, EncoderConfig, EncoderError, EncoderResult, EncoderStats, H264Frame,
 };
 pub use h264_level::{ConstraintViolation, H264Level, LevelConstraints};
 // LamcoGraphicsHandler implements ironrdp_egfx::GraphicsPipelineHandler internally

@@ -1,0 +1,629 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: lamco-rdp-server
+Upstream-Contact: Greg Lamberson <greg@lamco.io>
+Source: https://github.com/lamco-admin/lamco-rdp-server
+
+Files: *
+Copyright: 2025-2026 Lamco Development
+License: BUSL-1.1
+
+Files: bundled-crates/lamco-clipboard-core/* bundled-crates/lamco-rdp-clipboard/*
+Copyright: Lamco <contact@lamco.ai>
+License: Apache-2.0 OR MIT
+
+Files: vendor/aws-lc-rs/*
+Copyright: AWS-LibCrypto
+License: (Apache-2.0 OR ISC) AND ISC
+
+Files: vendor/aws-lc-sys/*
+Copyright: AWS-LC
+License: (Apache-2.0 OR ISC) AND ISC AND OpenSSL
+
+Files: vendor/moka/*
+Copyright: Tatsuya Kawano
+License: (Apache-2.0 OR MIT) AND Apache-2.0
+
+Files: vendor/unicode-ident/*
+Copyright: David Tolnay <dtolnay@gmail.com>
+License: (Apache-2.0 OR MIT) AND Unicode-3.0
+
+Files: vendor/adler2/*
+Copyright: Jonas Schievink <jonasschievink@gmail.com>
+           oyvindln <oyvindln@users.noreply.github.com>
+License: 0BSD OR Apache-2.0 OR MIT
+
+Files: vendor/cryptoki/* vendor/cryptoki-sys/* vendor/flagset/* vendor/sync_wrapper/*
+Copyright: Actyx AG <developer@actyx.io>
+           Contributors to the Parsec project
+           Nathaniel McCallum <nathaniel@profian.com>
+License: Apache-2.0
+
+Files: vendor/ring/*
+Copyright: Brian Smith
+License: Apache-2.0 AND ISC
+
+Files: vendor/linux-raw-sys/* vendor/rustix/* vendor/wasi/* vendor/wasip2/* vendor/wit-bindgen/*
+Copyright: Alex Crichton
+           Alex Crichton <alex@alexcrichton.com>
+           Dan Gohman <dev@sunfishcode.online>
+           Jakub Konka <kubkon@jakubkonka.com>
+           The Cranelift Project Developers
+License: Apache-2.0 OR Apache-2.0 WITH LLVM-exception OR MIT
+
+Files: vendor/fiat-crypto/*
+Copyright: Fiat Crypto library authors <jgross@mit.edu>
+License: Apache-2.0 OR BSD-1-Clause OR MIT
+
+Files: vendor/zerocopy/* vendor/zerocopy-derive/*
+Copyright: Jack Wrenn <jswrenn@amazon.com>
+           Joshua Liebow-Feeser <joshlf@google.com>
+License: Apache-2.0 OR BSD-2-Clause OR MIT
+
+Files: vendor/moxcms/* vendor/pxfm/* vendor/yuv/*
+Copyright: Radzivon Bartoshyk
+License: Apache-2.0 OR BSD-3-Clause
+
+Files: vendor/ryu/*
+Copyright: David Tolnay <dtolnay@gmail.com>
+License: Apache-2.0 OR BSL-1.0
+
+Files: vendor/hyper-rustls/* vendor/rustls/* vendor/rustls-native-certs/* vendor/rustls-pemfile/*
+Copyright: Dirkjan Ochtman
+           Joe Birr-Pixton
+License: Apache-2.0 OR ISC OR MIT
+
+Files: vendor/r-efi/*
+Copyright: David Rheinsberg
+License: Apache-2.0 OR LGPL-2.1-or-later OR MIT
+
+Files: vendor/aead-0.5.2/* vendor/aead/* vendor/aes-0.8.4/* vendor/aes/* vendor/aes-gcm-0.10.3/* vendor/aes-gcm/* vendor/aes-kw/* vendor/android_system_properties/* vendor/anstream/* vendor/anstyle/* vendor/anstyle-parse/* vendor/anstyle-query/* vendor/anstyle-wincon/* vendor/anyhow/* vendor/asn1-rs/* vendor/asn1-rs-derive/* vendor/asn1-rs-impl/* vendor/async-broadcast/* vendor/async-channel/* vendor/async-executor/* vendor/async-fs/* vendor/async-io/* vendor/async-lock/* vendor/async-process/* vendor/async-recursion/* vendor/async-signal/* vendor/async-task/* vendor/async-trait/* vendor/atomic-polyfill/* vendor/atomic-waker/* vendor/base16ct-0.3.0/* vendor/base16ct/* vendor/base64/* vendor/base64ct/* vendor/bit_field/* vendor/bitflags-1.3.2/* vendor/bitflags/* vendor/block-buffer-0.10.4/* vendor/block-buffer/* vendor/block-padding-0.3.3/* vendor/block-padding/* vendor/blocking/* vendor/bumpalo/* vendor/cbc-0.1.2/* vendor/cbc/* vendor/cfg-if/* vendor/chrono/* vendor/cipher-0.4.4/* vendor/cipher/* vendor/clap/* vendor/clap_builder/* vendor/clap_derive/* vendor/clap_lex/* vendor/colorchoice/* vendor/concurrent-queue/* vendor/const-oid/* vendor/const-oid-0.9.6/* vendor/core-foundation/* vendor/core-foundation-0.9.4/* vendor/core-foundation-sys/* vendor/cpufeatures/* vendor/crc32fast/* vendor/critical-section/* vendor/crossbeam-channel/* vendor/crossbeam-deque/* vendor/crossbeam-epoch/* vendor/crossbeam-utils/* vendor/crypto-bigint/* vendor/crypto-common-0.1.7/* vendor/crypto-common/* vendor/crypto-mac/* vendor/crypto-primes/* vendor/ctr/* vendor/ctr-0.9.2/* vendor/curve25519-dalek-derive/* vendor/der-0.7.10/* vendor/der/* vendor/der-parser/* vendor/der_derive/* vendor/deranged/* vendor/des/* vendor/digest-0.10.7/* vendor/digest/* vendor/dirs/* vendor/dirs-sys/* vendor/displaydoc/* vendor/ecdsa/* vendor/ed25519/* vendor/either/* vendor/elliptic-curve/* vendor/enum-as-inner/* vendor/enumflags2/* vendor/enumflags2_derive/* vendor/equivalent/* vendor/errno/* vendor/event-listener/* vendor/event-listener-strategy/* vendor/fastrand/* vendor/fdeflate/* vendor/ff/* vendor/flate2/* vendor/fnv/* vendor/form_urlencoded/* vendor/futures/* vendor/futures-channel/* vendor/futures-core/* vendor/futures-executor/* vendor/futures-io/* vendor/futures-lite/* vendor/futures-macro/* vendor/futures-sink/* vendor/futures-task/* vendor/futures-util/* vendor/getrandom-0.2.17/* vendor/getrandom/* vendor/ghash-0.5.1/* vendor/ghash/* vendor/gif/* vendor/group/* vendor/hash32/* vendor/hashbrown/* vendor/heapless/* vendor/heck/* vendor/hermit-abi/* vendor/hex/* vendor/hickory-proto/* vendor/hickory-resolver/* vendor/hkdf-0.12.4/* vendor/hkdf/* vendor/hmac-0.12.1/* vendor/hmac/* vendor/http/* vendor/httparse/* vendor/hybrid-array/* vendor/iana-time-zone/* vendor/iana-time-zone-haiku/* vendor/idna/* vendor/idna_adapter/* vendor/image/* vendor/indexmap/* vendor/inout-0.1.4/* vendor/inout/* vendor/ipconfig/* vendor/ipnet/* vendor/iri-string/* vendor/ironrdp/* vendor/ironrdp-acceptor/* vendor/ironrdp-ainput/* vendor/ironrdp-async/* vendor/ironrdp-cliprdr/* vendor/ironrdp-connector/* vendor/ironrdp-core/* vendor/ironrdp-displaycontrol/* vendor/ironrdp-dvc/* vendor/ironrdp-egfx/* vendor/ironrdp-error/* vendor/ironrdp-graphics/* vendor/ironrdp-pdu/* vendor/ironrdp-rdpsnd/* vendor/ironrdp-server/* vendor/ironrdp-svc/* vendor/ironrdp-tokio/* vendor/is_terminal_polyfill/* vendor/iso7816/* vendor/itoa/* vendor/js-sys/* vendor/keccak/* vendor/lamco-clipboard-core/* vendor/lamco-pipewire/* vendor/lamco-portal/* vendor/lamco-rdp/* vendor/lamco-rdp-input/* vendor/lamco-video/* vendor/lamco-wayland/* vendor/lazy_static/* vendor/libc/* vendor/libz-sys/* vendor/lock_api/* vendor/log/* vendor/md-5-0.10.6/* vendor/md-5/* vendor/md4/* vendor/memmap2-0.8.0/* vendor/memmap2/* vendor/minimal-lexical/* vendor/ntapi/* vendor/num/* vendor/num-bigint/* vendor/num-complex/* vendor/num-conv/* vendor/num-derive/* vendor/num-integer/* vendor/num-iter/* vendor/num-rational/* vendor/num-traits/* vendor/oid/* vendor/once_cell/* vendor/once_cell_polyfill/* vendor/opaque-debug/* vendor/openssl-probe/* vendor/opus2/* vendor/ordered-stream/* vendor/p256/* vendor/p384/* vendor/p521/* vendor/page_size/* vendor/pam/* vendor/pam-sys/* vendor/parking/* vendor/parking_lot/* vendor/parking_lot_core/* vendor/paste/* vendor/pbkdf2/* vendor/pem-rfc7468-0.7.0/* vendor/pem-rfc7468/* vendor/percent-encoding/* vendor/picky/* vendor/picky-asn1/* vendor/picky-asn1-der/* vendor/picky-asn1-x509/* vendor/picky-krb/* vendor/pin-project-lite/* vendor/pin-utils/* vendor/piper/* vendor/pkcs1-0.7.5/* vendor/pkcs1/* vendor/pkcs8/* vendor/png/* vendor/polling/* vendor/polyval-0.6.2/* vendor/polyval/* vendor/portable-atomic/* vendor/powerfmt/* vendor/ppv-lite86/* vendor/primefield/* vendor/primeorder/* vendor/proc-macro-crate/* vendor/proc-macro2/* vendor/qoicoubeh/* vendor/quote/* vendor/rand-0.8.5/* vendor/rand/* vendor/rand_chacha-0.3.1/* vendor/rand_chacha/* vendor/rand_core-0.6.4/* vendor/rand_core/* vendor/rayon/* vendor/rayon-core/* vendor/rc2/* vendor/rcgen/* vendor/regex-automata/* vendor/regex-syntax/* vendor/reqwest/* vendor/resolv-conf/* vendor/rfc6979/* vendor/rsa/* vendor/rusticata-macros/* vendor/rustls-pki-types/* vendor/scopeguard/* vendor/sec1/* vendor/secrecy/* vendor/secret-service/* vendor/security-framework/* vendor/security-framework-sys/* vendor/serde/* vendor/serde_bytes/* vendor/serde_core/* vendor/serde_derive/* vendor/serde_json/* vendor/serde_repr/* vendor/serde_spanned/* vendor/serde_urlencoded/* vendor/serdect/* vendor/sha1-0.10.6/* vendor/sha1/* vendor/sha2-0.10.9/* vendor/sha2/* vendor/sha3/* vendor/signal-hook-registry/* vendor/signature/* vendor/smallvec/* vendor/socket2-0.5.10/* vendor/socket2/* vendor/spki-0.7.3/* vendor/spki/* vendor/sspi/* vendor/stable_deref_trait/* vendor/static_assertions/* vendor/syn/* vendor/system-configuration/* vendor/system-configuration-sys/* vendor/tagptr/* vendor/tempfile/* vendor/thiserror-1.0.69/* vendor/thiserror/* vendor/thiserror-impl-1.0.69/* vendor/thiserror-impl/* vendor/thread_local/* vendor/time/* vendor/time-core/* vendor/time-macros/* vendor/tls_codec/* vendor/tls_codec_derive/* vendor/tokio-rustls/* vendor/toml/* vendor/toml_datetime-0.6.11/* vendor/toml_datetime/* vendor/toml_edit-0.22.27/* vendor/toml_edit/* vendor/toml_parser/* vendor/toml_write/* vendor/typenum/* vendor/unicode-segmentation/* vendor/universal-hash-0.5.1/* vendor/universal-hash/* vendor/url/* vendor/utf8_iter/* vendor/utf8parse/* vendor/uuid/* vendor/wasm-bindgen/* vendor/wasm-bindgen-futures/* vendor/wasm-bindgen-macro/* vendor/wasm-bindgen-macro-support/* vendor/wasm-bindgen-shared/* vendor/web-sys/* vendor/weezl/* vendor/widestring/* vendor/winapi/* vendor/winapi-i686-pc-windows-gnu/* vendor/winapi-x86_64-pc-windows-gnu/* vendor/windows-0.52.0/* vendor/windows/* vendor/windows-collections/* vendor/windows-core-0.52.0/* vendor/windows-core/* vendor/windows-future/* vendor/windows-implement/* vendor/windows-interface/* vendor/windows-link/* vendor/windows-numerics/* vendor/windows-registry/* vendor/windows-result/* vendor/windows-strings/* vendor/windows-sys-0.48.0/* vendor/windows-sys-0.52.0/* vendor/windows-sys-0.59.0/* vendor/windows-sys-0.60.2/* vendor/windows-sys/* vendor/windows-targets-0.48.5/* vendor/windows-targets-0.52.6/* vendor/windows-targets/* vendor/windows-threading/* vendor/windows_aarch64_gnullvm-0.48.5/* vendor/windows_aarch64_gnullvm-0.52.6/* vendor/windows_aarch64_gnullvm/* vendor/windows_aarch64_msvc-0.48.5/* vendor/windows_aarch64_msvc-0.52.6/* vendor/windows_aarch64_msvc/* vendor/windows_i686_gnu-0.48.5/* vendor/windows_i686_gnu-0.52.6/* vendor/windows_i686_gnu/* vendor/windows_i686_gnullvm-0.52.6/* vendor/windows_i686_gnullvm/* vendor/windows_i686_msvc-0.48.5/* vendor/windows_i686_msvc-0.52.6/* vendor/windows_i686_msvc/* vendor/windows_x86_64_gnu-0.48.5/* vendor/windows_x86_64_gnu-0.52.6/* vendor/windows_x86_64_gnu/* vendor/windows_x86_64_gnullvm-0.48.5/* vendor/windows_x86_64_gnullvm-0.52.6/* vendor/windows_x86_64_gnullvm/* vendor/windows_x86_64_msvc-0.48.5/* vendor/windows_x86_64_msvc-0.52.6/* vendor/windows_x86_64_msvc/* vendor/winscard/* vendor/x509-cert/* vendor/yasna/* vendor/zeroize/* vendor/zeroize_derive/* vendor/zstd-safe/* vendor/zstd-sys/*
+Copyright: Aleksey Kladov <aleksey.kladov@gmail.com>
+           Alex Crichton <alex@alexcrichton.com>
+           Alex Huszagh <ahuszagh@gmail.com>
+           Alexandr Yusuk <aleksandr.yusuk@apriorit.com>
+           Alexandre Bury <alexandre.bury@gmail.com>
+           Amanieu d'Antras <amanieu@gmail.com>
+           Andre Bogus <bogusandre@gmail.com>
+           Andrew Gallant <jamslam@gmail.com>
+           Andrew Straw <strawman@astraw.com>
+           Anthony Ramine <n.oxyde@gmail.com>
+           Ashley Mannix <ashleymannix@live.com.au>
+           Ashley Mannix<ashleymannix@live.com.au>
+           Bastian Köcher <git@kchr.de>
+           Benjamin Fry <benjaminfry@me.com>
+           Benoît CORTIER <bcortier@devolutions.net>
+           Bogdan Opanchuk
+           Brian Maher
+           Carl Lerche <me@carllerche.com>
+           Chris Wong <lambda.fairy@gmail.com>
+           Christian Duerr <contact@christianduerr.com>
+           Contributors to futures-rs
+           Dan Burkert <dan@danburkert.com>
+           Dan Gohman <dev@sunfishcode.online>
+           Daniel De Graaf <code@danieldg.net>
+           Daniel McCarney
+           Dario Nieuwenhuis
+           Dario Nieuwenhuis <dirbaio@dirbaio.net>
+           David Tolnay <dtolnay@gmail.com>
+           Devolutions Inc.
+           Devolutions Inc. <infos@devolutions.net>
+           Dirkjan Ochtman
+           Dylan DPC<dylan.dpc@gmail.com>
+           Ed Page
+           Emil Fresk <emil.fresk@gmail.com>
+           Erick Tryzelaar <erick.tryzelaar@gmail.com>
+           Flavio Castelli <flavio@castelli.me>
+           Florian Wilkens <gh@1wilkens.org>
+           Frank Denis <github@pureftpd.org>
+           François Dubois <fdubois@devolutions.net>
+           Greg Lamberson <greg@lamco.io>
+           Henri Sivonen <hsivonen@hsivonen.fi>
+           Hugues de Valon <hugues.devalon@arm.com>
+           Hunar Roop Kahlon<hunar.roop@gmail.com>
+           Ionut Mihalcea <ionut.mihalcea@arm.com>
+           Isode Ltd./Geobert Quach <geobert.quach@isode.com>
+           Ivan Smirnov <rust@ivan.smirnov.ie>
+           Jack Grigg <jack@z.cash>
+           Jack Grigg <thestr4d@gmail.com>
+           Jacob Pratt <jacob@jhpratt.dev>
+           Jacob Pratt <open-source@jhpratt.dev>
+           Jane Lusby <jlusby@yaah.dev>
+           Jason White <me@jasonwhite.io>
+           Joe Ellis <joe.ellis@arm.com>
+           Joe Wilm <joe@jwilm.com>
+           John Nunley <dev@notgull.net>
+           Jonas Platte
+           Jonathan Trepanier <jtrepanier@devolutions.net>
+           Jorge Aparicio <jorge@japaric.io>
+           Josef Brandl <mail@josefbrandl.de>
+           Josh Stone
+           Josh Triplett <josh@joshtriplett.org>
+           Kathryn Long
+           Kenny Kerr
+           Kim Altintop <kim@monadic.xyz>
+           KizzyCode Software Labs./Keziah Biermann <development@kizzycode.de>
+           KokaKiwi <kokakiwi@kokakiwi.net>
+           Kornel <kornel@geekhood.net>
+           Kris Price <kris@krisprice.nz>
+           Lamco <contact@lamco.ai>
+           Liran Ringel <liranringel@gmail.com>
+           MSxDOS <melcodos@gmail.com>
+           Maja Kądziołka <maya@compilercrim.es>
+           Manish Goregaokar <manishsmail@gmail.com>
+           Marc-André Lureau <marcandre.lureau@redhat.com>
+           Marshall Pierce <marshall@mpierce.org>
+           Marvin Löbel <loebel.marvin@gmail.com>
+           Masaki Hara <ackie.h.gmai@gmail.com>
+           Michael Rosenberg
+           Michal 'vorner' Vaner <vorner@vorner.cz>
+           Microsoft
+           Mullvad VPN
+           Nick Fitzgerald <fitzgen@gmail.com>
+           Nicolas Silva <nical@fastmail.com>
+           Nikolai Vazquez
+           Oliver Giersch
+           Paho Lurie-Gregg <paho@paholg.com>
+           Per Lindgren <per.lindgren@ltu.se>
+           Peter Atashian <retep998@gmail.com>
+           Philip Woods <elzairthesorcerer@gmail.com>
+           Philipp Oppermann <dev@phil-opp.com>
+           Pierre Chifflier <chifflier@wzdftpd.net>
+           René Kijewski <crates.io@k6i.de>
+           René Kijewski <rene.kijewski@fu-berlin.de>
+           Richard Markiewicz <rmarkiewicz@devolutions.net>
+           Robert Grosse <n210241048576@gmail.com>
+           Robert Usher <266585+dcchut@users.noreply.github.com>
+           RustCrypto Developers
+           Ryan Lopopolo <rjl@hyperbo.la>
+           Sam Rijs <srijs@airpost.net>
+           Sean Bowe <ewillbefull@gmail.com>
+           Sean Bruton <sean@unnecessary.engineering>
+           Sean McArthur <sean@seanmonstar.com>
+           Sebastian Thiel <sebastian.thiel@icloud.com>
+           Sergey Noskov <snoskov@avito.ru>
+           Simon Ochsenreither <simon@ochsenreither.de>
+           Stefan Lankes
+           Steven Allen <steven@stebalien.com>
+           Steven Fackler <sfackler@gmail.com>
+           Stjepan Glavina <stjepang@gmail.com>
+           Tad Hardesty <tad@platymuus.com>
+           Taiki Endo
+           Taiki Endo <te316e89@gmail.com>
+           Teleport <goteleport.com>
+           The CryptoCorrosion Contributors
+           The Rand Project Developers
+           The Rust Project Developers
+           The RustCrypto Project Developers
+           The Servo Project Developers
+           The Trussed developers
+           The contributors to Hickory DNS
+           The image-rs Developers
+           The rust-url developers
+           The wasm-bindgen Developers
+           Thomas de Zeeuw <thomasdezeeuw@gmail.com>
+           Time contributors
+           Tony Arcieri <tony@iqlusion.io>
+           Walther Chen <walther.chen@gmail.com>
+           Xynnn_ <xynnn@linux.alibaba.com>
+           YOSHIOKA Takuma <nop_thread@nops.red>
+           Yevhenii Reizner <razrfalcon@gmail.com>
+           Yoshua Wuyts <yoshuawuyts@gmail.com>
+           Zeeshan Ali Khan <zeeshanak@gnome.org>
+           bluss
+           dignifiedquire <dignifiedquire@gmail.com>
+           kwantam <kwantam@gmail.com>
+           maik klein <maikklein@googlemail.com>
+           nemurubaka <cijiugechu@gmail.com>
+License: Apache-2.0 OR MIT
+
+Files: vendor/bytemuck/* vendor/miniz_oxide/* vendor/safe_arch/* vendor/tinyvec/* vendor/tinyvec_macros/* vendor/wide/* vendor/xkeysym/* vendor/zune-core/* vendor/zune-jpeg/*
+Copyright: Caleb Etemesi
+           Frommi <daniil.liferenko@gmail.com>
+           John Nunley <jtnunley01@gmail.com>
+           Lokathor <zefria@gmail.com>
+           Rich Geldreich richgel99@gmail.com
+           Soveu <marx.tomasz@gmail.com>
+           caleb <etemesicaleb@gmail.com>
+           oyvindln <oyvindln@users.noreply.github.com>
+License: Apache-2.0 OR MIT OR Zlib
+
+Files: vendor/openh264/* vendor/openh264-sys2/*
+Copyright: Ralf Biedert <rb@xr.io>
+License: BSD-2-Clause
+
+Files: vendor/curve25519-dalek/* vendor/ed25519-dalek/* vendor/subtle/* vendor/x25519-dalek/*
+Copyright: DebugSteven <debugsteven@gmail.com>
+           Henry de Valence <hdevalence@hdevalence.ca>
+           Isis Lovecruft <isis@patternsinthevoid.net>
+           Michael Rosenberg <michael@mrosenberg.pub>
+           Tony Arcieri <bascule@gmail.com>
+           isis lovecruft <isis@patternsinthevoid.net>
+License: BSD-3-Clause
+
+Files: vendor/iso7816-tlv/* vendor/libloading/* vendor/rustls-webpki/* vendor/untrusted/*
+Copyright: Brian Smith <brian@briansmith.org>
+           Dirkjan Ochtman
+           Julien Kowalski <julien.kowalski@ercom.fr>
+           Simonas Kazlauskas <libloading@kazlauskas.me>
+License: ISC
+
+Files: vendor/ashpd/* vendor/async-dnssd/* vendor/bitvec/* vendor/bytes/* vendor/color_quant/* vendor/convert_case/* vendor/cookie-factory/* vendor/data-encoding/* vendor/endi/* vendor/funty/* vendor/fuser/* vendor/generic-array/* vendor/h2/* vendor/hostname/* vendor/http-body/* vendor/http-body-util/* vendor/hyper/* vendor/hyper-util/* vendor/libm/* vendor/libopus_sys/* vendor/libredox/* vendor/libspa/* vendor/libspa-sys/* vendor/matchers/* vendor/memoffset/* vendor/mio/* vendor/nix-0.27.1/* vendor/nix/* vendor/nom/* vendor/nu-ansi-term/* vendor/pem/* vendor/pipewire/* vendor/pipewire-sys/* vendor/radium/* vendor/redox_syscall-0.5.18/* vendor/redox_users/* vendor/schannel/* vendor/sharded-slab/* vendor/simd-adler32/* vendor/slab/* vendor/spin/* vendor/strsim/* vendor/synstructure/* vendor/sysinfo/* vendor/tap/* vendor/tokio/* vendor/tokio-macros/* vendor/tokio-util/* vendor/tower/* vendor/tower-http/* vendor/tower-layer/* vendor/tower-service/* vendor/tracing/* vendor/tracing-appender/* vendor/tracing-attributes/* vendor/tracing-core/* vendor/tracing-log/* vendor/tracing-serde/* vendor/tracing-subscriber/* vendor/try-lock/* vendor/uds_windows/* vendor/users/* vendor/valuable/* vendor/want/* vendor/winnow/* vendor/winreg/* vendor/wyz/* vendor/xdg-home/* vendor/xkbcommon/* vendor/zbus-4.4.0/* vendor/zbus/* vendor/zbus_macros-4.4.0/* vendor/zbus_macros/* vendor/zbus_names-3.0.0/* vendor/zbus_names/* vendor/zmij/* vendor/zvariant-4.2.0/* vendor/zvariant/* vendor/zvariant_derive-4.2.0/* vendor/zvariant_derive/* vendor/zvariant_utils-2.1.0/* vendor/zvariant_utils/*
+Copyright: 4lDO2 <4lDO2@protonmail.com>
+           Aaron Trent <novacrazy@gmail.com>
+           Alex Crichton <alex@alexcrichton.com>
+           Alexander Payne
+           Amanieu d'Antras <amanieu@gmail.com>
+           Azure IoT Edge Devs
+           Bartłomiej Kamiński <fizyk20@gmail.com>
+           Bilal Elmoussaoui <bil.elmoussaoui@gmail.com>
+           Carl Lerche <me@carllerche.com>
+           Christopher Berner <christopherberner@gmail.com>
+           Danny Guo <danny@dannyguo.com>
+           David Barsky <dbarsky@amazon.com>
+           David Barsky <me@davidbarsky.com>
+           David Tolnay <dtolnay@gmail.com>
+           Dirkjan Ochtman
+           Ed Page
+           Eliza Weisman <eliza@buoyant.io>
+           Elliott Linder <elliott.darfink@gmail.com>
+           Geoffroy Couprie <geo.couprie@gmail.com>
+           Gilad Naaman <gilad.naaman@gmail.com>
+           Guillaume Desmottes <guillaume.desmottes@collabora.com>
+           Guillaume Gomez <guillaume1.gomez@gmail.com>
+           Harald Hoyer <harald@redhat.com>
+           Igor Shaula <gentoo90@gmail.com>
+           Jeremy Soller <jackpot51@gmail.com>
+           John Ericson <git@JohnEricson.me>
+           Jonathan Creekmore <jonathan@thecreekmores.org>
+           Jorge Aparicio <japaricious@gmail.com>
+           Jose Narvaez <goyox86@gmail.com>
+           Josh Triplett <josh@joshtriplett.org>
+           Joshua Barretto <joshua.s.barretto@gmail.com>
+           Julien Cretin <git@ia0.eu>
+           Lucio Franco <luciofranco14@gmail.com>
+           Marc-André Lureau <marcandre.lureau@redhat.com>
+           Marvin Countryman <me@maar.vin>
+           Mathijs van de Nes <git@mathijs.vd-nes.nl>
+           Nika Layzell <nika@thelayzells.com>
+           Pierre Chifflier <chifflier@wzdftpd.net>
+           Remi THEBAULT <remi.thebault@gmail.com>
+           Rutrum <dave@rutrum.net>
+           Ryan Scheel (Havvy) <ryan.havvy@gmail.com>
+           Sean McArthur <sean@seanmonstar.com>
+           Stefan Bühler <stbuehler@web.de>
+           Steffen Butzer <steffen.butzer@outlook.com>
+           Steven Fackler <sfackler@gmail.com>
+           Taiki Endo
+           The Nushell Project Developers
+           The nix-rust Project Developers
+           Thomas de Zeeuw <thomasdezeeuw@gmail.com>
+           Tokio Contributors <team@tokio.rs>
+           Tom Wagner <tom.a.wagner@protonmail.com
+           Tower Maintainers <team@tower-rs.com>
+           Trevor Gross <tg@trevorgross.com>
+           Wesley Hershberger <mggmugginsmc@gmail.com>
+           Zeeshan Ali Khan <zeenix@gmail.com>
+           Zeeshan Ali Khan <zeeshanak@gnome.org>
+           Zeki Sherif <zekshi@amazon.com>
+           contact@geoffroycouprie.com
+           maxbachmann <oss@maxbachmann.de>
+           myrrlyn <self@myrrlyn.dev>
+           nemurubaka <cijiugechu@gmail.com>
+           nwin <nwin@users.noreply.github.com>
+           ogham@bsago.me
+           turbocooler <turbocooler@cocaine.ninja>
+License: MIT
+
+Files: vendor/aho-corasick/* vendor/byteorder/* vendor/byteorder-lite/* vendor/memchr/*
+Copyright: Andrew Gallant <jamslam@gmail.com>
+           Jonathan Behrens
+           bluss
+License: MIT OR Unlicense
+
+Files: vendor/option-ext/*
+Copyright: Simon Ochsenreither <simon@ochsenreither.de>
+License: MPL-2.0
+
+Files: vendor/icu_collections/* vendor/icu_locale_core/* vendor/icu_normalizer/* vendor/icu_normalizer_data/* vendor/icu_properties/* vendor/icu_properties_data/* vendor/icu_provider/* vendor/litemap/* vendor/potential_utf/* vendor/tinystr/* vendor/writeable/* vendor/yoke/* vendor/yoke-derive/* vendor/zerofrom/* vendor/zerofrom-derive/* vendor/zerotrie/* vendor/zerovec/* vendor/zerovec-derive/*
+Copyright: Manish Goregaokar <manishsmail@gmail.com>
+           The ICU4X Project Developers
+License: Unicode-3.0
+
+Files: vendor/portpicker/*
+Copyright: Hannes Karppila <hannes.karppila@gmail.com>
+License: Unlicense
+
+License: 0BSD
+ Permission to use, copy, modify, and/or distribute this software for any
+ purpose with or without fee is hereby granted.
+ .
+ THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+ WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+ MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+ WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+ OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+License: Apache-2.0
+ On Debian systems, the full text of the Apache-2.0 license
+ can be found in /usr/share/common-licenses/Apache-2.0.
+
+License: Apache-2.0 WITH LLVM-exception
+ On Debian systems, the Apache-2.0 base license can be found in
+ /usr/share/common-licenses/Apache-2.0.
+ .
+ This usage includes the LLVM exception which grants additional
+ permissions for code compiled with LLVM.
+
+License: BSD-1-Clause
+ See the individual crate directories for the full license text.
+
+License: BSD-2-Clause
+ On Debian systems, the full text of the BSD-2-Clause license
+ can be found in /usr/share/common-licenses/BSD-2-Clause.
+
+License: BSD-3-Clause
+ On Debian systems, the full text of the BSD-3-Clause license
+ can be found in /usr/share/common-licenses/BSD-3-Clause.
+
+License: BSL-1.0
+ Boost Software License - Version 1.0 - August 17th, 2003
+ .
+ Permission is hereby granted, free of charge, to any person or
+ organization obtaining a copy of the software and accompanying
+ documentation covered by this license (the "Software") to use, reproduce,
+ display, distribute, execute, and transmit the Software, and to prepare
+ derivative works of the Software, and to permit third-parties to whom the
+ Software is furnished to do so, all subject to the following:
+ .
+ The copyright notices in the Software and this entire statement, including
+ the above license grant, this restriction and the following disclaimer,
+ must be included in all copies of the Software, in whole or in part, and
+ all derivative works of the Software, unless such copies or derivative
+ works are solely in the form of machine-executable object code generated
+ by a source language processor.
+ .
+ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+ OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ FITNESS FOR A PARTICULAR PURPOSE, TITLE AND NON-INFRINGEMENT. IN NO EVENT
+ SHALL THE COPYRIGHT HOLDERS OR ANYONE DISTRIBUTING THE SOFTWARE BE LIABLE
+ FOR ANY DAMAGES OR OTHER LIABILITY, WHETHER IN CONTRACT, TORT OR OTHERWISE,
+ ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+ OTHER DEALINGS IN THE SOFTWARE.
+
+License: BUSL-1.1
+ Business Source License 1.1
+ .
+ Parameters
+ .
+ Licensor:             Lamco Development
+ .
+ Licensed Work:        lamco-rdp-server
+                       The Licensed Work is (c) 2025-2026 Lamco Development
+ .
+ Additional Use Grant: You may make production use of the Licensed Work,
+                       provided Your use does not include a Competitive Use
+                       (as defined below).
+ .
+                       In addition, You may make production use of the
+                       Licensed Work without purchasing a commercial license
+                       if any of the following apply:
+ .
+                       1. You are a non-profit organization.
+                       2. Your use is limited to a single server instance.
+ .
+                       All other production use requires a commercial license
+                       from Lamco Development. Visit https://lamco.ai for
+                       pricing, or contact office@lamco.io.
+ .
+                       A "Competitive Use" means using the Licensed Work to
+                       create, offer, host, or distribute a Competitive
+                       Product. A "Competitive Product" is any product or
+                       service made available to third parties that provides
+                       RDP server, remote desktop, virtual desktop
+                       infrastructure (VDI), or remote access functionality
+                       where such functionality is substantially derived from
+                       the Licensed Work.
+ .
+                       The following are not Competitive Uses:
+ .
+                       (a) Using the Licensed Work to provide managed
+                           services, cloud hosting, or IT infrastructure
+                           where the Licensed Work is a tool used in
+                           delivering those services rather than the basis
+                           of a competing product.
+                       (b) Using the Licensed Work for internal purposes
+                           within Your organization, including use by Your
+                           employees, contractors, and affiliates under
+                           common control.
+                       (c) Using the Licensed Work for non-commercial
+                           education or research.
+                       (d) Redistributing the Licensed Work in unmodified
+                           source form with this License intact.
+ .
+ Change Date:          2028-12-31
+ .
+ Change License:       Apache License 2.0
+ .
+ Notice
+ .
+ The Business Source License (this document, or the "License") is not an Open
+ Source license. However, the Licensed Work will eventually be made available
+ under an Open Source License, as stated in this License.
+ .
+ For information about alternative licensing arrangements for the Licensed Work,
+ please visit https://lamco.ai or contact office@lamco.io.
+ .
+ -----------------------------------------------------------------------------
+ .
+ License text copyright (c) 2017 MariaDB Corporation Ab, All Rights Reserved.
+ "Business Source License" is a trademark of MariaDB Corporation Ab.
+ .
+ Terms
+ .
+ The Licensor hereby grants you the right to copy, modify, create derivative
+ works, redistribute, and make non-production use of the Licensed Work. The
+ Licensor may make an Additional Use Grant, above, permitting limited
+ production use.
+ .
+ Effective on the Change Date, or the fourth anniversary of the first publicly
+ available distribution of a specific version of the Licensed Work under this
+ License, whichever comes first, the Licensor hereby grants you rights under
+ the terms of the Change License, and the rights granted in the paragraph
+ above terminate.
+ .
+ If your use of the Licensed Work does not comply with the requirements
+ currently in effect as described in this License, you must purchase a
+ commercial license from the Licensor, its affiliated entities, or authorized
+ resellers, or you must refrain from using the Licensed Work.
+ .
+ All copies of the original and modified Licensed Work, and derivative works
+ of the Licensed Work, are subject to this License. This License applies
+ separately for each version of the Licensed Work and the Change Date may vary
+ for each version of the Licensed Work released by Licensor.
+ .
+ You must conspicuously display this License on each original or modified copy
+ of the Licensed Work. If you receive the Licensed Work in original or
+ modified form from a third party, the terms and conditions set forth in this
+ License apply to your use of that work.
+ .
+ Any use of the Licensed Work in violation of this License will automatically
+ terminate your rights under this License for the current and all other
+ versions of the Licensed Work.
+ .
+ This License does not grant you any right in any trademark or logo of
+ Licensor or its affiliates (provided that you may use a trademark or logo of
+ Licensor as expressly required by this License).
+ .
+ TO THE EXTENT PERMITTED BY APPLICABLE LAW, THE LICENSED WORK IS PROVIDED ON
+ AN "AS IS" BASIS. LICENSOR HEREBY DISCLAIMS ALL WARRANTIES AND CONDITIONS,
+ EXPRESS OR IMPLIED, INCLUDING (WITHOUT LIMITATION) WARRANTIES OF
+ MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, NON-INFRINGEMENT, AND
+ TITLE.
+ .
+ MariaDB hereby grants you permission to use this License's text to license
+ your works, and to refer to it using the trademark "Business Source License",
+ as long as you comply with the Covenants of Licensor below.
+ .
+ Covenants of Licensor
+ .
+ In consideration of the right to use this License's text and the "Business
+ Source License" name and trademark, Licensor covenants to MariaDB, and to all
+ other recipients of the licensed work to be provided by Licensor:
+ .
+ 1. To specify as the Change License the GPL Version 2.0 or any later version,
+    or a license that is compatible with GPL Version 2.0 or a later version,
+    where "compatible" means that software provided under the Change License can
+    be included in a program with software provided under GPL Version 2.0 or a
+    later version. Licensor may specify additional Change Licenses without
+    limitation.
+ .
+ 2. To either: (a) specify an additional grant of rights to use that does not
+    impose any additional restriction on the right granted in this License, as
+    the Additional Use Grant; or (b) insert the text "None".
+ .
+ 3. To specify a Change Date.
+ .
+ 4. Not to modify this License in any other way.
+
+License: ISC
+ Permission to use, copy, modify, and/or distribute this software for any
+ purpose with or without fee is hereby granted, provided that the above
+ copyright notice and this permission notice appear in all copies.
+ .
+ THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+ WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+ MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+ WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+ OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+License: LGPL-2.1-or-later
+ See the individual crate directories for the full license text.
+
+License: MIT
+ Permission is hereby granted, free of charge, to any person obtaining a
+ copy of this software and associated documentation files (the "Software"),
+ to deal in the Software without restriction, including without limitation
+ the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ and/or sell copies of the Software, and to permit persons to whom the
+ Software is furnished to do so, subject to the following conditions:
+ .
+ The above copyright notice and this permission notice shall be included
+ in all copies or substantial portions of the Software.
+ .
+ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+ OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+ THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+ DEALINGS IN THE SOFTWARE.
+
+License: MPL-2.0
+ On Debian systems, the full text of the MPL-2.0 license
+ can be found in /usr/share/common-licenses/MPL-2.0.
+
+License: OpenSSL
+ OpenSSL License
+ .
+ Redistribution and use in source and binary forms, with or without
+ modification, are permitted provided that the following conditions are met:
+ .
+ See https://www.openssl.org/source/license.html for the full license text.
+
+License: Unicode-3.0
+ UNICODE LICENSE V3
+ .
+ Permission is hereby granted, free of charge, to any person obtaining a
+ copy of data files and any associated documentation (the "Data Files") or
+ software and any associated documentation (the "Software") to deal in the
+ Data Files or Software without restriction, including without limitation
+ the rights to use, copy, modify, merge, publish, distribute, and/or sell
+ copies of the Data Files or Software, and to permit persons to whom the
+ Data Files or Software are furnished to do so, provided that either (a)
+ this copyright and permission notice appear with all copies of the Data
+ Files or Software, or (b) this copyright and permission notice appear in
+ associated Documentation.
+ .
+ THE DATA FILES AND SOFTWARE ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY
+ KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT OF
+ THIRD PARTY RIGHTS.
+
+License: Unlicense
+ This is free and unencumbered software released into the public domain.
+ .
+ Anyone is free to copy, modify, publish, use, compile, sell, or distribute
+ this software, either in source code form or as a compiled binary, for any
+ purpose, commercial or non-commercial, and by any means.
+ .
+ In jurisdictions that recognize copyright laws, the author or authors of
+ this software dedicate any and all copyright interest in the software to
+ the public domain.
+ .
+ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+ OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+ THE AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+License: Zlib
+ This software is provided 'as-is', without any express or implied
+ warranty. In no event will the authors be held liable for any damages
+ arising from the use of this software.
+ .
+ Permission is granted to anyone to use this software for any purpose,
+ including commercial applications, and to alter it and redistribute it
+ freely, subject to the following restrictions:
+ .
+ 1. The origin of this software must not be misrepresented; you must not
+    claim that you wrote the original software. If you use this software in
+    a product, an acknowledgment in the product documentation would be
+    appreciated but is not required.
+ 2. Altered source versions must be plainly marked as such, and must not be
+    misrepresented as being the original software.
+ 3. This notice may not be removed or altered from any source distribution.

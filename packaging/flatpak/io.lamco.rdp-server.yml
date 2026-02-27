@@ -1,62 +1,31 @@
-# Flatpak Manifest for Lamco RDP Server
-#
-# Build with: flatpak-builder --user --install build-dir io.lamco.rdp-server.yml
-#
-# Prerequisites:
-#   flatpak install flathub org.freedesktop.Platform//24.08
-#   flatpak install flathub org.freedesktop.Sdk//24.08
-#   flatpak install flathub org.freedesktop.Sdk.Extension.rust-stable//24.08
-
 app-id: io.lamco.rdp-server
 runtime: org.freedesktop.Platform
-runtime-version: '24.08'
+runtime-version: '25.08'
 sdk: org.freedesktop.Sdk
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable
-  - org.freedesktop.Sdk.Extension.llvm18
+  - org.freedesktop.Sdk.Extension.llvm20
 
 command: lamco-rdp-server-gui
 
-# Finish args - permissions needed for RDP server functionality
-# Linter-compliant: no --socket=session-bus, no --filesystem=/tmp,
-# portal talk-names removed (automatic). See flathub.json for exceptions.
+add-extensions:
+  org.freedesktop.Platform.openh264:
+    directory: lib/openh264
+    versions: '2.5.1;2.5.0;2.4.1;2.3.1;2.3.0;2.2.0;2.0'
+    add-ld-path: extra
+    autodelete: false
+    autodownload: true
+
 finish-args:
-  # Wayland/X11 display access
   - --socket=wayland
   - --socket=fallback-x11
   - --share=ipc
-
-  # GPU access for GUI rendering (iced/wgpu) and hardware video encoding
   - --device=dri
-
-  # Network access — RDP server listens for incoming connections
   - --share=network
-
-  # PipeWire access for screen capture (video) and audio forwarding
   - --socket=pulseaudio
   - --filesystem=xdg-run/pipewire-0
 
-  # KDE Klipper clipboard integration (KlipperCooperationMode)
-  - --talk-name=org.kde.klipper
-
-  # Credential storage — session tokens and RDP passwords
-  - --talk-name=org.freedesktop.secrets
-
-  # Own D-Bus name for GUI↔server IPC
-  - --own-name=io.lamco.rdp-server
-
-  # Config and state directories
-  - --filesystem=~/.config/lamco-rdp-server:create
-  - --filesystem=~/.local/share/lamco-rdp-server:create
-
-  # Home directory access — required for:
-  #   1. RDP clipboard file transfer (read/write files at user-chosen locations)
-  #   2. Log files (configurable log_dir, defaults to ~/Documents/)
-  #   3. TLS certificate paths specified by user
-  - --filesystem=home
-
 modules:
-  # libfuse3 for clipboard file transfer
   - name: libfuse3
     buildsystem: meson
     config-opts:
@@ -66,33 +35,32 @@ modules:
       - -Dudevrulesdir=/app/lib/udev/rules.d
     sources:
       - type: archive
-        path: /tmp/fuse-3.16.2.tar.gz
+        url: https://github.com/libfuse/libfuse/releases/download/fuse-3.16.2/fuse-3.16.2.tar.gz
+        sha256: f797055d9296b275e981f5f62d4e32e089614fc253d1ef2985851025b8a0ce87
 
-  # Main application
   - name: lamco-rdp-server
     buildsystem: simple
     build-options:
-      append-path: /usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/llvm18/bin
+      append-path: /usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/llvm20/bin
       env:
         CARGO_HOME: /run/build/lamco-rdp-server/cargo
-        # Disable PAM auth in Flatpak (not available in sandbox)
-        CARGO_FEATURE_PAM_AUTH: "0"
-        # Tell bindgen where to find clang and system headers
-        LIBCLANG_PATH: /usr/lib/sdk/llvm18/lib
-        BINDGEN_EXTRA_CLANG_ARGS: "-I/usr/include"
+        RUST_BACKTRACE: '1'
+        LIBCLANG_PATH: /usr/lib/sdk/llvm20/lib
     build-commands:
-      # Build without PAM, with GUI (using vendored dependencies)
-      - cargo build --release --no-default-features --features gui,h264 --offline
-      - install -Dm755 target/release/lamco-rdp-server -t /app/bin/
-      - install -Dm755 target/release/lamco-rdp-server-gui -t /app/bin/
-      # Install D-Bus service file for activation
-      - install -Dm644 packaging/flatpak/io.lamco.rdp-server.dbus-service /app/share/dbus-1/services/io.lamco.rdp-server.service
-      # Install desktop entry
-      - install -Dm644 packaging/flatpak/io.lamco.rdp-server.desktop /app/share/applications/io.lamco.rdp-server.desktop
-      # Install appstream metainfo
-      - install -Dm644 packaging/flatpak/io.lamco.rdp-server.metainfo.xml /app/share/metainfo/io.lamco.rdp-server.metainfo.xml
-      # Install icons
-      - install -Dm644 assets/icons/io.lamco.rdp-server.svg /app/share/icons/hicolor/scalable/apps/io.lamco.rdp-server.svg
+      - cargo --offline build --release --no-default-features --features "h264,libei,gui"
+      - install -Dm755 target/release/lamco-rdp-server /app/bin/lamco-rdp-server
+      - install -Dm755 target/release/lamco-rdp-server-gui /app/bin/lamco-rdp-server-gui
+      - install -Dm644 data/io.lamco.rdp-server.metainfo.xml /app/share/metainfo/io.lamco.rdp-server.metainfo.xml
+      - install -Dm644 data/io.lamco.rdp-server.desktop /app/share/applications/io.lamco.rdp-server.desktop
+      - install -Dm644 data/icons/io.lamco.rdp-server.svg /app/share/icons/hicolor/scalable/apps/io.lamco.rdp-server.svg
+      - install -Dm644 data/icons/io.lamco.rdp-server-256.png /app/share/icons/hicolor/256x256/apps/io.lamco.rdp-server.png
+      - install -Dm644 data/icons/io.lamco.rdp-server-128.png /app/share/icons/hicolor/128x128/apps/io.lamco.rdp-server.png
+      - install -Dm644 data/icons/io.lamco.rdp-server-64.png /app/share/icons/hicolor/64x64/apps/io.lamco.rdp-server.png
+      - install -Dm644 data/icons/io.lamco.rdp-server-48.png /app/share/icons/hicolor/48x48/apps/io.lamco.rdp-server.png
+      - install -Dm644 data/icons/io.lamco.rdp-server-32.png /app/share/icons/hicolor/32x32/apps/io.lamco.rdp-server.png
+      - mkdir -p /app/lib/openh264
+
     sources:
       - type: archive
-        path: /tmp/lamco-rdp-server-1.2.5.tar.xz
+        url: https://github.com/lamco-admin/lamco-rdp-server/releases/download/v1.4.0/lamco-rdp-server-1.4.0.tar.xz
+        sha256: d8a15b7f1c74294f8f2b3881e8a3a9986c6fc16698ecf1efd6e4e8f3e66cda31

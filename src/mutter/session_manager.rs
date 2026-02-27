@@ -4,7 +4,7 @@
 //! This provides a unified interface similar to PortalManager but using Mutter's
 //! direct D-Bus APIs instead of going through the XDG Portal.
 
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -12,6 +12,7 @@ use tracing::{debug, info};
 use zbus::zvariant::{OwnedObjectPath, Value};
 
 use super::{
+    clipboard::MutterClipboardManager,
     remote_desktop::{MutterRemoteDesktop, MutterRemoteDesktopSession},
     screencast::{MutterScreenCast, MutterScreenCastSession, MutterScreenCastStream},
 };
@@ -41,8 +42,13 @@ pub struct MutterSessionHandle {
     pub streams: Vec<OwnedObjectPath>,
     /// Stream information
     pub stream_info: Vec<MutterStreamInfo>,
-    /// Connection (kept alive for session, public for input injection)
-    pub connection: zbus::Connection,
+    /// Connection (kept alive for session, crate-internal for input injection)
+    pub(crate) connection: zbus::Connection,
+    /// Mutter clipboard manager (available when clipboard is enabled)
+    pub clipboard: Option<Arc<MutterClipboardManager>>,
+    /// EIS socket FD (available on GNOME 46+)
+    #[cfg(feature = "libei")]
+    pub eis_fd: Option<std::os::fd::OwnedFd>,
 }
 
 /// Mutter Session Manager
@@ -79,8 +85,9 @@ impl MutterSessionManager {
 
     /// Create a complete Mutter session (ScreenCast + RemoteDesktop)
     ///
-    /// This creates both a ScreenCast session (for video) and a RemoteDesktop
-    /// session (for input injection) without triggering any permission dialogs.
+    /// Session linkage order is critical: RemoteDesktop must be created first,
+    /// then its SessionId is passed to ScreenCast.CreateSession so that input
+    /// injection targets the correct screencast stream.
     ///
     /// # Arguments
     ///
@@ -93,24 +100,55 @@ impl MutterSessionManager {
         &self,
         monitor_connector: Option<&str>,
     ) -> Result<MutterSessionHandle> {
-        info!("Creating Mutter session (ScreenCast + RemoteDesktop)");
+        info!("Creating Mutter session (RemoteDesktop first, then linked ScreenCast)");
 
+        // Step 1: Create RemoteDesktop session first
+        let rd_proxy = MutterRemoteDesktop::new(&self.connection).await?;
+
+        let rd_session_path = rd_proxy
+            .create_session()
+            .await
+            .context("Failed to create Mutter RemoteDesktop session")?;
+
+        info!(
+            "Mutter RemoteDesktop session created: {:?}",
+            rd_session_path
+        );
+
+        let rd_session_proxy =
+            MutterRemoteDesktopSession::new(&self.connection, rd_session_path.clone()).await?;
+
+        // Read the SessionId property from the RemoteDesktop session
+        let rd_session_id = rd_session_proxy
+            .session_id()
+            .await
+            .context("Failed to read RemoteDesktop SessionId property")?;
+
+        info!("RemoteDesktop session ID: {}", rd_session_id);
+
+        // Step 2: Create ScreenCast session linked to the RemoteDesktop session
         let screencast_proxy = MutterScreenCast::new(&self.connection).await?;
 
-        let sc_properties = HashMap::new();
+        let mut sc_properties = HashMap::new();
+        sc_properties.insert(
+            "remote-desktop-session-id".to_string(),
+            Value::new(rd_session_id),
+        );
+
         let screencast_session_path = screencast_proxy
             .create_session(sc_properties)
             .await
-            .context("Failed to create Mutter ScreenCast session")?;
+            .context("Failed to create linked Mutter ScreenCast session")?;
 
         info!(
-            "Mutter ScreenCast session created: {:?}",
+            "Mutter ScreenCast session created (linked to RD): {:?}",
             screencast_session_path
         );
 
         let session_proxy =
             MutterScreenCastSession::new(&self.connection, screencast_session_path.clone()).await?;
 
+        // Step 3: Set up recording source
         let stream_path = if let Some(connector) = monitor_connector {
             info!("Recording monitor: {}", connector);
 
@@ -127,7 +165,6 @@ impl MutterSessionManager {
 
             let mut properties = HashMap::new();
             properties.insert("cursor-mode".to_string(), Value::new(2u32));
-            // Could add: width, height for virtual monitor
 
             session_proxy
                 .record_virtual(properties)
@@ -147,13 +184,13 @@ impl MutterSessionManager {
             .await
             .context("Failed to subscribe to PipeWireStreamAdded signal")?;
 
-        // Start the ScreenCast session (this triggers PipeWireStreamAdded signal)
-        session_proxy
+        // Step 4: Start the RemoteDesktop session (which also starts linked ScreenCast)
+        rd_session_proxy
             .start()
             .await
-            .context("Failed to start ScreenCast session")?;
+            .context("Failed to start RemoteDesktop session")?;
 
-        info!("Mutter ScreenCast session started successfully");
+        info!("Mutter RemoteDesktop session started (linked ScreenCast also active)");
 
         use futures_util::stream::StreamExt;
         let node_id =
@@ -206,28 +243,36 @@ impl MutterSessionManager {
             stream_info.node_id
         );
 
-        let rd_proxy = MutterRemoteDesktop::new(&self.connection).await?;
+        // Step 5: Try to enable clipboard
+        let clipboard = {
+            let mgr = MutterClipboardManager::new(self.connection.clone(), rd_session_path.clone());
+            match mgr.enable().await {
+                Ok(()) => {
+                    info!("Mutter clipboard enabled");
+                    Some(Arc::new(mgr))
+                }
+                Err(e) => {
+                    info!("Mutter clipboard not available: {}", e);
+                    None
+                }
+            }
+        };
 
-        // RemoteDesktop CreateSession takes NO arguments on this GNOME version
-        let rd_session_path = rd_proxy
-            .create_session()
-            .await
-            .context("Failed to create Mutter RemoteDesktop session")?;
-
-        info!(
-            "Mutter RemoteDesktop session created: {:?}",
-            rd_session_path
-        );
-
-        let rd_session_proxy =
-            MutterRemoteDesktopSession::new(&self.connection, rd_session_path.clone()).await?;
-
-        rd_session_proxy
-            .start()
-            .await
-            .context("Failed to start RemoteDesktop session")?;
-
-        info!("Mutter RemoteDesktop session started successfully");
+        // Step 6: Try to get EIS FD (GNOME 46+)
+        #[cfg(feature = "libei")]
+        let eis_fd = {
+            let options = HashMap::new();
+            match rd_session_proxy.connect_to_eis(options).await {
+                Ok(fd) => {
+                    info!("Connected to EIS for low-latency input");
+                    Some(fd)
+                }
+                Err(e) => {
+                    info!("EIS not available, using D-Bus input: {}", e);
+                    None
+                }
+            }
+        };
 
         let handle = MutterSessionHandle {
             screencast_session: screencast_session_path,
@@ -235,6 +280,9 @@ impl MutterSessionManager {
             streams: vec![stream_path],
             stream_info: vec![stream_info],
             connection: self.connection.clone(),
+            clipboard,
+            #[cfg(feature = "libei")]
+            eis_fd,
         };
 
         info!("Mutter session created successfully (NO DIALOG REQUIRED)");
@@ -296,25 +344,25 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    #[ignore] // Requires GNOME with Mutter running
+    #[ignore = "Requires GNOME with Mutter running"]
     async fn test_mutter_session_creation() {
         match MutterSessionManager::new().await {
-            Ok(manager) => {
+            Ok(_manager) => {
                 println!("Mutter session manager created");
 
                 // Try to create a session (this will work but we need to clean up)
                 // Skipped in automated tests
             }
             Err(e) => {
-                println!("Mutter not available: {}", e);
+                println!("Mutter not available: {e}");
             }
         }
     }
 
     #[tokio::test]
-    #[ignore] // Requires GNOME with actual monitor
+    #[ignore = "Requires GNOME with actual monitor"]
     async fn test_mutter_monitor_capture() {
-        let manager = MutterSessionManager::new()
+        let _manager = MutterSessionManager::new()
             .await
             .expect("Mutter not available");
 

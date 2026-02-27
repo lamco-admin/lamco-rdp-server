@@ -12,7 +12,9 @@
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
-use tracing::{debug, info, warn};
+#[cfg(feature = "gui")]
+use tracing::warn;
+use tracing::{debug, info};
 
 use super::environment::{
     detect_display_server, detect_virtualization, run_command, DisplayServer, VirtualizationType,
@@ -311,9 +313,9 @@ impl RenderingProbe {
 
                     if let Ok(output) = run_command("lspci", &[]) {
                         let lower = output.to_lowercase();
-                        if (lower.contains("vga")
+                        if lower.contains("vga")
                             || lower.contains("3d")
-                            || lower.contains("display"))
+                            || lower.contains("display")
                         {
                             if lower.contains("virtio")
                                 || lower.contains("qxl")

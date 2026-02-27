@@ -1,0 +1,42 @@
+# Salsa CI pipeline for lamco-rdp-server
+# See: https://salsa.debian.org/salsa-ci-team/pipeline
+include:
+  - https://salsa.debian.org/salsa-ci-team/pipeline/raw/master/recipes/debian.yml
+
+variables:
+  RELEASE: 'unstable'
+  # Required for non-free packages
+  SALSA_CI_COMPONENTS: 'main contrib non-free non-free-firmware'
+  # Rust builds use thin LTO + 883 vendored crates; build job proves compilation
+  SALSA_CI_BUILD_TIMEOUT_ARGS: '3.5h'
+  # No i386 build (amd64-only package)
+  SALSA_CI_DISABLE_BUILD_PACKAGE_I386: 1
+  # test-build-any re-runs dpkg-buildpackage from scratch, doubling build time;
+  # the build job already proves compilation succeeds on amd64
+  SALSA_CI_DISABLE_BUILD_PACKAGE_ANY: 1
+  # reprotest fails: cargo embeds absolute build paths
+  SALSA_CI_DISABLE_REPROTEST: 1
+  # Not useful until in archive
+  SALSA_CI_DISABLE_DEBREBUILD: 1
+  # Needs Wayland compositor - impossible in CI container
+  SALSA_CI_DISABLE_AUTOPKGTEST: 1
+  # Verify debian/ formatting compliance (short-indent, sorted, trailing comma)
+  SALSA_CI_DISABLE_WRAP_AND_SORT: 0
+  SALSA_CI_WRAP_AND_SORT_ARGS: '-ast'
+  # License reconnaissance times out with 883 vendored crates; run manually
+  SALSA_CI_DISABLE_LICENSERECON: 1
+  # blhc (Build Log Hardening Check) fails: Rust/cargo doesn't expose gcc/ld
+  # command lines, so blhc can't verify hardening flags. Standard for Rust packages.
+  SALSA_CI_DISABLE_BLHC: 1
+  # Suppress lintian tags that are false positives for vendored Rust packages:
+  # - superfluous-file-pattern: per-crate d/copyright entries requested by reviewer
+  # - source-contains-prebuilt-windows-binary: test DLLs in vendored libloading
+  # - source-contains-prebuilt-wasm-binary: WASM objects in vendored wit-bindgen
+  # - source-contains-prebuilt-javascript-object: minified JS in vendored winit
+  # - inconsistent-appstream-metadata-license: CC0 metainfo vs BUSL-1.1 code (correct)
+  # - file-references-package-build-path: Rust embeds build paths in binaries
+  SALSA_CI_LINTIAN_SUPPRESS_TAGS: 'superfluous-file-pattern,source-contains-prebuilt-windows-binary,source-contains-prebuilt-wasm-binary,source-contains-prebuilt-javascript-object,inconsistent-appstream-metadata-license,file-references-package-build-path,bad-exception-format-in-dep5-copyright'
+
+# Override GitLab runner job timeout (default 1h is too short for Rust builds)
+build:
+  timeout: 4h

@@ -11,25 +11,25 @@
 //!
 //! # OpenH264 Licensing
 //!
-//! OpenH264 is licensed under BSD by Cisco. The openh264 Rust crate
-//! bundles the source code and builds it automatically.
+//! OpenH264 is loaded dynamically at runtime via `libloading`. For patent
+//! compliance, the loaded binary must be Cisco's precompiled release,
+//! downloaded separately to the device. Compiling from source provides
+//! zero patent coverage. See `docs/decisions/H264-CODEC-STRATEGY.md`.
 //!
 //! # Performance Notes
 //!
-//! - For best performance, ensure `nasm` is in PATH (~3x speedup)
+//! - Hardware encoding (VAAPI/NVENC) is preferred over software OpenH264
 //! - Target 30 FPS for typical desktop sharing scenarios
 
 #[cfg(feature = "h264")]
-use openh264::encoder::{
-    BitRate, Encoder, EncoderConfig as OpenH264Config, FrameRate, FrameType, UsageType,
-};
-#[cfg(feature = "h264")]
-use openh264::formats::{BgraSliceU8, YUVBuffer};
+use openh264::formats::{BgraSliceU8, YUVBuffer, YUVSource};
 use thiserror::Error;
 #[cfg(feature = "h264")]
-use tracing::{debug, trace, warn};
+use tracing::{debug, info, trace, warn};
 
 use super::color_space::ColorSpaceConfig;
+#[cfg(feature = "h264")]
+use super::openh264_compat;
 
 /// Errors that can occur during H.264 encoding
 #[derive(Debug, Error)]
@@ -184,8 +184,15 @@ impl EncoderConfig {
 /// - **Annex B input**: `[0x00 0x00 0x00 0x01][NAL]` or `[0x00 0x00 0x01][NAL]`
 /// - **AVC output**: `[4-byte big-endian length][NAL]`
 ///
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "kept as reference — MS-RDPEGFX uses Annex B directly"
+    )
+)]
 #[deprecated(note = "MS-RDPEGFX requires Annex B, not AVC. Use Annex B format directly.")]
-pub fn annex_b_to_avc(annex_b_data: &[u8]) -> Vec<u8> {
+pub(super) fn annex_b_to_avc(annex_b_data: &[u8]) -> Vec<u8> {
     let mut output = Vec::with_capacity(annex_b_data.len());
     let mut i = 0;
 
@@ -282,13 +289,27 @@ pub fn align_to_16(dimension: u32) -> u32 {
 /// Requires the `h264` feature to be enabled.
 #[cfg(feature = "h264")]
 pub struct Avc420Encoder {
-    encoder: Encoder,
+    encoder: openh264_compat::VersionedEncoder,
     config: EncoderConfig,
     frame_count: u64,
     /// Cached SPS/PPS from last IDR frame (for prepending to P-slices)
     cached_sps_pps: Option<Vec<u8>>,
     /// Current H.264 level (determined from resolution)
+    #[expect(dead_code, reason = "used when level-based bitrate scaling is enabled")]
     current_level: Option<super::h264_level::H264Level>,
+}
+
+/// Load the OpenH264 library with version detection.
+///
+/// Delegates to `openh264_compat::load_openh264()` which:
+/// 1. Detects the runtime version via `WelsGetCodecVersion()`
+/// 2. Selects the correct ABI generation (7 or 8)
+/// 3. Returns an API handle with version-appropriate struct layouts
+#[cfg(feature = "h264")]
+pub(crate) fn load_openh264_api() -> EncoderResult<std::sync::Arc<openh264_compat::OpenH264Api>> {
+    openh264_compat::load_openh264()
+        .map(std::sync::Arc::new)
+        .map_err(EncoderError::InitFailed)
 }
 
 #[cfg(feature = "h264")]
@@ -425,15 +446,20 @@ impl Avc420Encoder {
             .zip(config.height)
             .map(|(w, h)| super::h264_level::H264Level::for_config(w, h, config.max_fps));
 
-        let mut encoder_config = OpenH264Config::new()
-            .bitrate(BitRate::from_bps(config.bitrate_kbps * 1000))
-            .max_frame_rate(FrameRate::from_hz(config.max_fps))
-            .skip_frames(config.enable_skip_frame)
-            .usage_type(UsageType::ScreenContentRealTime)
-            .num_threads(config.encoder_threads);
+        // Build version-aware encoder config
+        let compat_config = openh264_compat::EncoderConfig {
+            bitrate_bps: config.bitrate_kbps * 1000,
+            max_frame_rate: config.max_fps,
+            usage_type: openh264_compat::ffi_types::SCREEN_CONTENT_REAL_TIME,
+            num_threads: config.encoder_threads,
+            enable_skip_frame: config.enable_skip_frame,
+            max_qp: config.qp_max as i32,
+            min_qp: config.qp_min as i32,
+            level_idc: level.map(|l| l.to_openh264_level_idc()),
+            ..openh264_compat::EncoderConfig::default()
+        };
 
         if let Some(level) = level {
-            encoder_config = encoder_config.level(level.to_openh264_level());
             debug!(
                 "Created H.264 encoder: bitrate={}kbps, max_fps={}, level={}",
                 config.bitrate_kbps, config.max_fps, level
@@ -445,9 +471,10 @@ impl Avc420Encoder {
             );
         }
 
-        let encoder =
-            Encoder::with_api_config(openh264::OpenH264API::from_source(), encoder_config)
-                .map_err(|e| EncoderError::InitFailed(format!("OpenH264 init failed: {e:?}")))?;
+        let api = load_openh264_api()?;
+        info!("AVC420: {}", api.capabilities);
+        let encoder = openh264_compat::VersionedEncoder::new(api, compat_config)
+            .map_err(|e| EncoderError::InitFailed(format!("OpenH264 init failed: {e}")))?;
 
         Ok(Self {
             encoder,
@@ -466,7 +493,7 @@ impl Avc420Encoder {
         timestamp_ms: u64,
     ) -> EncoderResult<Option<H264Frame>> {
         // Validate dimensions (must be multiples of 2 for YUV420)
-        if width == 0 || height == 0 || width % 2 != 0 || height % 2 != 0 {
+        if width == 0 || height == 0 || !width.is_multiple_of(2) || !height.is_multiple_of(2) {
             return Err(EncoderError::InvalidDimensions { width, height });
         }
 
@@ -479,22 +506,34 @@ impl Avc420Encoder {
             )));
         }
 
-        // OpenH264 handles the color conversion internally
+        // Color conversion: BGRA → YUV420 (pure Rust, no FFI)
         let bgra_source = BgraSliceU8::new(bgra_data, (width as usize, height as usize));
         let yuv = YUVBuffer::from_rgb_source(bgra_source);
 
-        // Encode
-        let bitstream = self
+        // Encode via version-aware FFI (uses correct struct layouts for detected ABI)
+        let (w, h) = (width as usize, height as usize);
+        let (y_stride, u_stride, v_stride) = yuv.strides();
+        let encoded = self
             .encoder
-            .encode(&yuv)
-            .map_err(|e| EncoderError::EncodeFailed(format!("OpenH264 encode failed: {e:?}")))?;
+            .encode(
+                yuv.y(),
+                yuv.u(),
+                yuv.v(),
+                y_stride as i32,
+                u_stride as i32,
+                v_stride as i32,
+                w as i32,
+                h as i32,
+                timestamp_ms as i64,
+            )
+            .map_err(|e| EncoderError::EncodeFailed(format!("OpenH264 encode failed: {e}")))?;
 
-        let annex_b_data = bitstream.to_vec();
+        let annex_b_data = encoded.to_vec();
         if annex_b_data.is_empty() {
             return Ok(None);
         }
 
-        let is_keyframe = matches!(bitstream.frame_type(), FrameType::IDR | FrameType::I);
+        let is_keyframe = encoded.is_keyframe();
 
         // MS-RDPEGFX requires Annex B format (ITU-H.264 Annex B with start codes)
         // OpenH264 outputs Annex B format directly - use it as-is!
@@ -559,6 +598,11 @@ impl Avc420Encoder {
         debug!("Forced keyframe on next encode");
     }
 
+    /// Get the detected ABI generation.
+    pub fn abi(&self) -> openh264_compat::AbiGeneration {
+        self.encoder.abi()
+    }
+
     pub fn stats(&self) -> EncoderStats {
         EncoderStats {
             frames_encoded: self.frame_count,
@@ -610,6 +654,20 @@ impl Avc420Encoder {
 mod tests {
     use super::*;
 
+    /// Try to create an encoder, returning early if OpenH264 library is not installed.
+    /// Tests that require the library call this instead of unwrap() so CI environments
+    /// without the Cisco binary skip gracefully rather than failing.
+    #[cfg(feature = "h264")]
+    macro_rules! require_openh264 {
+        ($expr:expr) => {
+            match $expr {
+                Ok(enc) => enc,
+                Err(EncoderError::InitFailed(_)) => return,
+                Err(e) => panic!("unexpected encoder error: {e:?}"),
+            }
+        };
+    }
+
     #[test]
     fn test_encoder_config_defaults() {
         let config = EncoderConfig::default();
@@ -630,15 +688,14 @@ mod tests {
     #[test]
     fn test_encoder_creation() {
         let config = EncoderConfig::default();
-        let encoder = Avc420Encoder::new(config);
-        assert!(encoder.is_ok());
+        let _encoder = require_openh264!(Avc420Encoder::new(config));
     }
 
     #[cfg(feature = "h264")]
     #[test]
     fn test_encode_small_frame() {
         let config = EncoderConfig::default();
-        let mut encoder = Avc420Encoder::new(config).unwrap();
+        let mut encoder = require_openh264!(Avc420Encoder::new(config));
 
         // Create a 64x64 black BGRA frame
         let width = 64u32;
@@ -653,7 +710,7 @@ mod tests {
     #[test]
     fn test_invalid_dimensions() {
         let config = EncoderConfig::default();
-        let mut encoder = Avc420Encoder::new(config).unwrap();
+        let mut encoder = require_openh264!(Avc420Encoder::new(config));
 
         // Odd dimensions should fail
         let bgra_data = vec![0u8; 63 * 64 * 4];
@@ -665,6 +722,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_annex_b_to_avc_4byte_start_code() {
         // Single NAL with 4-byte start code: 0x00 0x00 0x00 0x01 + NAL data
         let annex_b = vec![0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x1e];
@@ -679,6 +737,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_annex_b_to_avc_3byte_start_code() {
         // Single NAL with 3-byte start code: 0x00 0x00 0x01 + NAL data
         let annex_b = vec![0x00, 0x00, 0x01, 0x68, 0xce, 0x3c, 0x80];
@@ -691,6 +750,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_annex_b_to_avc_multiple_nals() {
         // Two NALs: SPS + PPS typical pattern
         // Note: NAL data must not contain sequences that look like start codes
@@ -712,6 +772,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_annex_b_to_avc_empty() {
         let annex_b: Vec<u8> = vec![];
         let avc = annex_b_to_avc(&annex_b);
@@ -719,6 +780,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_annex_b_to_avc_no_start_code() {
         // Data without start code should produce empty output
         let annex_b = vec![0x67, 0x42, 0x00, 0x1e];

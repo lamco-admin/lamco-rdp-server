@@ -40,6 +40,10 @@ impl AuthMethod {
 /// User authenticator
 pub struct UserAuthenticator {
     method: AuthMethod,
+    #[cfg_attr(
+        not(feature = "pam-auth"),
+        expect(dead_code, reason = "used only with pam-auth feature")
+    )]
     service_name: String,
 }
 

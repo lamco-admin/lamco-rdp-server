@@ -55,13 +55,12 @@
 //!
 //! # Example
 //!
-//! ```no_run
-//! use wrd_server::server::WrdInputHandler;
-//! use wrd_server::portal::RemoteDesktopManager;
-//! use wrd_server::input::coordinates::MonitorInfo;
+//! ```ignore
+//! use lamco_rdp_server::server::WrdInputHandler;
+//! use lamco_rdp_server::portal::RemoteDesktopManager;
+//! use lamco_rdp_server::input::MonitorInfo;
 //! use std::sync::Arc;
 //!
-//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! let portal = Arc::new(RemoteDesktopManager::new(/* ... */).await?);
 //! let session = portal.create_session().await?;
 //! let monitors = vec![/* MonitorInfo instances */];
@@ -70,11 +69,15 @@
 //!
 //! // Handler is now ready to receive input events from IronRDP
 //! // Events are automatically forwarded to Wayland via Portal
-//! # Ok(())
-//! # }
 //! ```
 
-use std::{sync::Arc, time::Instant};
+use std::{
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+    time::Instant,
+};
 
 use ironrdp_server::{
     KeyboardEvent as IronKeyboardEvent, MouseEvent as IronMouseEvent, RdpServerInputHandler,
@@ -163,6 +166,11 @@ impl LamcoInputHandler {
             let mut last_flush = Instant::now();
             let batch_interval = tokio::time::Duration::from_millis(10);
 
+            // Rate-limit input injection errors to avoid log spam when the
+            // portal session becomes unresponsive (e.g. PipeWire stream pauses)
+            let consecutive_mouse_errors = AtomicU64::new(0);
+            let consecutive_kbd_errors = AtomicU64::new(0);
+
             loop {
                 tokio::select! {
                     Some(event) = input_rx.recv() => {
@@ -189,7 +197,17 @@ impl LamcoInputHandler {
                                 &keyboard_clone,
                                 kbd_event
                             ).await {
-                                error!("Failed to handle batched keyboard event: {}", e);
+                                let count = consecutive_kbd_errors.fetch_add(1, Ordering::Relaxed) + 1;
+                                if count == 1 {
+                                    warn!("Portal keyboard injection failed: {e}");
+                                } else if count.is_power_of_two() {
+                                    warn!("Portal keyboard injection failed ({count} consecutive): {e}");
+                                }
+                            } else {
+                                let prev = consecutive_kbd_errors.swap(0, Ordering::Relaxed);
+                                if prev > 1 {
+                                    info!("Portal keyboard injection recovered after {prev} failures");
+                                }
                             }
                         }
 
@@ -205,7 +223,17 @@ impl LamcoInputHandler {
                                 mouse_event,
                                 primary_stream_id
                             ).await {
-                                error!("Failed to handle batched mouse event: {}", e);
+                                let count = consecutive_mouse_errors.fetch_add(1, Ordering::Relaxed) + 1;
+                                if count == 1 {
+                                    warn!("Portal mouse injection failed: {e}");
+                                } else if count.is_power_of_two() {
+                                    warn!("Portal mouse injection failed ({count} consecutive): {e}");
+                                }
+                            } else {
+                                let prev = consecutive_mouse_errors.swap(0, Ordering::Relaxed);
+                                if prev > 1 {
+                                    info!("Portal mouse injection recovered after {prev} failures");
+                                }
                             }
                         }
 
@@ -219,7 +247,13 @@ impl LamcoInputHandler {
                 }
             }
 
-            info!("Input batching task stopped");
+            let mouse_errs = consecutive_mouse_errors.load(Ordering::Relaxed);
+            let kbd_errs = consecutive_kbd_errors.load(Ordering::Relaxed);
+            if mouse_errs > 0 || kbd_errs > 0 {
+                info!("Input batching task stopped (pending errors: mouse={mouse_errs}, kbd={kbd_errs})");
+            } else {
+                info!("Input batching task stopped");
+            }
         });
 
         info!("Input batching task started (REAL task, 10ms flush interval)");
@@ -300,6 +334,10 @@ impl LamcoInputHandler {
                         );
                         keycode
                     }
+                    #[expect(
+                        unreachable_patterns,
+                        reason = "defensive: future KeyboardEvent variants"
+                    )]
                     other => {
                         error!("handle_key_down returned unexpected event: {:?}", other);
                         return Err(InputError::InvalidKeyEvent(format!(
@@ -582,7 +620,6 @@ impl Clone for LamcoInputHandler {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
     #[test]
     fn test_input_handler_clone() {

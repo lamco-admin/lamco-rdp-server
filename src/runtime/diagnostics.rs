@@ -239,7 +239,9 @@ mod tests {
     #[test]
     fn test_uptime_string_format() {
         let stats = RuntimeStats {
-            start_time: Instant::now() - Duration::from_secs(3661),
+            start_time: Instant::now()
+                .checked_sub(Duration::from_secs(3661))
+                .unwrap(),
             ..Default::default()
         };
         let uptime = stats.uptime_string();

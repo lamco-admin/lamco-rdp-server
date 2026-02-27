@@ -79,7 +79,7 @@ impl StorageProbe {
         backends.push(StorageBackend::EncryptedFile);
         debug!("Encrypted file storage always available");
 
-        backends.sort_by(|a, b| b.service_level().cmp(&a.service_level()));
+        backends.sort_by_key(|b| std::cmp::Reverse(b.service_level()));
 
         let selected = backends.first().cloned();
         let service_level = selected

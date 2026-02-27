@@ -63,6 +63,10 @@ impl AudioFormat {
         }
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "API completeness for AudioFormat")
+    )]
     fn bytes_per_sample(self) -> usize {
         match self {
             Self::F32 => mem::size_of::<f32>(),
@@ -505,7 +509,7 @@ pub fn spawn_test_capture(
                 let mut samples = Vec::with_capacity(samples_per_frame * channels as usize);
 
                 for _ in 0..samples_per_frame {
-                    let sample = (phase.sin() * 0.3) as f32; // -0.3 to 0.3 amplitude
+                    let sample = phase.sin() * 0.3; // -0.3 to 0.3 amplitude
                     for _ in 0..channels {
                         samples.push(sample);
                     }

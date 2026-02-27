@@ -32,8 +32,10 @@ use std::sync::{Arc, Mutex};
 
 use ironrdp_egfx::server::{GraphicsPipelineHandler, GraphicsPipelineServer};
 use ironrdp_graphics::zgfx::CompressionMode;
-use ironrdp_server::{GfxDvcBridge, GfxServerFactory, GfxServerHandle};
-use tokio::sync::RwLock;
+use ironrdp_server::{
+    GfxDvcBridge, GfxServerFactory, GfxServerHandle, ServerEvent, ServerEventSender,
+};
+use tokio::sync::{mpsc, RwLock};
 
 use crate::egfx::LamcoGraphicsHandler;
 
@@ -53,7 +55,7 @@ use crate::egfx::LamcoGraphicsHandler;
 ///
 /// ```ignore
 /// // Check if platform has AVC444 quirk
-/// let force_avc420 = capabilities.profile.has_quirk(&Quirk::Avc444Unreliable);
+/// let force_avc420 = capabilities.profile.has_quirk(&Quirk::ForceAvc420);
 ///
 /// let gfx_factory = LamcoGfxFactory::with_quirks(width, height, force_avc420);
 ///
@@ -174,6 +176,13 @@ impl LamcoGfxFactory {
     /// (i.e., the RDP connection hasn't started the channel attachment phase).
     pub fn server_handle(&self) -> Arc<RwLock<Option<GfxServerHandle>>> {
         Arc::clone(&self.server_handle)
+    }
+}
+
+impl ServerEventSender for LamcoGfxFactory {
+    fn set_sender(&mut self, _sender: mpsc::UnboundedSender<ServerEvent>) {
+        // GFX factory doesn't need the server event sender directly;
+        // EgfxFrameSender already has its own event_tx from server setup.
     }
 }
 

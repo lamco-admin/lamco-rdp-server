@@ -205,16 +205,16 @@ mod tpm_tests {
     use super::*;
 
     #[test]
-    #[ignore] // Requires TPM 2.0 hardware and systemd-creds
+    #[ignore = "Requires TPM 2.0 hardware and systemd-creds"]
     fn test_tpm_availability() {
         match TpmCredentialStore::new() {
             Ok(_) => println!("TPM 2.0 store available"),
-            Err(e) => println!("TPM 2.0 not available: {}", e),
+            Err(e) => println!("TPM 2.0 not available: {e}"),
         }
     }
 
     #[test]
-    #[ignore] // Requires TPM 2.0 hardware
+    #[ignore = "Requires TPM 2.0 hardware"]
     fn test_tpm_roundtrip() {
         let store = TpmCredentialStore::new().expect("TPM not available");
 

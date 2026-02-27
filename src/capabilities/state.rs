@@ -113,6 +113,8 @@ pub enum Subsystem {
     Rendering,
     /// Network/TLS capabilities
     Network,
+    /// Authentication/security capabilities
+    Security,
 }
 
 impl Subsystem {
@@ -124,6 +126,7 @@ impl Subsystem {
             Self::Storage => "🔐",
             Self::Rendering => "🎨",
             Self::Network => "🌐",
+            Self::Security => "🛡️",
         }
     }
 }

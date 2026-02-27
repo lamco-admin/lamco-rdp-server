@@ -40,7 +40,7 @@ use tokio::sync::{mpsc, RwLock};
 use tracing::{debug, error, info, warn};
 use zbus::Connection;
 
-use crate::clipboard::{error::Result, ClipboardFormat, FormatConverterExt};
+use crate::clipboard::{error::Result, ClipboardFormat};
 
 /// Klipper cooperation coordinator
 ///
@@ -202,6 +202,10 @@ impl KlipperCooperationCoordinator {
     /// Internal: Monitor Klipper D-Bus signals
     ///
     /// Subscribes to clipboardHistoryUpdated and reads content on updates.
+    #[expect(
+        clippy::expect_used,
+        reason = "system clock is always after UNIX epoch"
+    )]
     async fn monitor_klipper_signals(
         connection: Arc<Connection>,
         event_tx: mpsc::UnboundedSender<CooperationEvent>,
@@ -330,7 +334,7 @@ impl KlipperCooperationCoordinator {
                 Ok(content) => {
                     let timestamp_ms = SystemTime::now()
                         .duration_since(SystemTime::UNIX_EPOCH)
-                        .unwrap()
+                        .expect("system clock before UNIX epoch")
                         .as_millis() as u64;
 
                     info!("│ ✅ Read {} bytes from Klipper", content.len());
@@ -431,13 +435,13 @@ mod tests {
             content: "test".to_string(),
             timestamp_ms: 123456,
         };
-        assert!(format!("{:?}", event).contains("KlipperContentUpdated"));
+        assert!(format!("{event:?}").contains("KlipperContentUpdated"));
 
         let event = CooperationEvent::CooperationFailed {
             reason: "test error".to_string(),
             retry: true,
         };
-        assert!(format!("{:?}", event).contains("CooperationFailed"));
+        assert!(format!("{event:?}").contains("CooperationFailed"));
     }
 
     #[test]

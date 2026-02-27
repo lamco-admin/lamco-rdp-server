@@ -54,6 +54,7 @@ pub enum PipelineState {
 }
 
 pub struct AudioPipeline {
+    #[expect(dead_code, reason = "retained for reconfiguration support")]
     config: PipelineConfig,
     state: Arc<RwLock<PipelineState>>,
     encoder: Option<AudioEncoder>,
@@ -211,6 +212,7 @@ impl AudioPipeline {
 pub struct FrameBuffer {
     samples: Vec<i16>,
     samples_per_frame: usize,
+    #[expect(dead_code, reason = "retained for channel-aware processing")]
     channels: usize,
 }
 

@@ -121,6 +121,7 @@ pub struct EncodingStats {
 /// Receives video frames and produces H.264 encoded data for EGFX transmission.
 pub struct EgfxVideoHandler {
     /// Encoder configuration
+    #[expect(dead_code, reason = "used for runtime reconfiguration")]
     config: EgfxVideoConfig,
 
     /// H.264 encoder instance (behind feature flag)
@@ -254,7 +255,7 @@ impl EgfxVideoHandler {
         // Send to output channel (non-blocking)
         match self.output_tx.try_send(encoded_frame) {
             Ok(()) => {
-                if frame_num % 30 == 0 {
+                if frame_num.is_multiple_of(30) {
                     debug!(
                         "📹 Encoded frame {} in {}us, keyframe={}",
                         frame_num, encode_time_us, h264_frame.is_keyframe
@@ -314,6 +315,10 @@ pub(super) struct EgfxVideoHandlerFactory {
     config: EgfxVideoConfig,
 }
 
+#[expect(
+    dead_code,
+    reason = "factory pattern for multi-monitor video handler creation"
+)]
 impl EgfxVideoHandlerFactory {
     pub(super) fn new(config: EgfxVideoConfig) -> Self {
         Self { config }

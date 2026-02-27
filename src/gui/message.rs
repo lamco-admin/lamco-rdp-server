@@ -15,6 +15,8 @@ use crate::{
 /// Main application message type
 #[derive(Debug, Clone)]
 pub enum Message {
+    /// No-op (used for async tasks that report via logging, not GUI)
+    Noop,
     /// Switch to a different tab
     TabSelected(Tab),
     /// Select a category (switches to first tab in that category)
@@ -30,6 +32,8 @@ pub enum Message {
     ServerSessionTimeoutChanged(String),
     /// Use XDG Portals toggled
     ServerUsePortalsToggled(bool),
+    /// View-only mode toggled (video only, no input/clipboard)
+    ServerViewOnlyToggled(bool),
 
     /// Certificate path changed
     SecurityCertPathChanged(String),

@@ -84,6 +84,10 @@ pub enum ServiceId {
     /// No-authentication mode
     /// Always available, used when PAM unavailable or for testing
     NoAuthentication,
+
+    /// Wayland data-control clipboard protocol (ext-data-control-v1 or wlr-data-control-v1)
+    /// Native-only (blocked by security-context-v1 in Flatpak sandbox)
+    ClipboardDataControl,
 }
 
 impl ServiceId {
@@ -112,6 +116,7 @@ impl ServiceId {
             // Authentication services
             Self::PamAuthentication => "PAM Authentication",
             Self::NoAuthentication => "No Authentication",
+            Self::ClipboardDataControl => "Clipboard Data-Control",
         }
     }
 
@@ -142,6 +147,8 @@ impl ServiceId {
             // Authentication services
             Self::PamAuthentication,
             Self::NoAuthentication,
+            // Clipboard data-control
+            Self::ClipboardDataControl,
         ]
     }
 }

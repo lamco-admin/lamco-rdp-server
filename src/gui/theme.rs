@@ -90,6 +90,7 @@ pub fn primary_button_style(_theme: &Theme, status: button::Status) -> button::S
             radius: 6.0.into(),
         },
         shadow: accent_glow(),
+        snap: false,
     };
 
     match status {
@@ -127,6 +128,7 @@ pub fn secondary_button_style(_theme: &Theme, status: button::Status) -> button:
             radius: 6.0.into(),
         },
         shadow: Shadow::default(),
+        snap: false,
     };
 
     match status {
@@ -165,6 +167,7 @@ pub fn danger_button_style(_theme: &Theme, status: button::Status) -> button::St
             offset: iced::Vector::new(0.0, 0.0),
             blur_radius: 8.0,
         },
+        snap: false,
     };
 
     match status {
@@ -206,6 +209,7 @@ pub fn success_button_style(_theme: &Theme, status: button::Status) -> button::S
             offset: iced::Vector::new(0.0, 0.0),
             blur_radius: 8.0,
         },
+        snap: false,
     };
 
     match status {
@@ -256,6 +260,7 @@ pub fn tab_button_style(active: bool) -> impl Fn(&Theme, button::Status) -> butt
                 radius: 8.0.into(),
             },
             shadow: Shadow::default(),
+            snap: false,
         };
 
         match status {
@@ -285,6 +290,7 @@ pub fn section_container_style(_theme: &Theme) -> container::Style {
         },
         text_color: Some(colors::TEXT_PRIMARY),
         shadow: card_shadow(),
+        snap: false,
     }
 }
 
@@ -303,6 +309,7 @@ pub fn log_viewer_style(_theme: &Theme) -> container::Style {
             offset: iced::Vector::new(0.0, 2.0),
             blur_radius: 4.0,
         },
+        snap: false,
     }
 }
 
@@ -316,6 +323,7 @@ pub fn collapsible_header_style(_theme: &Theme) -> container::Style {
         },
         text_color: Some(colors::TEXT_PRIMARY),
         shadow: Shadow::default(),
+        snap: false,
     }
 }
 
@@ -346,6 +354,7 @@ pub fn preset_button_style(selected: bool) -> impl Fn(&Theme, button::Status) ->
             } else {
                 Shadow::default()
             },
+            snap: false,
         };
 
         match status {
@@ -417,6 +426,7 @@ pub fn header_style(_theme: &Theme) -> container::Style {
             offset: iced::Vector::new(0.0, 2.0),
             blur_radius: 8.0,
         },
+        snap: false,
     }
 }
 
@@ -444,6 +454,7 @@ pub fn status_badge_style(running: bool) -> impl Fn(&Theme) -> container::Style 
             },
             text_color: Some(colors::TEXT_PRIMARY),
             shadow: Shadow::default(),
+            snap: false,
         }
     }
 }
@@ -488,6 +499,22 @@ pub fn text_input_style(_theme: &Theme, status: text_input::Status) -> text_inpu
     }
 }
 
+/// Read-only path display for sandbox mode (Flatpak).
+/// Visually similar to a text input but muted to indicate non-editable state.
+pub fn path_display_style(_theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(Background::Color(colors::SURFACE)),
+        border: Border {
+            color: colors::BORDER,
+            width: 1.0,
+            radius: 6.0.into(),
+        },
+        text_color: Some(colors::TEXT_MUTED),
+        shadow: Shadow::default(),
+        snap: false,
+    }
+}
+
 /// Category dropdown button style
 pub fn category_button_style(
     is_active: bool,
@@ -523,6 +550,7 @@ pub fn category_button_style(
                 radius: 6.0.into(),
             },
             shadow: Shadow::default(),
+            snap: false,
         };
 
         match status {
@@ -567,6 +595,7 @@ pub fn dropdown_item_style(is_selected: bool) -> impl Fn(&Theme, button::Status)
                 radius: 4.0.into(),
             },
             shadow: Shadow::default(),
+            snap: false,
         };
 
         match status {

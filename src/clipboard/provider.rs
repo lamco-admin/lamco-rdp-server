@@ -1,116 +1,86 @@
 //! Clipboard Provider Abstraction
 //!
-//! **Execution Path:** N/A (trait definition + placeholders)
-//! **Status:** 🚧 PLANNED (v1.4.0+) - Trait defined but not actively used
-//! **Platform:** Universal (when implemented)
-//! **Purpose:** Backend abstraction for Portal vs Wayland data-control
-//!
-//! Defines a unified interface for clipboard backends (Portal, Direct ext-data-control-v1).
-//! Allows ClipboardOrchestrator to work with different backends without knowing implementation details.
-//!
-//! **Current State:** Trait and placeholders exist but unused. ClipboardOrchestrator uses Portal directly.
-//! **Future (v1.4.0+):** Full provider abstraction when implementing WaylandDataControlMode.
+//! Defines a unified interface for clipboard backends (Portal D-Bus,
+//! Wayland data-control, Mutter D-Bus). The `ClipboardOrchestrator`
+//! calls provider methods without knowing which backend is active.
 
 use async_trait::async_trait;
 use tokio::sync::mpsc;
 
 use crate::clipboard::error::Result;
 
-/// Events from clipboard provider
+/// Events from a clipboard provider backend.
+///
+/// All providers translate their native signals into this common event type
+/// before sending to the orchestrator's event channel.
 #[derive(Debug, Clone)]
 pub enum ClipboardProviderEvent {
-    /// Clipboard ownership changed (other app or manager took over)
+    /// System clipboard ownership changed.
     ///
-    /// Contains MIME types announced by new owner.
-    /// For cooperation mode, this triggers reading and syncing.
-    SelectionChanged(Vec<String>),
-
-    /// Data request from system
-    ///
-    /// System is requesting data for a specific MIME type.
-    /// Provider should respond via write_data().
-    DataRequest {
-        /// MIME type being requested
-        mime_type: String,
-        /// Request ID for matching response
-        request_id: u64,
+    /// `mime_types`: MIME types available from the new owner.
+    /// `force`: true = authoritative source (D-Bus extension, data-control signal),
+    ///          false = potentially echoed (Portal SelectionOwnerChanged)
+    SelectionChanged {
+        mime_types: Vec<String>,
+        force: bool,
     },
 
-    /// Data response from system
+    /// System requests data for a MIME type (delayed rendering / SelectionTransfer).
     ///
-    /// System provided data in response to our read request.
-    DataResponse {
-        /// MIME type of the data
-        mime_type: String,
-        /// The clipboard data
-        data: Vec<u8>,
-        /// Whether this was an error response
-        is_error: bool,
-    },
+    /// The provider identified by `serial` that we need to fulfill via `complete_transfer()`.
+    SelectionTransfer { serial: u32, mime_type: String },
 }
 
-/// Clipboard provider backend interface
+/// Clipboard provider backend interface.
 ///
-/// Abstracts over Portal D-Bus and future direct ext-data-control-v1 implementations.
-/// Provides unified interface for clipboard operations regardless of backend.
+/// Abstracts over Portal D-Bus, Wayland data-control, and Mutter D-Bus
+/// clipboard implementations. The orchestrator calls these methods
+/// without knowing which backend is active.
 #[async_trait]
 pub trait ClipboardProvider: Send + Sync {
-    /// Backend name for logging
+    /// Backend name for logging and diagnostics.
     fn name(&self) -> &'static str;
 
-    /// Announce clipboard ownership with MIME types
+    /// Whether this provider supports file transfer (URI list).
     ///
-    /// Takes clipboard ownership and announces available formats.
-    /// Other apps can then request data from us.
+    /// Portal and data-control support it. Mutter D-Bus is text-focused.
+    fn supports_file_transfer(&self) -> bool;
+
+    /// Announce clipboard ownership with available MIME types.
+    ///
+    /// Called when RDP client copies. Takes ownership of the system clipboard
+    /// and announces formats (delayed rendering: data transferred on demand).
     async fn announce_formats(&self, mime_types: Vec<String>) -> Result<()>;
 
-    /// Read clipboard data for specific MIME type
+    /// Read clipboard data for a specific MIME type.
     ///
-    /// Requests data from current clipboard owner.
-    /// Response will arrive via ClipboardProviderEvent::DataResponse.
-    async fn read_data(&self, mime_type: String) -> Result<u64>;
+    /// Called when the Linux clipboard is owned by another app and we need
+    /// to read data (Linux owns clipboard, Windows wants it).
+    async fn read_data(&self, mime_type: &str) -> Result<Vec<u8>>;
 
-    /// Write data in response to system request
+    /// Complete a SelectionTransfer request (write data to system clipboard).
     ///
-    /// Called when system requests data from us (after we announced).
-    async fn write_data(&self, request_id: u64, data: Vec<u8>) -> Result<()>;
+    /// Called when a Linux app pastes after we announced ownership. The `serial`
+    /// matches the `SelectionTransfer` event from `subscribe()`.
+    async fn complete_transfer(
+        &self,
+        serial: u32,
+        mime_type: &str,
+        data: Vec<u8>,
+        success: bool,
+    ) -> Result<()>;
 
-    /// Subscribe to provider events
+    /// Subscribe to provider events.
     ///
-    /// Returns a receiver for clipboard events (selection changes, data requests, etc.)
+    /// Returns a receiver for selection-changed and transfer-request events.
+    /// The orchestrator spawns a listener that forwards these to its event channel.
     fn subscribe(&self) -> mpsc::UnboundedReceiver<ClipboardProviderEvent>;
 
-    /// Check if provider is available and functional
-    ///
-    /// Performs basic health check (D-Bus connection, Portal session, etc.)
+    /// Check if the provider is alive and functional.
     async fn health_check(&self) -> Result<()>;
-}
 
-/// Portal-based clipboard provider (Placeholder)
-///
-/// NOTE: Not currently used. ClipboardManager uses Portal directly.
-/// Defined for trait completeness and future provider abstraction work.
-pub struct PortalClipboardProvider {
-    _phantom: std::marker::PhantomData<()>,
-}
-
-/// Direct ext-data-control-v1 provider (Future: v1.4.0+)
-///
-/// Uses ext-data-control-v1 Wayland protocol directly.
-/// Lower latency, more control, but only works in native (non-Flatpak) mode.
-///
-/// Status: Not yet implemented. Placeholder for Sprint 3-4 work.
-pub struct DirectDataControlProvider {
-    _phantom: std::marker::PhantomData<()>,
-}
-
-impl DirectDataControlProvider {
-    /// Create new Direct provider (not yet implemented)
-    pub fn new() -> Result<Self> {
-        Err(crate::clipboard::error::ClipboardError::PortalError(
-            "Direct data-control provider not yet implemented (Sprint 3-4)".to_string(),
-        ))
-    }
+    /// Shut down the provider (stop listeners, release resources).
+    async fn shutdown(&self);
 }
 
 #[cfg(test)]
@@ -119,13 +89,16 @@ mod tests {
 
     #[test]
     fn test_provider_event_debug() {
-        let event = ClipboardProviderEvent::SelectionChanged(vec!["text/plain".to_string()]);
-        assert!(format!("{:?}", event).contains("SelectionChanged"));
-
-        let event = ClipboardProviderEvent::DataRequest {
-            mime_type: "text/plain".to_string(),
-            request_id: 123,
+        let event = ClipboardProviderEvent::SelectionChanged {
+            mime_types: vec!["text/plain".to_string()],
+            force: true,
         };
-        assert!(format!("{:?}", event).contains("DataRequest"));
+        assert!(format!("{event:?}").contains("SelectionChanged"));
+
+        let event = ClipboardProviderEvent::SelectionTransfer {
+            serial: 42,
+            mime_type: "text/plain".to_string(),
+        };
+        assert!(format!("{event:?}").contains("SelectionTransfer"));
     }
 }

@@ -50,7 +50,7 @@
 //!
 //! # Example Usage
 //!
-//! ```no_run
+//! ```text
 //! let mux = EventMultiplexer::new();
 //!
 //! // Producers send to appropriate queues
@@ -177,7 +177,7 @@ impl EventMultiplexer {
     pub(super) fn send_graphics_nonblocking(&mut self, frame: GraphicsFrame) {
         if self.graphics_tx.try_send(frame).is_err() {
             self.graphics_dropped += 1;
-            if self.graphics_dropped % 100 == 0 {
+            if self.graphics_dropped.is_multiple_of(100) {
                 debug!(
                     "Graphics queue full - dropped {} frames total",
                     self.graphics_dropped
@@ -214,7 +214,7 @@ impl EventMultiplexer {
 
         if coalesce_count > 0 {
             self.graphics_coalesced += coalesce_count as u64;
-            if self.graphics_coalesced % 100 == 0 {
+            if self.graphics_coalesced.is_multiple_of(100) {
                 debug!(
                     "Graphics coalescing: {} frames coalesced total",
                     self.graphics_coalesced

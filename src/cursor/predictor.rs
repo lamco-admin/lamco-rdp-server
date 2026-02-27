@@ -345,6 +345,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[expect(clippy::float_cmp, reason = "comparing against known default literal")]
     fn test_default_config() {
         let config = PredictorConfig::default();
         assert_eq!(config.history_size, 8);
@@ -425,8 +426,7 @@ mod tests {
 
         assert!(
             dist <= 25.0, // Allow small margin for rounding
-            "Distance {} should be <= 25",
-            dist
+            "Distance {dist} should be <= 25"
         );
     }
 

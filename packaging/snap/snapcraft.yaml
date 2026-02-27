@@ -1,0 +1,92 @@
+name: lamco-rdp-server
+title: Lamco RDP Server
+version: '1.4.0'
+summary: Native Wayland RDP server — Community Edition
+description: |
+  Lamco RDP Server — Community Edition
+
+  Native Wayland RDP server using xdg-desktop-portal for screen capture
+  and input injection. Built on IronRDP. Works with any Wayland
+  compositor supporting RemoteDesktop and ScreenCast portals (GNOME, KDE,
+  Sway, Hyprland, etc.).
+
+  Connect to your Linux desktop from any standard RDP client (mstsc.exe,
+  FreeRDP, Remmina). Includes graphical configuration tool, clipboard
+  (Windows to Linux), and audio streaming.
+
+  This is the Community Edition — free to use under the BUSL-1.1 license.
+  For full bidirectional clipboard support, use the native installation.
+license: BUSL-1.1
+icon: snap/gui/icon.png
+website: https://www.lamco.ai
+source-code: https://github.com/lamco-admin/lamco-rdp-server
+issues: https://github.com/lamco-admin/lamco-rdp-server/issues
+contact: https://github.com/lamco-admin/lamco-rdp-server/issues
+base: core24
+grade: stable
+confinement: strict
+
+platforms:
+  amd64:
+    build-on: [amd64]
+    build-for: [amd64]
+
+apps:
+  lamco-rdp-server:
+    command: bin/lamco-rdp-server
+    plugs:
+      - network
+      - network-bind
+      - wayland
+      - desktop
+      - audio-playback
+      - screen-inhibit-control
+    environment:
+      RUST_LOG: info
+  gui:
+    command: bin/lamco-rdp-server-gui
+    plugs:
+      - network
+      - network-bind
+      - wayland
+      - desktop
+      - desktop-legacy
+      - opengl
+      - audio-playback
+      - screen-inhibit-control
+    environment:
+      RUST_LOG: info
+
+parts:
+  lamco-rdp-server:
+    plugin: rust
+    source: https://github.com/lamco-admin/lamco-rdp-server/releases/download/v1.4.0/lamco-rdp-server-1.4.0.tar.xz
+    # Vendored tarball includes .cargo/config.toml + vendor/
+    rust-cargo-parameters:
+      - --frozen
+      - --no-default-features
+      - --features
+      - h264,libei,gui
+    build-packages:
+      - pkg-config
+      - clang
+      - cmake
+      - nasm
+      - libpipewire-0.3-dev
+      - libxkbcommon-dev
+      - libfuse3-dev
+      - libdbus-1-dev
+      - libssl-dev
+    stage-packages:
+      - libpipewire-0.3-0
+      - libxkbcommon0
+      - libfuse3-3
+      - libdbus-1-3
+      - libssl3
+      - libgl1
+      - libegl1
+      - libgles2
+      - libvulkan1
+      - libwayland-client0
+      - libwayland-egl1
+      - libfontconfig1

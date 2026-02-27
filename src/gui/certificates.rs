@@ -302,7 +302,7 @@ mod tests {
     #[test]
     fn test_generate_default_certificate() {
         let params = CertGenParams::default();
-        let result = generate_self_signed_certificate(&params);
+        let result = generate_certificate_internal(&params);
         assert!(result.is_ok());
 
         let cert = result.unwrap();
@@ -314,12 +314,12 @@ mod tests {
     #[test]
     fn test_fingerprint_format() {
         let params = CertGenParams::default();
-        let cert = generate_self_signed_certificate(&params).unwrap();
+        let cert = generate_certificate_internal(&params).unwrap();
 
         // Fingerprint should be colon-separated hex pairs
         let parts: Vec<&str> = cert.fingerprint.split(':').collect();
         assert_eq!(parts.len(), 32); // SHA-256 = 32 bytes
-        for part in parts {
+        for part in &parts {
             assert_eq!(part.len(), 2);
             assert!(part.chars().all(|c| c.is_ascii_hexdigit()));
         }

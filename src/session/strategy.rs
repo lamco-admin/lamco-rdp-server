@@ -6,11 +6,16 @@
 //! - libei/EIS (wlroots via Portal, Flatpak-compatible)
 //! - wlr-direct (wlroots native protocols, no Flatpak)
 
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 
 use anyhow::Result;
 use async_trait::async_trait;
 use tokio::sync::RwLock;
+
+use crate::health::HealthReporter;
 
 /// Portal clipboard components
 ///
@@ -39,6 +44,16 @@ pub struct ClipboardComponents {
             >,
         >,
     >,
+    /// Session validity — false when compositor has destroyed the Portal session.
+    /// Clipboard operations should check this before calling Portal D-Bus methods.
+    pub session_valid: Arc<AtomicBool>,
+}
+
+impl ClipboardComponents {
+    /// Check if the Portal session is still valid for clipboard operations.
+    pub fn is_session_valid(&self) -> bool {
+        self.session_valid.load(Ordering::Acquire)
+    }
 }
 
 /// Common session handle trait
@@ -62,11 +77,37 @@ pub trait SessionHandle: Send + Sync {
 
     async fn notify_pointer_axis(&self, dx: f64, dy: f64) -> Result<()>;
 
+    // === Health Integration ===
+
+    /// Wire a health reporter into this session handle.
+    ///
+    /// Called once after session creation. The reporter is used to notify the
+    /// health monitor of session lifecycle events (closed, invalidated, errors).
+    /// Default: no-op for strategies that don't support health reporting.
+    fn set_health_reporter(&self, _reporter: HealthReporter) {}
+
     // === Clipboard Support ===
 
     /// Returns Some for Portal strategy (shares session), None for Mutter (no clipboard API).
     /// When None, caller must create a separate Portal session for clipboard operations.
     fn portal_clipboard(&self) -> Option<ClipboardComponents>;
+
+    /// Returns the Mutter clipboard manager if available (MutterDirect strategy only).
+    /// Used to create MutterClipboardProvider without exposing MutterClipboardManager broadly.
+    fn mutter_clipboard(&self) -> Option<std::sync::Arc<crate::mutter::MutterClipboardManager>> {
+        None
+    }
+
+    /// Returns the data-control clipboard backend if available (portal-generic strategy only).
+    /// Used to create DataControlClipboardProvider for wlroots compositors.
+    #[cfg(feature = "portal-generic")]
+    fn clipboard_backend(
+        &self,
+    ) -> Option<
+        std::sync::Arc<std::sync::Mutex<Box<dyn xdg_desktop_portal_generic::ClipboardBackend>>>,
+    > {
+        None
+    }
 }
 
 /// PipeWire access method
@@ -99,6 +140,11 @@ pub enum SessionType {
     WlrDirect,
     /// libei/EIS protocol via Portal RemoteDesktop
     Libei,
+    /// Embedded portal-generic backend (wlroots native video + input + clipboard)
+    PortalGeneric,
+    /// ScreenCast-only (view-only, no input injection)
+    /// Used when view-only mode is configured, or as fallback when no input strategy is available
+    ScreenCastOnly,
 }
 
 impl std::fmt::Display for SessionType {
@@ -108,6 +154,8 @@ impl std::fmt::Display for SessionType {
             SessionType::MutterDirect => write!(f, "Mutter Direct API"),
             SessionType::WlrDirect => write!(f, "wlr-direct"),
             SessionType::Libei => write!(f, "libei/EIS"),
+            SessionType::PortalGeneric => write!(f, "portal-generic (embedded)"),
+            SessionType::ScreenCastOnly => write!(f, "ScreenCast-only (view-only)"),
         }
     }
 }

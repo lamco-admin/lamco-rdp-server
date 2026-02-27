@@ -632,8 +632,14 @@ fn bgra_to_yuv444_neon(bgra: &[u8], frame: &mut Yuv444Frame, matrix: ColorMatrix
 }
 
 pub fn subsample_chroma_420(chroma_444: &[u8], width: usize, height: usize) -> Vec<u8> {
-    assert!(width % 2 == 0, "Width must be even for 4:2:0 subsampling");
-    assert!(height % 2 == 0, "Height must be even for 4:2:0 subsampling");
+    assert!(
+        width.is_multiple_of(2),
+        "Width must be even for 4:2:0 subsampling"
+    );
+    assert!(
+        height.is_multiple_of(2),
+        "Height must be even for 4:2:0 subsampling"
+    );
     assert_eq!(
         chroma_444.len(),
         width * height,
@@ -1107,17 +1113,9 @@ mod tests {
 
         // All Y should be 255, U/V should be 128
         for i in 0..8 {
-            assert_eq!(yuv.y[i], 255, "Y[{}] should be 255", i);
-            assert!(
-                (yuv.u[i] as i32 - 128).abs() <= 1,
-                "U[{}] should be ~128",
-                i
-            );
-            assert!(
-                (yuv.v[i] as i32 - 128).abs() <= 1,
-                "V[{}] should be ~128",
-                i
-            );
+            assert_eq!(yuv.y[i], 255, "Y[{i}] should be 255");
+            assert!((yuv.u[i] as i32 - 128).abs() <= 1, "U[{i}] should be ~128");
+            assert!((yuv.v[i] as i32 - 128).abs() <= 1, "V[{i}] should be ~128");
         }
     }
 

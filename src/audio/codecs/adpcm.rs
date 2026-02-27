@@ -202,9 +202,9 @@ impl AdpcmEncoder {
                 let mut sample_idx = 2; // Skip first sample (in header)
                 while sample_idx < pcm.len() {
                     let mut left_nibbles = [0u8; 4];
-                    for j in 0..4 {
+                    for (j, nibble) in left_nibbles.iter_mut().enumerate() {
                         let idx = sample_idx + j * 2;
-                        left_nibbles[j] = if idx < pcm.len() {
+                        *nibble = if idx < pcm.len() {
                             Self::encode_sample(&mut self.left, pcm[idx])
                         } else {
                             0
@@ -214,9 +214,9 @@ impl AdpcmEncoder {
                     output.push(left_nibbles[2] | (left_nibbles[3] << 4));
 
                     let mut right_nibbles = [0u8; 4];
-                    for j in 0..4 {
+                    for (j, nibble) in right_nibbles.iter_mut().enumerate() {
                         let idx = sample_idx + 1 + j * 2;
-                        right_nibbles[j] = if idx < pcm.len() {
+                        *nibble = if idx < pcm.len() {
                             Self::encode_sample(&mut self.right, pcm[idx])
                         } else {
                             0
@@ -378,11 +378,7 @@ mod tests {
             let tolerance = if i < 50 { 3000 } else { 1500 };
             assert!(
                 error < tolerance,
-                "ADPCM roundtrip error at sample {}: {} vs {} (error: {})",
-                i,
-                orig,
-                dec,
-                error
+                "ADPCM roundtrip error at sample {i}: {orig} vs {dec} (error: {error})"
             );
         }
     }
@@ -418,7 +414,8 @@ mod tests {
         let encoder = AdpcmEncoder::new(2, 1017);
         // Standard stereo block: 8 (headers) + (1016 * 2 / 2) = 8 + 1016 = 1024
         // But actual calculation: (samples_per_block - 1) * channels / 2
-        let expected = 8 + (1016 * 2 + 1) / 2;
+        // Expected: 8 + (1016 * 2 + 1) / 2 = 1025
+        _ = 8 + (1016 * 2 + 1) / 2;
         assert!(
             encoder.block_size() > 0,
             "Block size should be positive: {}",

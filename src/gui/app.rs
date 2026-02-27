@@ -8,12 +8,12 @@ use iced::{
     widget::{button, column, container, image, row, scrollable, text},
     Alignment, Element, Length, Subscription, Task,
 };
-use tracing::{debug, info};
+use tracing::debug;
 
 use crate::gui::widgets::space;
 
 /// Lamb head logo icon (48x48 PNG)
-static LOGO_ICON: &[u8] = include_bytes!("../../assets/icons/io.lamco.rdp-server-48.png");
+static LOGO_ICON: &[u8] = include_bytes!("../../data/icons/io.lamco.rdp-server-48.png");
 use parking_lot::Mutex;
 use tokio::sync::mpsc;
 
@@ -96,6 +96,7 @@ impl ConfigGuiApp {
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
+            Message::Noop => Task::none(),
             Message::TabSelected(tab) => {
                 self.current_tab = tab;
                 Task::none()
@@ -151,6 +152,11 @@ impl ConfigGuiApp {
             }
             Message::ServerUsePortalsToggled(val) => {
                 self.state.config.server.use_portals = val;
+                self.state.mark_dirty();
+                Task::none()
+            }
+            Message::ServerViewOnlyToggled(val) => {
+                self.state.config.server.view_only = val;
                 self.state.mark_dirty();
                 Task::none()
             }
@@ -1223,6 +1229,15 @@ impl ConfigGuiApp {
                             _ => "Server started".to_string(),
                         };
                         self.state.add_message(MessageLevel::Success, msg);
+
+                        // In Flatpak, register with Background portal so the server
+                        // survives GUI close (GNOME 43+ kills unregistered bg processes)
+                        if crate::config::is_flatpak() {
+                            return Task::perform(
+                                crate::gui::server_process::register_background_portal(),
+                                |()| Message::Noop,
+                            );
+                        }
                     }
                     Err(e) => {
                         self.state.server_status =
@@ -1500,12 +1515,49 @@ impl ConfigGuiApp {
                 Task::none()
             }
             Message::ExportLogs => {
-                // TODO: Implement log export
-                self.state.add_message(
-                    MessageLevel::Info,
-                    "Log export not yet implemented".to_string(),
-                );
-                Task::none()
+                let logs: Vec<(String, String, String)> = self
+                    .state
+                    .log_buffer
+                    .iter()
+                    .map(|l| {
+                        (
+                            l.timestamp.clone(),
+                            format!("{:?}", l.level),
+                            l.message.clone(),
+                        )
+                    })
+                    .collect();
+
+                Task::perform(
+                    async move {
+                        let file = rfd::AsyncFileDialog::new()
+                            .set_file_name("lamco-rdp-server-logs.txt")
+                            .add_filter("Log files", &["txt", "log"])
+                            .save_file()
+                            .await;
+                        match file {
+                            Some(handle) => {
+                                let mut content = format!(
+                                    "# Lamco RDP Server Logs\n# Exported at: {}\n\n",
+                                    chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
+                                );
+                                for (ts, level, msg) in &logs {
+                                    content.push_str(&format!("{} [{}] {}\n", ts, level, msg));
+                                }
+                                handle
+                                    .write(content.as_bytes())
+                                    .await
+                                    .map(|_| format!("Logs exported ({})", handle.file_name()))
+                                    .map_err(|e| format!("Failed to write: {}", e))
+                            }
+                            None => Err("Export cancelled".to_string()),
+                        }
+                    },
+                    |result| match result {
+                        Ok(msg) => Message::ShowInfo(msg),
+                        Err(msg) => Message::ShowError(msg),
+                    },
+                )
             }
 
             Message::ShowInfo(msg) => {

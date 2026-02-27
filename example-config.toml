@@ -1,0 +1,356 @@
+# lamco-rdp-server Configuration Example
+#
+# Location depends on deployment:
+# - Native (root): /etc/lamco-rdp-server/config.toml
+# - Native (user): ~/.config/lamco-rdp-server/config.toml
+# - Flatpak: ~/.var/app/io.lamco.rdp-server/config/config.toml
+#
+# Or specify with --config flag
+
+# =============================================================================
+# Server Settings
+# =============================================================================
+[server]
+# Listen address and port (format: IP:PORT)
+listen_addr = "0.0.0.0:3389"
+# Maximum concurrent connections (0 = unlimited)
+max_connections = 10
+# Session timeout in seconds (0 = no timeout)
+session_timeout = 0
+# Use XDG Desktop Portals for screen capture (recommended)
+use_portals = true
+# View-only mode: video streaming only, no input injection or clipboard
+# Useful for monitoring, presentations, or compositors without RemoteDesktop portal
+# view_only = false
+
+# =============================================================================
+# Security Configuration
+# =============================================================================
+[security]
+# TLS certificate path (PEM format)
+# Native (root): /etc/lamco-rdp-server/cert.pem
+# Native (user): ~/.config/lamco-rdp-server/cert.pem
+# Flatpak: ~/.var/app/io.lamco.rdp-server/config/config.toml
+cert_path = "/etc/lamco-rdp-server/cert.pem"
+# TLS private key path (PEM format)
+# Same directory as certificate
+key_path = "/etc/lamco-rdp-server/key.pem"
+
+# Enable Network Level Authentication (requires auth_method = "pam")
+# NLA authenticates before establishing the RDP session
+enable_nla = false
+
+# Authentication method:
+#   "none" - No authentication required (default)
+#            Anyone who can reach the server can view your desktop.
+#            Appropriate for: personal use, trusted networks, Flatpak.
+#   "pam"  - PAM authentication against system accounts
+#            Requires valid system username/password to connect.
+#            Only available in native installs (not Flatpak).
+#            If configured but unavailable, falls back to "none" with warning.
+auth_method = "none"
+
+# Require TLS 1.3 (more secure but may have compatibility issues)
+require_tls_13 = false
+
+# =============================================================================
+# Video Configuration
+# =============================================================================
+# Note: Encoder settings are in [hardware_encoding], bitrate in [egfx],
+# and damage tracking in [damage_tracking] sections below.
+
+[video]
+# Target frames per second
+target_fps = 30
+# Cursor mode: "metadata" (separate), "embedded" (in frame), "hidden"
+cursor_mode = "metadata"
+
+# =============================================================================
+# Audio Configuration (RDPSND)
+# =============================================================================
+[audio]
+# Enable audio streaming to RDP client
+enabled = true
+# Preferred codec: "opus", "pcm", "adpcm", "auto"
+# - opus: High quality, low bandwidth (recommended)
+# - pcm: Uncompressed, highest quality
+# - adpcm: Legacy compatibility
+# - auto: Client chooses best supported codec
+codec = "auto"
+# Sample rate in Hz: 8000, 16000, 22050, 44100, 48000
+sample_rate = 48000
+# Channels: 1 (mono), 2 (stereo)
+channels = 2
+# Frame duration in ms: 10, 20, 40, 60 (lower = less latency)
+frame_ms = 20
+# OPUS bitrate in bps (32000-256000 typical)
+opus_bitrate = 64000
+
+# =============================================================================
+# Input Configuration
+# =============================================================================
+[input]
+# Use libei for input injection (Wayland native)
+use_libei = true
+# Keyboard layout: "auto" (detect from client) or specific layout
+keyboard_layout = "auto"
+# Enable touch input support
+enable_touch = false
+
+# =============================================================================
+# Clipboard Configuration
+# =============================================================================
+[clipboard]
+# Enable clipboard synchronization
+enabled = true
+# Maximum clipboard size in bytes (10 MB default)
+max_size = 10485760
+# Rate limit between clipboard operations in ms
+rate_limit_ms = 200
+# Allowed MIME types (empty = all types allowed)
+# Example: ["text/plain", "text/html", "image/png"]
+allowed_types = []
+
+# [EXPERIMENTAL] Include x-kde-syncselection hint for Klipper
+# When enabled on KDE Plasma, adds "application/x-kde-syncselection" to clipboard
+# announcements. This causes Klipper to skip processing entirely, preventing takeover.
+#
+# WARNING: This MIME type is for Klipper's internal use. Using it may:
+#   - Prevent Klipper features (clipboard history, URL actions)
+#   - Interfere with KDE's clipboard synchronization
+#   - Break in future Plasma versions
+#
+# RECOMMENDED: Leave disabled (false) and use re-announce mitigation instead.
+# Only enable for testing or if re-announce doesn't work.
+# Default: false
+kde_syncselection_hint = false
+
+# =============================================================================
+# Multi-Monitor Configuration
+# =============================================================================
+[multimon]
+# Enable multi-monitor support
+enabled = true
+# Maximum number of monitors to share
+max_monitors = 4
+
+# =============================================================================
+# Performance Configuration
+# =============================================================================
+[performance]
+# Encoder threads (0 = auto-detect)
+encoder_threads = 0
+# Network threads (0 = auto-detect)
+network_threads = 0
+# Frame buffer pool size
+buffer_pool_size = 16
+# Enable zero-copy frame passing
+zero_copy = true
+
+# Adaptive FPS - dynamically adjust framerate based on activity
+[performance.adaptive_fps]
+enabled = true
+min_fps = 5
+max_fps = 60
+# Activity thresholds (fraction of screen changed)
+high_activity_threshold = 0.20
+medium_activity_threshold = 0.08
+low_activity_threshold = 0.01
+
+# Latency tuning
+[performance.latency]
+# Mode: "interactive" (gaming), "balanced", "quality"
+mode = "balanced"
+interactive_max_delay_ms = 16
+balanced_max_delay_ms = 33
+quality_max_delay_ms = 100
+balanced_damage_threshold = 0.05
+quality_damage_threshold = 0.02
+
+# =============================================================================
+# Logging Configuration
+# =============================================================================
+[logging]
+# Log level: "trace", "debug", "info", "warn", "error"
+level = "info"
+# Log directory (optional, logs to stderr if not set)
+# Native (root): /var/log/lamco-rdp-server
+# Native (user): ~/.local/share/lamco-rdp-server/logs
+# Flatpak: ~/.var/app/io.lamco.rdp-server/data/logs
+# log_dir = "/var/log/lamco-rdp-server"
+# Enable metrics collection
+metrics = true
+
+# =============================================================================
+# EGFX Configuration (Graphics Pipeline Extension)
+# =============================================================================
+[egfx]
+# Enable EGFX channel for improved graphics
+enabled = true
+# H.264 profile level: "4.1", "4.2", "5.0", "5.1"
+h264_level = "4.1"
+# H.264 bitrate in kbps
+h264_bitrate = 5000
+# ZGFX compression: "never", "auto", "always"
+zgfx_compression = "auto"
+# Maximum frames in flight before waiting for ACK
+max_frames_in_flight = 4
+# Frame acknowledgement timeout in ms
+frame_ack_timeout = 500
+# IDR frame interval for recovery (seconds)
+periodic_idr_interval = 5
+# Codec selection: "avc420", "avc444", "auto"
+codec = "auto"
+# Quality parameters (lower = better quality, larger files)
+qp_min = 18
+qp_max = 36
+qp_default = 23
+# AVC444 for full chroma (better color accuracy)
+avc444_enabled = true
+avc444_aux_bitrate_ratio = 0.5
+color_matrix = "BT709"
+color_range = "limited"
+# Aux omission optimization
+avc444_enable_aux_omission = true
+avc444_max_aux_interval = 5
+avc444_aux_change_threshold = 0.01
+avc444_force_aux_idr_on_return = true
+
+# =============================================================================
+# Damage Tracking Configuration
+# =============================================================================
+[damage_tracking]
+# Enable damage tracking (highly recommended)
+enabled = true
+# Method: "pipewire", "diff", "hybrid"
+method = "hybrid"
+# Tile size for damage detection
+tile_size = 32
+# Difference threshold to trigger update
+diff_threshold = 0.05
+# Pixel threshold for change detection
+pixel_threshold = 4
+# Merge nearby damage regions within this distance
+merge_distance = 32
+# Minimum area to consider as damage
+min_region_area = 256
+
+# =============================================================================
+# Hardware Encoding Configuration
+# =============================================================================
+[hardware_encoding]
+# Enable hardware encoding (VA-API, NVENC)
+enabled = true
+# VA-API device path
+vaapi_device = "/dev/dri/renderD128"
+# Enable DMA-BUF zero-copy capture
+enable_dmabuf_zerocopy = true
+# Fall back to software if hardware fails
+fallback_to_software = true
+# Quality preset: "speed", "balanced", "quality"
+quality_preset = "balanced"
+# Prefer NVENC over VA-API if available
+prefer_nvenc = false
+
+# =============================================================================
+# Display Configuration
+# =============================================================================
+[display]
+# Allow client to request resize
+allow_resize = true
+# Allowed resolutions (empty = any)
+# Example: ["1920x1080", "2560x1440", "3840x2160"]
+allowed_resolutions = []
+# Enable DPI-aware scaling
+dpi_aware = true
+# Allow rotation
+allow_rotation = true
+
+# =============================================================================
+# Advanced Video Configuration
+# =============================================================================
+[advanced_video]
+# Enable frame skipping under load
+enable_frame_skip = true
+# Scene change threshold for IDR frames
+scene_change_threshold = 0.30
+# Intra refresh interval (frames)
+intra_refresh_interval = 60
+# Enable adaptive quality based on network
+enable_adaptive_quality = true
+
+# =============================================================================
+# Cursor Configuration
+# =============================================================================
+[cursor]
+# Cursor strategy: "metadata", "painted", "hidden", "predictive"
+mode = "metadata"
+# Auto-select mode based on latency
+auto_mode = true
+# Latency threshold for predictive mode (ms)
+predictive_latency_threshold_ms = 50
+# Cursor update rate (Hz)
+cursor_update_fps = 60
+
+# Cursor predictor settings (for predictive mode)
+[cursor.predictor]
+history_size = 5
+lookahead_ms = 50
+velocity_smoothing = 0.3
+acceleration_smoothing = 0.1
+max_prediction_distance = 100
+min_velocity_threshold = 5
+stop_convergence_rate = 0.5
+
+# =============================================================================
+# Video Pipeline Configuration (Advanced)
+# =============================================================================
+[video_pipeline.processor]
+target_fps = 60
+max_queue_depth = 4
+adaptive_quality = true
+damage_threshold = 0.01
+drop_on_full_queue = true
+enable_metrics = true
+
+[video_pipeline.dispatcher]
+channel_size = 8
+priority_dispatch = true
+max_frame_age_ms = 100
+enable_backpressure = true
+high_water_mark = 0.8
+low_water_mark = 0.5
+load_balancing = true
+
+[video_pipeline.converter]
+buffer_pool_size = 8
+enable_simd = true
+damage_threshold = 0.01
+enable_statistics = true
+
+# =============================================================================
+# GUI State (Persisted between sessions)
+# =============================================================================
+# These settings are managed by the GUI and persist UI preferences.
+# You generally don't need to edit these manually.
+[gui_state]
+# Enable expert mode (shows advanced options in all tabs)
+expert_mode = false
+# EGFX expert mode (shows all EGFX parameters)
+egfx_expert_mode = false
+# Expanded section states (true = expanded, false = collapsed)
+video_pipeline_expanded = false
+adaptive_fps_expanded = true
+latency_expanded = true
+damage_tracking_expanded = true
+hardware_encoding_expanded = true
+display_expanded = true
+advanced_video_expanded = false
+cursor_expanded = true
+cursor_predictor_expanded = false
+# Log viewer preferences
+log_auto_scroll = true
+log_filter_level = "info"
+# Close behavior: true = closing GUI stops server (default)
+#                 false = GUI closes but server keeps running (detach mode)
+close_stops_server = true

@@ -48,7 +48,7 @@ fn bench_bgra_to_yuv444(c: &mut Criterion) {
                     black_box(height),
                     ColorMatrix::BT709,
                 ))
-            })
+            });
         });
 
         // Benchmark with BT.601 (SD)
@@ -60,7 +60,7 @@ fn bench_bgra_to_yuv444(c: &mut Criterion) {
                     black_box(height),
                     ColorMatrix::BT601,
                 ))
-            })
+            });
         });
     }
 
@@ -122,7 +122,7 @@ fn bench_full_color_pipeline(c: &mut Criterion) {
                         ColorMatrix::BT709,
                     );
                     black_box(pack_dual_views(&yuv444))
-                })
+                });
             },
         );
     }

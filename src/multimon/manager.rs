@@ -73,6 +73,7 @@ impl Default for MultiMonitorConfig {
 }
 
 pub struct Monitors {
+    #[expect(dead_code, reason = "retained for multi-monitor reconfiguration")]
     config: MultiMonitorConfig,
     monitors: Arc<RwLock<HashMap<u32, MonitorInfo>>>,
     layout_calculator: LayoutCalculator,
@@ -188,7 +189,7 @@ mod tests {
     #[test]
     fn test_config_debug() {
         let config = MultiMonitorConfig::default();
-        let debug_str = format!("{:?}", config);
+        let debug_str = format!("{config:?}");
         assert!(debug_str.contains("MultiMonitorConfig"));
         assert!(debug_str.contains("max_monitors"));
     }
@@ -223,7 +224,10 @@ mod tests {
         assert_eq!(monitor.size, (1280, 720));
         assert!(!monitor.is_primary);
         assert_eq!(monitor.refresh_rate, 60);
-        assert_eq!(monitor.scale_factor, 1.0);
+        #[expect(clippy::float_cmp, reason = "scale_factor defaults to exact 1.0")]
+        {
+            assert_eq!(monitor.scale_factor, 1.0);
+        }
     }
 
     #[test]
@@ -249,7 +253,7 @@ mod tests {
     fn test_monitor_info_debug() {
         let stream = mock_stream(1, 0, 0, 1920, 1080);
         let monitor = MonitorInfo::from_stream_info(&stream, true);
-        let debug_str = format!("{:?}", monitor);
+        let debug_str = format!("{monitor:?}");
         assert!(debug_str.contains("MonitorInfo"));
         assert!(debug_str.contains("id: 1"));
     }
@@ -299,7 +303,7 @@ mod tests {
     #[test]
     fn test_monitor_event_debug() {
         let event = MonitorEvent::Removed(42);
-        let debug_str = format!("{:?}", event);
+        let debug_str = format!("{event:?}");
         assert!(debug_str.contains("Removed"));
         assert!(debug_str.contains("42"));
     }

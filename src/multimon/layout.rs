@@ -619,10 +619,10 @@ mod tests {
     #[test]
     fn test_layout_error_display() {
         let error = LayoutError::NoMonitors;
-        assert_eq!(format!("{}", error), "No monitors configured");
+        assert_eq!(format!("{error}"), "No monitors configured");
 
         let error = LayoutError::InvalidDimensions(0, 0);
-        assert_eq!(format!("{}", error), "Invalid monitor dimensions: 0x0");
+        assert_eq!(format!("{error}"), "Invalid monitor dimensions: 0x0");
     }
 
     #[test]

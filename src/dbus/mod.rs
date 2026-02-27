@@ -13,11 +13,13 @@
 //! | Native/Flatpak/Systemd User | Session Bus | `io.lamco.RdpServer` |
 //! | Systemd System | System Bus | `io.lamco.RdpServer.System` |
 
+pub mod events;
 mod manager;
 
 use std::sync::Arc;
 
-pub use manager::{ManagerInterface, RdpServerManager};
+pub use events::ServerEvent;
+pub use manager::{ManagerInterface, RdpServerManager, ServerCommand};
 use tokio::sync::RwLock;
 use zbus::Connection;
 

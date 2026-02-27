@@ -32,6 +32,10 @@ pub struct SessionStrategySelector {
     service_registry: Arc<ServiceRegistry>,
     token_manager: Arc<Tokens>,
     /// Keyboard layout from config (e.g., "us", "de", "auto")
+    #[expect(
+        dead_code,
+        reason = "passed to session handle for keyboard layout configuration"
+    )]
     keyboard_layout: String,
 }
 
@@ -86,18 +90,43 @@ impl SessionStrategySelector {
 
         match caps.deployment {
             DeploymentContext::Flatpak => {
-                // Flatpak: ONLY portal strategy available (sandbox blocks direct APIs)
-                info!("Flatpak deployment: Portal + Token is only available strategy");
+                // Flatpak: sandbox blocks direct compositor APIs.
+                // Try Portal RemoteDesktop first (full input+clipboard).
+                // If RemoteDesktop is unavailable (wlroots without portal-wlr),
+                // fall back to ScreenCast-only for view-only sessions.
+                info!("Flatpak deployment: checking Portal RemoteDesktop availability");
 
-                if !self.service_registry.supports_session_persistence() {
-                    warn!("Portal version < 4, tokens not supported in Flatpak");
-                    warn!("Permission dialog will appear on every server start");
+                use ashpd::desktop::remote_desktop::RemoteDesktop;
+                let has_remote_desktop = RemoteDesktop::new().await.is_ok();
+
+                if has_remote_desktop {
+                    info!("Portal RemoteDesktop available, using Portal + Token strategy");
+
+                    if !self.service_registry.supports_session_persistence() {
+                        warn!("Portal version < 4, tokens not supported in Flatpak");
+                        warn!("Permission dialog will appear on every server start");
+                    }
+
+                    return Ok(Box::new(PortalTokenStrategy::new(
+                        self.service_registry.clone(),
+                        self.token_manager.clone(),
+                    )));
                 }
 
-                return Ok(Box::new(PortalTokenStrategy::new(
-                    self.service_registry.clone(),
-                    self.token_manager.clone(),
-                )));
+                // RemoteDesktop unavailable: try ScreenCast-only (view-only mode)
+                use super::screencast_only::ScreenCastOnlyStrategy;
+
+                if ScreenCastOnlyStrategy::is_available().await {
+                    warn!("Portal RemoteDesktop unavailable in Flatpak sandbox");
+                    warn!("Falling back to ScreenCast-only mode (view-only)");
+                    warn!("Session will have video but no input injection or clipboard");
+                    return Ok(Box::new(ScreenCastOnlyStrategy::new()));
+                }
+
+                return Err(anyhow::anyhow!(
+                    "No portal strategy available in Flatpak: \
+                     RemoteDesktop and ScreenCast both unavailable"
+                ));
             }
 
             DeploymentContext::SystemdSystem => {
@@ -136,7 +165,31 @@ impl SessionStrategySelector {
             }
         }
 
-        // PRIORITY 2: wlr-direct (wlroots compositors, native protocols)
+        // PRIORITY 2: portal-generic embedded (wlroots, video + input + clipboard)
+        #[cfg(feature = "portal-generic")]
+        if self
+            .service_registry
+            .service_level(ServiceId::WlrDirectInput)
+            >= ServiceLevel::BestEffort
+        {
+            use super::portal_generic::PortalGenericStrategy;
+
+            if PortalGenericStrategy::is_available().await {
+                info!("Selected: portal-generic embedded strategy");
+                info!("   Native Wayland protocols: screencopy + virtual input + data-control");
+                info!("   Compositor: {}", caps.compositor);
+                info!("   Video + Input + Clipboard (no external portal daemon)");
+
+                return Ok(Box::new(PortalGenericStrategy::new()));
+            } else {
+                warn!(
+                    "portal-generic: protocol check failed (missing screencopy or virtual input)"
+                );
+                warn!("Falling back to next available strategy");
+            }
+        }
+
+        // PRIORITY 2b: wlr-direct (wlroots compositors, input-only fallback)
         #[cfg(feature = "wayland")]
         if self
             .service_registry
@@ -146,7 +199,7 @@ impl SessionStrategySelector {
             use super::wlr_direct::WlrDirectStrategy;
 
             if WlrDirectStrategy::is_available().await {
-                info!("✅ Selected: wlr-direct strategy");
+                info!("Selected: wlr-direct strategy");
                 info!("   Native Wayland protocols for wlroots compositors");
                 info!("   Compositor: {}", caps.compositor);
                 info!("   Note: Input only (video via Portal ScreenCast)");
@@ -172,7 +225,10 @@ impl SessionStrategySelector {
                 info!("   Flatpak-compatible: Yes");
                 info!("   Note: Input only (video via Portal ScreenCast)");
 
-                return Ok(Box::new(LibeiStrategy::new(None)));
+                return Ok(Box::new(LibeiStrategy::new(
+                    None,
+                    Some(self.token_manager.clone()),
+                )));
             } else {
                 warn!("Service Registry reports libei available, but Portal ConnectToEIS failed");
                 warn!("Portal backend may not support ConnectToEIS method");
@@ -192,16 +248,33 @@ impl SessionStrategySelector {
         }
 
         // FALLBACK: Portal without tokens (portal v3 or below)
-        warn!("⚠️  No session persistence available");
-        warn!("   Portal version: {}", caps.portal.version);
-        warn!("   Falling back to Portal + Token strategy");
-        warn!("   Permission dialog will appear on every server start");
+        // Check if Portal RemoteDesktop is available at all
+        use ashpd::desktop::remote_desktop::RemoteDesktop;
+        if RemoteDesktop::new().await.is_ok() {
+            warn!("⚠️  No session persistence available");
+            warn!("   Portal version: {}", caps.portal.version);
+            warn!("   Falling back to Portal + Token strategy");
+            warn!("   Permission dialog will appear on every server start");
 
-        // Still use Portal + Token strategy (token just won't work)
-        Ok(Box::new(PortalTokenStrategy::new(
-            self.service_registry.clone(),
-            self.token_manager.clone(),
-        )))
+            return Ok(Box::new(PortalTokenStrategy::new(
+                self.service_registry.clone(),
+                self.token_manager.clone(),
+            )));
+        }
+
+        // LAST RESORT: ScreenCast-only (view-only) when no input strategy works
+        use super::screencast_only::ScreenCastOnlyStrategy;
+        if ScreenCastOnlyStrategy::is_available().await {
+            warn!("⚠️  No input strategy available");
+            warn!("   Portal RemoteDesktop unavailable, all input methods exhausted");
+            warn!("   Falling back to ScreenCast-only mode (view-only)");
+            warn!("   Session will have video but no input injection or clipboard");
+            return Ok(Box::new(ScreenCastOnlyStrategy::new()));
+        }
+
+        Err(anyhow::anyhow!(
+            "No session strategy available: all input methods and ScreenCast unavailable"
+        ))
     }
 
     async fn detect_primary_monitor(&self) -> Option<String> {
@@ -310,7 +383,7 @@ mod tests {
         use crate::{
             compositor::{CompositorCapabilities, CompositorType, PortalCapabilities},
             services::ServiceRegistry,
-            session::{CredentialStorageMethod, DeploymentContext},
+            session::DeploymentContext,
         };
 
         // Test 1: Flatpak deployment constraint (should recommend Portal)
@@ -375,15 +448,14 @@ mod tests {
             let caps = CompositorCapabilities::new(compositor, portal, vec![]);
             let registry = Arc::new(ServiceRegistry::from_compositor(caps));
 
-            // GNOME might have DirectCompositorAPI (requires actual D-Bus test)
-            // In tests, it will be Unavailable (no D-Bus connection)
+            // GNOME 46+ reports Guaranteed (EIS + clipboard available)
             let direct_api_level =
                 registry.service_level(crate::services::ServiceId::DirectCompositorAPI);
-            // We can't assert it's available without D-Bus, but we can check the logic exists
             assert!(
-                direct_api_level == crate::services::ServiceLevel::BestEffort
+                direct_api_level == crate::services::ServiceLevel::Guaranteed
+                    || direct_api_level == crate::services::ServiceLevel::BestEffort
                     || direct_api_level == crate::services::ServiceLevel::Unavailable,
-                "GNOME DirectCompositorAPI should be either BestEffort or Unavailable"
+                "GNOME DirectCompositorAPI should be Guaranteed, BestEffort, or Unavailable"
             );
         }
     }

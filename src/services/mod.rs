@@ -51,4 +51,6 @@ pub use clipboard_manager::{DetectedSystemClipboardManager, SystemClipboardManag
 pub use rdp_capabilities::RdpCapability;
 pub use registry::ServiceRegistry;
 pub use service::{AdvertisedService, PerformanceHints, ServiceId, ServiceLevel};
-pub use wayland_features::{DamageMethod, DrmFormat, HdrTransfer, WaylandFeature};
+pub use wayland_features::{
+    DamageMethod, DataControlProtocol, DrmFormat, HdrTransfer, WaylandFeature,
+};

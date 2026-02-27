@@ -18,12 +18,12 @@ use zbus::{
 /// Path: /org/gnome/Mutter/ScreenCast
 #[derive(Debug)]
 pub struct MutterScreenCast<'a> {
+    #[expect(dead_code, reason = "kept alive for D-Bus proxy lifetime")]
     connection: Connection,
     proxy: zbus::Proxy<'a>,
 }
 
 impl MutterScreenCast<'_> {
-    /// Create a new ScreenCast proxy
     pub async fn new(connection: &Connection) -> Result<Self> {
         let proxy = zbus::ProxyBuilder::new(connection)
             .interface("org.gnome.Mutter.ScreenCast")?
@@ -41,13 +41,8 @@ impl MutterScreenCast<'_> {
 
     /// Create a new screen cast session
     ///
-    /// # Arguments
-    ///
-    /// * `properties` - Session properties (can be empty)
-    ///
-    /// # Returns
-    ///
-    /// Object path to the created session
+    /// Pass `{"remote-desktop-session-id": session_id}` in properties to link
+    /// the ScreenCast session to an existing RemoteDesktop session.
     pub async fn create_session(
         &self,
         properties: HashMap<String, Value<'_>>,
@@ -65,6 +60,14 @@ impl MutterScreenCast<'_> {
 
         Ok(path)
     }
+
+    /// API version number
+    pub async fn version(&self) -> Result<i32> {
+        self.proxy
+            .get_property("Version")
+            .await
+            .context("Failed to read ScreenCast Version property")
+    }
 }
 
 /// ScreenCast Session interface proxy
@@ -73,6 +76,7 @@ impl MutterScreenCast<'_> {
 /// Path: /org/gnome/Mutter/ScreenCast/Session/*
 #[derive(Debug)]
 pub struct MutterScreenCastSession<'a> {
+    #[expect(dead_code, reason = "kept alive for D-Bus proxy lifetime")]
     connection: Connection,
     proxy: zbus::Proxy<'a>,
 }
@@ -169,6 +173,16 @@ impl MutterScreenCastSession<'_> {
 
         Ok(())
     }
+
+    /// Subscribe to the Closed signal for unexpected session termination
+    pub async fn subscribe_closed(
+        &self,
+    ) -> Result<impl futures_util::Stream<Item = zbus::Message>> {
+        self.proxy
+            .receive_signal("Closed")
+            .await
+            .context("Failed to subscribe to Closed signal")
+    }
 }
 
 /// ScreenCast Stream interface proxy
@@ -262,7 +276,7 @@ impl StreamParameters {
         use zbus::zvariant::Structure;
 
         dict.get(key).and_then(|value| {
-            match value.downcast_ref::<Structure>() {
+            match value.downcast_ref::<Structure<'_>>() {
                 Ok(structure) => {
                     let fields = structure.fields();
 
@@ -303,14 +317,14 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    #[ignore] // Requires GNOME with Mutter
+    #[ignore = "Requires GNOME with Mutter"]
     async fn test_mutter_screencast_availability() {
         match zbus::Connection::session().await {
             Ok(conn) => match MutterScreenCast::new(&conn).await {
                 Ok(_proxy) => println!("Mutter ScreenCast API available"),
-                Err(e) => println!("Mutter ScreenCast not available: {}", e),
+                Err(e) => println!("Mutter ScreenCast not available: {e}"),
             },
-            Err(e) => println!("D-Bus session not available: {}", e),
+            Err(e) => println!("D-Bus session not available: {e}"),
         }
     }
 }

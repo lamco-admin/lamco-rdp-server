@@ -105,7 +105,7 @@ pub fn view_performance_tab(state: &AppState) -> Element<'_, Message> {
             "Enable Zero-Copy Operations",
             state.config.performance.zero_copy,
             Message::PerformanceZeroCopyToggled,
-            "DMA-BUF path requires hardware encoding integration",
+            "Auto-detected from compositor DMA-BUF support; manual override not yet wired",
         ),
         space().height(20.0),
         // Adaptive FPS section

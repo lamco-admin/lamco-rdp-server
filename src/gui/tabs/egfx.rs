@@ -227,7 +227,7 @@ fn view_egfx_expert_settings(state: &AppState) -> Element<'_, Message> {
             ]
             .align_y(Alignment::Center)
             .into(),
-            "Needs frame tracking implementation",
+            "Per-frame ack tracking not yet implemented; max_frames_in_flight handles backpressure",
         ),
         space().height(20.0),
         // AVC444 Configuration

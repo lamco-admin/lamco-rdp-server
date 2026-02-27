@@ -347,6 +347,68 @@ fn find_server_binary() -> Result<PathBuf> {
     ))
 }
 
+/// Register with the Background portal so the server survives GUI close.
+///
+/// Only effective in Flatpak — the portal only works for sandboxed apps.
+/// GNOME 43+ kills unregistered background processes, so this prevents
+/// the server from being terminated when the user closes the GUI.
+pub async fn register_background_portal() {
+    use ashpd::desktop::background::Background;
+
+    match Background::request()
+        .reason("RDP server needs to continue accepting connections")
+        .auto_start(false)
+        .dbus_activatable(false)
+        .send()
+        .await
+    {
+        Ok(request) => match request.response() {
+            Ok(response) => {
+                if response.run_in_background() {
+                    info!("Background portal: permission granted");
+                } else {
+                    warn!("Background portal: permission denied by user");
+                    warn!("Server may be killed when GUI closes on GNOME");
+                }
+            }
+            Err(e) => {
+                warn!("Background portal response error: {}", e);
+            }
+        },
+        Err(e) => {
+            // Not all DEs support Background portal — graceful fallback
+            debug!("Background portal registration failed: {}", e);
+            debug!("Server will rely on process orphaning (works on most DEs)");
+        }
+    }
+}
+
+/// Update the Background portal status message.
+///
+/// Shows a brief status in the system tray (GNOME, KDE).
+/// Silently ignored if the portal doesn't support SetStatus (v2).
+pub async fn update_background_status(message: &str) {
+    use ashpd::desktop::background::BackgroundProxy;
+
+    // Portal SetStatus has a 96-char limit
+    let truncated = if message.len() > 96 {
+        &message[..96]
+    } else {
+        message
+    };
+
+    match BackgroundProxy::new().await {
+        Ok(proxy) => {
+            if let Err(e) = proxy.set_status(truncated).await {
+                debug!("Background SetStatus failed: {}", e);
+            }
+        }
+        Err(e) => {
+            debug!("Background proxy creation failed: {}", e);
+        }
+    }
+}
+
 /// Write configuration to a temporary file
 fn write_temp_config(config: &crate::config::Config) -> Result<PathBuf> {
     let runtime_dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".to_string());

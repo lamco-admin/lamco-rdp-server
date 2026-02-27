@@ -251,6 +251,23 @@ pub enum WaylandFeature {
         /// Whether NLA (Network Level Authentication) is supported
         supports_nla: bool,
     },
+
+    /// Wayland data-control clipboard (ext-data-control-v1 / wlr-data-control-v1)
+    ClipboardDataControl {
+        /// Which protocol variant was found
+        protocol: DataControlProtocol,
+        /// Protocol version
+        version: u32,
+    },
+}
+
+/// Data-control protocol variant
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DataControlProtocol {
+    /// ext-data-control-v1 (Wayland staging, preferred)
+    Ext,
+    /// wlr-data-control-unstable-v1 (wlroots legacy, still widely deployed)
+    Wlr,
 }
 
 /// Token storage method for session persistence
@@ -293,6 +310,8 @@ impl WaylandFeature {
             Self::LibeiInput { .. } => "libei-input",
             // Authentication
             Self::Authentication { .. } => "authentication",
+            // Clipboard data-control
+            Self::ClipboardDataControl { .. } => "data-control",
         }
     }
 }
@@ -429,6 +448,10 @@ impl std::fmt::Display for WaylandFeature {
                 supports_nla,
             } => {
                 write!(f, "Auth(method={method}, nla={supports_nla})")
+            }
+            // Clipboard data-control
+            Self::ClipboardDataControl { protocol, version } => {
+                write!(f, "DataControl({protocol:?} v{version})")
             }
         }
     }

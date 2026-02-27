@@ -1,0 +1,27 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	for dir in vendor/*/; do \
+		if [ -f "$$dir/.cargo-checksum.json" ]; then \
+			sed -i 's/"files":{[^}]*}/"files":{}/' "$$dir/.cargo-checksum.json"; \
+		fi; \
+	done
+	CARGO_PROFILE_RELEASE_LTO=thin \
+	CARGO_PROFILE_RELEASE_CODEGEN_UNITS=4 \
+	cargo build --release --frozen --features "default,vaapi,gui"
+
+override_dh_auto_install:
+	install -Dm755 target/release/lamco-rdp-server debian/lamco-rdp-server/usr/bin/lamco-rdp-server
+	install -Dm755 target/release/lamco-rdp-server-gui debian/lamco-rdp-server/usr/bin/lamco-rdp-server-gui
+	install -Dm644 packaging/systemd/lamco-rdp-server.service debian/lamco-rdp-server/usr/lib/systemd/user/lamco-rdp-server.service
+	install -dm755 debian/lamco-rdp-server/etc/lamco-rdp-server
+
+override_dh_auto_test:
+	# Tests require running Wayland compositor
+	true
+
+override_dh_auto_clean:
+	cargo clean || true

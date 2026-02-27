@@ -477,6 +477,10 @@ impl DamageDetector {
     /// damage on the first call or after invalidation.
     ///
     /// `frame` must be BGRA pixel data (4 bytes per pixel).
+    #[expect(
+        clippy::unwrap_used,
+        reason = "previous_frame is guaranteed Some after first frame check"
+    )]
     pub fn detect(&mut self, frame: &[u8], width: u32, height: u32) -> Vec<DamageRegion> {
         let start = Instant::now();
         let frame_area = width as u64 * height as u64;
@@ -494,7 +498,7 @@ impl DamageDetector {
 
         let dimensions_changed = self
             .previous_dimensions
-            .map_or(true, |(w, h)| w != width || h != height);
+            .is_none_or(|(w, h)| w != width || h != height);
 
         if self.previous_frame.is_none() || self.invalidated || dimensions_changed {
             self.update_tile_grid(width, height);
@@ -637,6 +641,10 @@ impl DamageDetector {
         regions
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "tile comparison needs geometry + data refs"
+    )]
     fn compare_tile(
         &self,
         prev: &[u8],
@@ -912,13 +920,11 @@ mod tests {
         assert!(!damage.is_empty(), "Should detect damage");
 
         // Check that damage is in the expected area
-        let total_damage_area: u64 = damage.iter().map(|r| r.area()).sum();
+        let total_damage_area: u64 = damage.iter().map(super::DamageRegion::area).sum();
         let expected_area = changed_region.area();
         assert!(
             total_damage_area >= expected_area / 2,
-            "Damage area {} should include changed region {}",
-            total_damage_area,
-            expected_area
+            "Damage area {total_damage_area} should include changed region {expected_area}"
         );
     }
 

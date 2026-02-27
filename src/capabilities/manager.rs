@@ -45,6 +45,7 @@ pub struct Capabilities {
     pub state: SystemCapabilities,
 
     /// Whether initialization completed successfully
+    #[expect(dead_code, reason = "used by future hot-reload capability refresh")]
     initialized: bool,
 }
 
@@ -72,6 +73,10 @@ impl Capabilities {
     /// # Panics
     ///
     /// Panics if called before `initialize()`.
+    #[expect(
+        clippy::expect_used,
+        reason = "documented panic: caller must call initialize() first"
+    )]
     pub fn global() -> Arc<RwLock<Capabilities>> {
         INSTANCE
             .get()
@@ -140,6 +145,7 @@ impl Capabilities {
             Subsystem::Storage => self.state.storage = StorageProbe::probe().await,
             Subsystem::Rendering => self.state.rendering = RenderingProbe::probe().await,
             Subsystem::Network => self.state.network = NetworkProbe::probe().await,
+            Subsystem::Security => {} // No probe — reported as static degradation
         }
 
         self.recompute_derived_state();
@@ -251,6 +257,24 @@ impl Capabilities {
                 reason: "Secure storage not available".into(),
                 fallback: "Using encrypted file storage".into(),
                 user_impact: UserImpact::Minimal,
+            });
+        }
+
+        // Flatpak sandbox restricts PAM and Klipper D-Bus
+        if crate::config::is_flatpak() {
+            degradations.push(Degradation {
+                subsystem: Subsystem::Security,
+                feature: "PAM authentication".into(),
+                reason: "Blocked by Flatpak sandbox".into(),
+                fallback: "No-auth or token-based authentication".into(),
+                user_impact: UserImpact::Major,
+            });
+            degradations.push(Degradation {
+                subsystem: Subsystem::Display,
+                feature: "Klipper clipboard cooperation".into(),
+                reason: "D-Bus access removed for sandbox compliance".into(),
+                fallback: "Portal Clipboard (requires Plasma 6.6+)".into(),
+                user_impact: UserImpact::Moderate,
             });
         }
 

@@ -269,13 +269,9 @@ impl RdpsndServerHandler for PipeWireAudioHandler {
 
                     if let Some(encoder) = self.create_encoder(our_fmt) {
                         self.selected_format = Some(our_idx as u16);
+                        debug!("Audio encoder created: {}", encoder.name());
                         self.encoder = Some(encoder);
                         self.active = true;
-
-                        debug!(
-                            "Audio encoder created: {}",
-                            self.encoder.as_ref().unwrap().name()
-                        );
 
                         return Some(our_idx as u16);
                     }

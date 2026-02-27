@@ -39,6 +39,10 @@ pub struct PortalSessionFactory {
     quirks: Vec<InitQuirk>,
 
     /// Maximum retry attempts
+    #[expect(
+        dead_code,
+        reason = "configurable retry limit for portal session creation"
+    )]
     max_retries: u32,
 }
 
@@ -113,12 +117,15 @@ impl PortalSessionFactory {
             info!("No restore token, permission dialog will appear");
         }
 
-        let mut portal_config = lamco_portal::PortalConfig::default();
-        portal_config.restore_token = restore_token;
-
-        if !with_persistence {
-            portal_config.persist_mode = ashpd::desktop::PersistMode::DoNot;
-        }
+        let portal_config = lamco_portal::PortalConfig {
+            restore_token,
+            persist_mode: if with_persistence {
+                lamco_portal::PortalConfig::default().persist_mode
+            } else {
+                ashpd::desktop::PersistMode::DoNot
+            },
+            ..lamco_portal::PortalConfig::default()
+        };
 
         debug!(
             persist_mode = ?portal_config.persist_mode,
@@ -289,7 +296,11 @@ impl SessionFactory for PortalSessionFactory {
                 clipboard_manager: clipboard_mgr,
                 session_type: SessionType::Portal,
                 session_valid: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+                health_reporter: Arc::new(std::sync::OnceLock::new()),
             };
+
+            // Start listening for Portal Closed signal (proactive session death detection)
+            handle.start_closed_listener().await;
 
             info!("Session created successfully via PortalSessionFactory");
             return Ok(Arc::new(handle));
@@ -373,7 +384,11 @@ impl SessionFactory for PortalSessionFactory {
             clipboard_manager: clipboard_mgr,
             session_type: SessionType::Portal,
             session_valid: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            health_reporter: Arc::new(std::sync::OnceLock::new()),
         };
+
+        // Start listening for Portal Closed signal (proactive session death detection)
+        handle.start_closed_listener().await;
 
         info!("Session created successfully via PortalSessionFactory");
         Ok(Arc::new(handle))
@@ -416,6 +431,10 @@ impl SessionFactory for PortalSessionFactory {
 
 // Make PortalSessionHandleImpl fields pub(crate) for factory access
 // This is needed because the factory creates the handle directly
+#[expect(
+    dead_code,
+    reason = "constructor for PortalSessionHandleImpl used in alternative creation paths"
+)]
 impl PortalSessionHandleImpl {
     pub(crate) fn new(
         pipewire_fd: i32,
@@ -435,6 +454,7 @@ impl PortalSessionHandleImpl {
             clipboard_manager,
             session_type: SessionType::Portal,
             session_valid: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            health_reporter: Arc::new(std::sync::OnceLock::new()),
         }
     }
 }

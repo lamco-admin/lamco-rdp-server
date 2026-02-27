@@ -35,15 +35,7 @@
 //! virtual-keyboard-unstable-v1 protocol (zwp namespace), supported by most
 //! Wayland compositors including wlroots, GNOME (via RemoteDesktop portal),
 //! and KDE (via RemoteDesktop portal).
-#![expect(
-    unsafe_code,
-    reason = "OwnedFd::from_raw_fd for XKB keymap shared memory"
-)]
-
-use std::os::{
-    fd::{AsRawFd, OwnedFd},
-    unix::io::FromRawFd,
-};
+use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 
 use anyhow::{anyhow, Context, Result};
 use tracing::{debug, info, warn};
@@ -83,7 +75,7 @@ impl VirtualKeyboard {
         keyboard_layout: &str,
     ) -> Result<Self>
     where
-        State: 'static,
+        State: wayland_client::Dispatch<ZwpVirtualKeyboardV1, ()> + 'static,
     {
         info!(
             "🔑 wlr_direct: Creating virtual keyboard with XKB keymap (layout: {})",
@@ -112,7 +104,7 @@ impl VirtualKeyboard {
         // KeymapFormat::XkbV1 = 1 in the protocol
         keyboard.keymap(
             1u32, // XKB_V1 format
-            keymap_fd.as_raw_fd(),
+            keymap_fd.as_fd(),
             keymap_string.len() as u32,
         );
 
@@ -250,7 +242,7 @@ fn generate_xkb_keymap(layout: &str) -> Result<String> {
 /// Requires Linux 3.17+ (memfd_create syscall).
 /// This is available on all modern distributions (Ubuntu 14.04+, RHEL 7+, etc.)
 fn create_keymap_fd(keymap: &str) -> Result<OwnedFd> {
-    use std::{ffi::CString, os::fd::AsFd};
+    use std::ffi::CString;
 
     use nix::{
         sys::memfd::{memfd_create, MemFdCreateFlag},
@@ -258,13 +250,11 @@ fn create_keymap_fd(keymap: &str) -> Result<OwnedFd> {
     };
 
     let name = CString::new("xkb-keymap")?;
-    let fd = memfd_create(
+    let owned_fd = memfd_create(
         &name,
         MemFdCreateFlag::MFD_CLOEXEC | MemFdCreateFlag::MFD_ALLOW_SEALING,
     )
     .context("Failed to create memfd. Requires Linux 3.17+ with memfd_create support.")?;
-
-    let owned_fd = unsafe { OwnedFd::from_raw_fd(fd) };
 
     let bytes = keymap.as_bytes();
     let mut written = 0;

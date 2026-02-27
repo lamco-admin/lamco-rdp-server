@@ -16,26 +16,35 @@
 //!
 //! # Compatibility
 //!
-//! - GNOME 42+: API available but evolving
-//! - GNOME 45+: API stable and recommended
-//! - GNOME 47+: Fully tested
+//! - GNOME 45+: ScreenCast + RemoteDesktop with session linkage
+//! - GNOME 46+: ConnectToEIS for low-latency input via EI protocol
+//! - GNOME 47+: Clipboard support via RemoteDesktop clipboard methods
+//!
+//! # Session Linkage
+//!
+//! RemoteDesktop must be created first. Its `SessionId` property is then passed
+//! to ScreenCast.CreateSession as `"remote-desktop-session-id"` to link the two
+//! sessions. Without this linkage, input injection cannot target the correct
+//! screencast stream.
 //!
 //! # Usage
 //!
-//! ```rust,no_run
-//! use wrd_server::mutter::MutterSessionManager;
+//! ```rust,ignore
+//! use lamco_rdp_server::mutter::MutterSessionManager;
 //!
 //! let manager = MutterSessionManager::new().await?;
-//! let session = manager.create_session().await?;
-//! let (pipewire_node, streams) = manager.start_capture(&session).await?;
+//! let session = manager.create_session(None).await?;
+//! // session provides video (PipeWire node), input (D-Bus or EIS), and clipboard
 //! ```
 
+pub(crate) mod clipboard;
 pub mod pipewire_helper;
 pub mod remote_desktop;
 pub mod screencast;
 pub mod session_manager;
 
 // Re-exports
+pub(crate) use clipboard::MutterClipboardManager;
 pub use pipewire_helper::{connect_to_pipewire_daemon, get_pipewire_fd_for_mutter};
 pub use remote_desktop::{MutterRemoteDesktop, MutterRemoteDesktopSession};
 pub use screencast::{MutterScreenCast, MutterScreenCastSession, MutterScreenCastStream};

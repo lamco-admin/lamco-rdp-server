@@ -2,15 +2,11 @@
 //!
 //! Centralizes styling decisions so tabs focus purely on layout.
 
-use iced::widget::{
-    button, column, container, pick_list, row, slider, text, text_input, toggler, Space,
+pub use iced::widget::space;
+use iced::{
+    widget::{button, column, container, pick_list, row, slider, text, text_input, toggler},
+    Alignment, Element, Length,
 };
-
-/// iced 0.13 compat — `space()` function was added in 0.14
-pub fn space() -> Space {
-    Space::new(0, 0)
-}
-use iced::{Alignment, Element, Length};
 
 use crate::gui::{message::Message, theme};
 
@@ -91,6 +87,7 @@ pub fn collapsible_header<'a>(
             text_color: theme::colors::TEXT_PRIMARY,
             border: style.border,
             shadow: style.shadow,
+            snap: false,
         }
     })
     .into()
@@ -208,6 +205,30 @@ pub fn path_input<'a>(
             .on_input(on_change)
             .width(Length::Fill)
             .style(theme::text_input_style),
+        button(text("Browse..."))
+            .on_press(on_browse)
+            .style(theme::secondary_button_style),
+    ]
+    .spacing(10)
+    .into()
+}
+
+/// Read-only path display with Browse button for sandbox mode.
+///
+/// In Flatpak, users cannot type arbitrary paths — the FileChooser portal
+/// grants per-file access when the user selects via the Browse dialog.
+/// The text field is non-editable, showing the selected path or placeholder.
+pub fn path_display<'a>(
+    value: &'a str,
+    placeholder: &'a str,
+    on_browse: Message,
+) -> Element<'a, Message> {
+    let display_text = if value.is_empty() { placeholder } else { value };
+    row![
+        container(text(display_text).size(14))
+            .padding([8, 12])
+            .width(Length::Fill)
+            .style(theme::path_display_style),
         button(text("Browse..."))
             .on_press(on_browse)
             .style(theme::secondary_button_style),

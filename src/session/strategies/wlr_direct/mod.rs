@@ -57,15 +57,19 @@ pub use pointer::VirtualPointer as WlrVirtualPointer;
 use pointer::{Axis, AxisSource, ButtonState, VirtualPointer};
 use tracing::{debug, error, info, warn};
 use wayland_client::{
-    globals::registry_queue_init,
+    globals::{registry_queue_init, GlobalListContents},
     protocol::{wl_registry, wl_seat::WlSeat},
     Connection, Dispatch, QueueHandle,
 };
 use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1;
 use wayland_protocols_wlr::virtual_pointer::v1::client::zwlr_virtual_pointer_manager_v1::ZwlrVirtualPointerManagerV1;
 
-use crate::session::strategy::{
-    ClipboardComponents, PipeWireAccess, SessionHandle, SessionStrategy, SessionType, StreamInfo,
+use crate::{
+    health::HealthReporter,
+    session::strategy::{
+        ClipboardComponents, PipeWireAccess, SessionHandle, SessionStrategy, SessionType,
+        StreamInfo,
+    },
 };
 
 /// State for Wayland protocol dispatch
@@ -168,6 +172,7 @@ impl SessionStrategy for WlrDirectStrategy {
             keyboard,
             pointer,
             streams: vec![], // Populated by video capture strategy
+            health_reporter: std::sync::OnceLock::new(),
         };
 
         Ok(Arc::new(handle))
@@ -198,6 +203,7 @@ pub struct WlrSessionHandleImpl {
     keyboard: VirtualKeyboard,
     pointer: VirtualPointer,
     streams: Vec<StreamInfo>,
+    health_reporter: std::sync::OnceLock<HealthReporter>,
 }
 
 impl WlrSessionHandleImpl {
@@ -242,6 +248,10 @@ impl WlrSessionHandleImpl {
 
 #[async_trait]
 impl SessionHandle for WlrSessionHandleImpl {
+    fn set_health_reporter(&self, reporter: HealthReporter) {
+        let _ = self.health_reporter.set(reporter);
+    }
+
     fn pipewire_access(&self) -> PipeWireAccess {
         // wlr-direct does not provide video capture (input only)
         // Video would come from a separate strategy (Portal or wlr-screencopy)
@@ -446,12 +456,12 @@ fn current_time_millis() -> u32 {
 }
 
 // Implement Dispatch for all protocol objects with WlrState
-impl Dispatch<wl_registry::WlRegistry, ()> for WlrState {
+impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for WlrState {
     fn event(
         _state: &mut Self,
         _proxy: &wl_registry::WlRegistry,
         _event: wl_registry::Event,
-        _data: &(),
+        _data: &GlobalListContents,
         _conn: &Connection,
         _qhandle: &QueueHandle<Self>,
     ) {
@@ -529,7 +539,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    #[ignore] // Requires wlroots compositor running
+    #[ignore = "Requires wlroots compositor running"]
     async fn test_wlr_direct_availability() {
         let available = WlrDirectStrategy::is_available().await;
         println!("wlr-direct available: {}", available);
@@ -537,7 +547,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore] // Requires wlroots compositor running
+    #[ignore = "Requires wlroots compositor running"]
     async fn test_create_session() {
         if !WlrDirectStrategy::is_available().await {
             println!("Skipping: wlr-direct not available on this compositor");

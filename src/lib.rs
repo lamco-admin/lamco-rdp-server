@@ -15,6 +15,7 @@ pub mod compositor;
 pub mod config;
 pub mod cursor;
 pub mod damage;
+pub mod health;
 pub mod multimon;
 pub mod performance;
 pub mod protocol;

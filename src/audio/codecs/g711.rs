@@ -116,6 +116,7 @@ pub struct AlawEncoder;
 /// This table is generated at compile time following ITU-T G.711.
 /// Only the upper 8 bits of the absolute value are used as index,
 /// with interpolation for the lower bits via segment/mantissa calculation.
+#[expect(dead_code, reason = "A-law encoding table for future use")]
 const ALAW_ENCODE_TABLE: [u8; 128] = {
     let mut table = [0u8; 128];
     let mut i = 0i32;
@@ -339,11 +340,7 @@ mod tests {
             let error = (original - decoded).abs();
             assert!(
                 error < 1000,
-                "μ-law roundtrip error too large: {} -> {} -> {} (error: {})",
-                original,
-                encoded,
-                decoded,
-                error
+                "μ-law roundtrip error too large: {original} -> {encoded} -> {decoded} (error: {error})"
             );
         }
     }
@@ -361,11 +358,7 @@ mod tests {
             let error = (original - decoded).abs();
             assert!(
                 error < 1000,
-                "A-law roundtrip error too large: {} -> {} -> {} (error: {})",
-                original,
-                encoded,
-                decoded,
-                error
+                "A-law roundtrip error too large: {original} -> {encoded} -> {decoded} (error: {error})"
             );
         }
     }

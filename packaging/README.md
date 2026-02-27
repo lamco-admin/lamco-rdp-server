@@ -6,16 +6,29 @@ This directory contains packaging resources for various distribution methods.
 
 ```
 packaging/
+├── aur/                           # Arch User Repository
+│   └── PKGBUILD                           # AUR package build script
 ├── dbus/                          # D-Bus service files
 │   ├── io.lamco.RdpServer.service         # Session bus activation (native)
 │   ├── io.lamco.RdpServer.service.flatpak # Session bus activation (Flatpak)
 │   └── io.lamco.RdpServer.System.conf     # System bus policy
+├── debian/                        # Debian non-free packaging
+│   ├── changelog                          # Debian changelog (dch format)
+│   ├── control                            # Package metadata and dependencies
+│   ├── copyright                          # DEP-5 license declaration
+│   ├── rules                              # Build rules (dh + cargo)
+│   ├── watch                              # Upstream version tracking
+│   └── source/format                      # Source format (3.0 quilt)
 ├── flatpak/                       # Flatpak packaging
-│   ├── io.lamco.RdpServer.yml             # Flatpak manifest
-│   ├── io.lamco.RdpServer.desktop         # Desktop entry
-│   └── io.lamco.RdpServer.metainfo.xml    # AppStream metadata
+│   ├── io.lamco.rdp-server.yml            # Flatpak manifest
+│   ├── io.lamco.rdp-server.dbus-service   # D-Bus session service (Flatpak)
+│   └── (desktop + metainfo in data/)      # Sourced from upstream tarball per Flathub policy
 ├── polkit/                        # PolicyKit authorization
 │   └── io.lamco.RdpServer.policy          # System service authorization
+├── rpmfusion/                     # RPM Fusion nonfree packaging
+│   └── lamco-rdp-server.spec              # RPM spec file
+├── snap/                          # Snap Store packaging
+│   └── snapcraft.yaml                     # Snapcraft manifest
 └── systemd/                       # Systemd service units
     ├── lamco-rdp-server.service           # User service
     └── lamco-rdp-server-system.service    # System service
@@ -29,16 +42,16 @@ Build and install locally:
 
 ```bash
 # Install Flatpak SDK
-flatpak install flathub org.freedesktop.Platform//24.08
-flatpak install flathub org.freedesktop.Sdk//24.08
-flatpak install flathub org.freedesktop.Sdk.Extension.rust-stable//24.08
+flatpak install flathub org.freedesktop.Platform//25.08
+flatpak install flathub org.freedesktop.Sdk//25.08
+flatpak install flathub org.freedesktop.Sdk.Extension.rust-stable//25.08
 
 # Build and install
 cd packaging/flatpak
-flatpak-builder --user --install build-dir io.lamco.RdpServer.yml
+flatpak-builder --user --install build-dir io.lamco.rdp-server.yml
 
 # Run
-flatpak run io.lamco.RdpServer
+flatpak run io.lamco.rdp-server
 ```
 
 **Note:** PAM authentication is not available in Flatpak due to sandbox restrictions.
@@ -60,11 +73,11 @@ sudo install -Dm755 target/release/lamco-rdp-server-gui /usr/bin/
 sudo cp packaging/dbus/io.lamco.RdpServer.service /usr/share/dbus-1/services/
 
 # Install desktop entry
-sudo cp packaging/flatpak/io.lamco.RdpServer.desktop /usr/share/applications/
+sudo cp data/io.lamco.rdp-server.desktop /usr/share/applications/
 
 # Install icon
-sudo install -Dm644 assets/icons/io.lamco.RdpServer.svg \
-    /usr/share/icons/hicolor/scalable/apps/
+sudo install -Dm644 data/icons/io.lamco.rdp-server.svg \
+    /usr/share/icons/hicolor/scalable/apps/io.lamco.rdp-server.svg
 ```
 
 ### 3. Systemd User Service

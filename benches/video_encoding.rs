@@ -46,7 +46,7 @@ fn bench_encoder_creation(c: &mut Criterion) {
                     ..Default::default()
                 };
                 black_box(Avc444Encoder::new(config).unwrap())
-            })
+            });
         });
     }
 
@@ -88,7 +88,7 @@ fn bench_encode_single_frame(c: &mut Criterion) {
                         .encode_bgra(black_box(data), width as u32, height as u32, 0)
                         .unwrap(),
                 )
-            })
+            });
         });
     }
 
@@ -142,7 +142,7 @@ fn bench_encode_p_frames(c: &mut Criterion) {
                         )
                         .unwrap(),
                 )
-            })
+            });
         });
     }
 
@@ -186,7 +186,7 @@ fn bench_encode_sequence(c: &mut Criterion) {
                                 .unwrap(),
                         );
                     }
-                })
+                });
             },
         );
     }
@@ -205,7 +205,7 @@ fn bench_bitrate_impact(c: &mut Criterion) {
     let bgra_data = generate_bgra_frame(width as usize, height as usize, 0);
 
     for bitrate in bitrates {
-        group.bench_function(BenchmarkId::new("720p", format!("{}kbps", bitrate)), |b| {
+        group.bench_function(BenchmarkId::new("720p", format!("{bitrate}kbps")), |b| {
             let config = EncoderConfig {
                 width: Some(width),
                 height: Some(height),
@@ -221,7 +221,7 @@ fn bench_bitrate_impact(c: &mut Criterion) {
                         .encode_bgra(&bgra_data, width as u32, height as u32, 0)
                         .unwrap(),
                 )
-            })
+            });
         });
     }
 

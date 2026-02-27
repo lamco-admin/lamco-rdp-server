@@ -210,7 +210,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    #[ignore] // Requires Secret Service running
+    #[ignore = "Requires Secret Service running"]
     async fn test_secret_service_connection() {
         let result = AsyncSecretServiceClient::connect().await;
         match result {
@@ -218,13 +218,13 @@ mod tests {
                 println!("Secret Service connected successfully");
             }
             Err(e) => {
-                println!("Secret Service not available: {}", e);
+                println!("Secret Service not available: {e}");
             }
         }
     }
 
     #[tokio::test]
-    #[ignore] // Requires Secret Service running
+    #[ignore = "Requires Secret Service running"]
     async fn test_secret_roundtrip() {
         let client = AsyncSecretServiceClient::connect()
             .await

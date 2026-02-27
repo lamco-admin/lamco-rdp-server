@@ -49,6 +49,39 @@ fn auth_method_help_text(state: &AppState) -> &'static str {
 }
 
 pub fn view_security_tab(state: &AppState) -> Element<'_, Message> {
+    let in_flatpak = crate::config::is_flatpak();
+
+    // Cert/key path widgets: read-only in Flatpak (portal-mediated selection only)
+    let cert_path_widget: Element<'_, Message> = if in_flatpak {
+        widgets::path_display(
+            &state.edit_strings.cert_path,
+            "Select certificate via Browse...",
+            Message::SecurityBrowseCert,
+        )
+    } else {
+        widgets::path_input(
+            &state.edit_strings.cert_path,
+            "/path/to/cert.pem",
+            Message::SecurityCertPathChanged,
+            Message::SecurityBrowseCert,
+        )
+    };
+
+    let key_path_widget: Element<'_, Message> = if in_flatpak {
+        widgets::path_display(
+            &state.edit_strings.key_path,
+            "Select private key via Browse...",
+            Message::SecurityBrowseKey,
+        )
+    } else {
+        widgets::path_input(
+            &state.edit_strings.key_path,
+            "/path/to/key.pem",
+            Message::SecurityKeyPathChanged,
+            Message::SecurityBrowseKey,
+        )
+    };
+
     let main_content = column![
         // Section header
         widgets::section_header("Security Configuration"),
@@ -56,12 +89,7 @@ pub fn view_security_tab(state: &AppState) -> Element<'_, Message> {
         // TLS Certificate section
         text("TLS Certificate:").size(14),
         space().height(4.0),
-        widgets::path_input(
-            &state.edit_strings.cert_path,
-            "/path/to/cert.pem",
-            Message::SecurityCertPathChanged,
-            Message::SecurityBrowseCert,
-        ),
+        cert_path_widget,
         space().height(8.0),
         // Generate certificate button
         button(text("Generate Self-Signed Certificate"))
@@ -72,12 +100,7 @@ pub fn view_security_tab(state: &AppState) -> Element<'_, Message> {
         // TLS Private Key section
         text("TLS Private Key:").size(14),
         space().height(4.0),
-        widgets::path_input(
-            &state.edit_strings.key_path,
-            "/path/to/key.pem",
-            Message::SecurityKeyPathChanged,
-            Message::SecurityBrowseKey,
-        ),
+        key_path_widget,
         space().height(20.0),
         // Enable NLA
         widgets::toggle_pending_with_note(

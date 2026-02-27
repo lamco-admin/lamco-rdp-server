@@ -136,7 +136,7 @@ pub enum MatrixCoefficients {
 /// # Example
 ///
 /// ```
-/// use lamco_rdp_server::egfx::color_space::ColorSpaceConfig;
+/// use lamco_rdp_server::egfx::ColorSpaceConfig;
 ///
 /// // For consistency with AVC420 (OpenH264):
 /// let config = ColorSpaceConfig::OPENH264_COMPATIBLE;

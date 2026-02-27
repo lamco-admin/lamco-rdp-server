@@ -69,7 +69,7 @@ fn bench_detect_no_damage(c: &mut Criterion) {
             // Prime with first frame
             let _ = detector.detect(data, width as u32, height as u32);
 
-            b.iter(|| black_box(detector.detect(black_box(data), width as u32, height as u32)))
+            b.iter(|| black_box(detector.detect(black_box(data), width as u32, height as u32)));
         });
     }
 
@@ -99,7 +99,7 @@ fn bench_detect_full_damage(c: &mut Criterion) {
                 let frame = generate_bgra_frame(width, height, offset);
                 offset += 100; // Each frame is completely different
                 black_box(detector.detect(black_box(&frame), width as u32, height as u32))
-            })
+            });
         });
     }
 
@@ -132,7 +132,7 @@ fn bench_detect_partial_damage(c: &mut Criterion) {
                 // Alternate between base and damaged to reset detector state
                 let _ = detector.detect(&base_frame, width as u32, height as u32);
                 black_box(detector.detect(black_box(&damaged), width as u32, height as u32))
-            })
+            });
         });
 
         // Medium damage (small window, 256x256)
@@ -144,7 +144,7 @@ fn bench_detect_partial_damage(c: &mut Criterion) {
             b.iter(|| {
                 let _ = detector.detect(&base_frame, width as u32, height as u32);
                 black_box(detector.detect(black_box(&damaged), width as u32, height as u32))
-            })
+            });
         });
     }
 
@@ -185,7 +185,7 @@ fn bench_region_merging(c: &mut Criterion) {
             b.iter(|| {
                 let _ = detector.detect(&base_frame, width as u32, height as u32);
                 black_box(detector.detect(black_box(&scattered_frame), width as u32, height as u32))
-            })
+            });
         });
     }
 
@@ -209,7 +209,7 @@ fn bench_tile_sizes(c: &mut Criterion) {
         };
 
         group.bench_function(
-            BenchmarkId::new("1080p", format!("{}px_tiles", tile_size)),
+            BenchmarkId::new("1080p", format!("{tile_size}px_tiles")),
             |b| {
                 let mut detector = DamageDetector::new(config.clone());
                 let _ = detector.detect(&frame1, width as u32, height as u32);
@@ -217,7 +217,7 @@ fn bench_tile_sizes(c: &mut Criterion) {
                 b.iter(|| {
                     let _ = detector.detect(&frame1, width as u32, height as u32);
                     black_box(detector.detect(black_box(&frame2), width as u32, height as u32))
-                })
+                });
             },
         );
     }
@@ -234,7 +234,7 @@ fn bench_damage_region_ops(c: &mut Criterion) {
         let r1 = DamageRegion::new(0, 0, 100, 100);
         let r2 = DamageRegion::new(50, 50, 100, 100);
 
-        b.iter(|| black_box(r1.overlaps(black_box(&r2))))
+        b.iter(|| black_box(r1.overlaps(black_box(&r2))));
     });
 
     // Benchmark union
@@ -242,7 +242,7 @@ fn bench_damage_region_ops(c: &mut Criterion) {
         let r1 = DamageRegion::new(0, 0, 100, 100);
         let r2 = DamageRegion::new(50, 50, 100, 100);
 
-        b.iter(|| black_box(r1.union(black_box(&r2))))
+        b.iter(|| black_box(r1.union(black_box(&r2))));
     });
 
     // Benchmark is_adjacent
@@ -250,7 +250,7 @@ fn bench_damage_region_ops(c: &mut Criterion) {
         let r1 = DamageRegion::new(0, 0, 64, 64);
         let r2 = DamageRegion::new(80, 0, 64, 64);
 
-        b.iter(|| black_box(r1.is_adjacent(black_box(&r2), 32)))
+        b.iter(|| black_box(r1.is_adjacent(black_box(&r2), 32)));
     });
 
     group.finish();

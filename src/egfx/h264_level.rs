@@ -340,6 +340,10 @@ impl fmt::Display for ConstraintViolation {
 impl std::error::Error for ConstraintViolation {}
 
 #[cfg(test)]
+#[expect(
+    clippy::float_cmp,
+    reason = "H.264 level math produces exact ratios from integer macroblock counts"
+)]
 mod tests {
     use super::*;
 

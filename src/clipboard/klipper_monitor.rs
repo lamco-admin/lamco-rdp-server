@@ -80,6 +80,7 @@ impl KlipperSignalMonitor {
     }
 
     /// Check if Klipper D-Bus service is available
+    #[expect(clippy::expect_used, reason = "static well-known D-Bus bus name")]
     pub async fn is_available() -> bool {
         let Ok(conn) = Connection::session().await else {
             return false;
@@ -134,6 +135,6 @@ mod tests {
         // This test requires Klipper to be running
         // Will pass or fail depending on environment
         let available = KlipperSignalMonitor::is_available().await;
-        println!("Klipper available: {}", available);
+        println!("Klipper available: {available}");
     }
 }

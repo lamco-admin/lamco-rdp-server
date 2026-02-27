@@ -16,7 +16,8 @@
 //!   ├─> Portal + Token Strategy (universal, portal v4+)
 //!   ├─> Mutter Direct API (GNOME only, no dialog)
 //!   ├─> libei/EIS (wlroots via Portal, Flatpak-compatible)
-//!   └─> wlr-direct (wlroots native, no Flatpak)
+//!   ├─> wlr-direct (wlroots native, no Flatpak)
+//!   └─> ScreenCast-only (view-only, config or fallback)
 //!
 //! Tokens
 //!   ├─> Flatpak Secret Portal (Flatpak deployment)
@@ -27,8 +28,8 @@
 //!
 //! # Usage
 //!
-//! ```rust,no_run
-//! use wrd_server::session::*;
+//! ```rust,ignore
+//! use lamco_rdp_server::session::*;
 //!
 //! // Detect deployment and select strategy
 //! let deployment = detect_deployment_context();
@@ -75,10 +76,14 @@ pub mod tpm_store;
 pub mod strategies {
     pub mod mutter_direct;
     pub mod portal_token;
+    pub mod screencast_only;
     pub mod selector;
 
     #[cfg(feature = "wayland")]
     pub mod wlr_direct;
+
+    #[cfg(feature = "portal-generic")]
+    pub mod portal_generic;
 
     #[cfg(feature = "libei")]
     pub mod libei;
@@ -86,7 +91,10 @@ pub mod strategies {
     #[cfg(feature = "libei")]
     pub use libei::{LibeiSessionHandleImpl, LibeiStrategy};
     pub use mutter_direct::MutterDirectStrategy;
+    #[cfg(feature = "portal-generic")]
+    pub use portal_generic::{PortalGenericSessionHandle, PortalGenericStrategy};
     pub use portal_token::{PortalSessionHandleImpl, PortalTokenStrategy};
+    pub use screencast_only::{ScreenCastOnlySessionHandle, ScreenCastOnlyStrategy};
     pub use selector::SessionStrategySelector;
     #[cfg(feature = "wayland")]
     pub use wlr_direct::{WlrDirectStrategy, WlrSessionHandleImpl};

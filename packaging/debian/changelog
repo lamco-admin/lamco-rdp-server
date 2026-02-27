@@ -1,0 +1,9 @@
+lamco-rdp-server (1.3.1-1) unstable; urgency=low
+
+  * Initial release (Closes: #1127949)
+  * Fix FTBFS: clear vendor checksums before cargo build
+  * Full DEP-5 copyright with per-crate enumeration (630 entries)
+  * Vcs-Git: salsa.debian.org/glamberson/lamco-rdp-server
+  * Enable salsa-ci pipeline
+
+ -- Greg Lamberson <greg@lamco.io>  Tue, 17 Feb 2026 00:00:00 +0000

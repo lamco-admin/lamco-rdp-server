@@ -61,7 +61,7 @@ pub enum Quirk {
     /// - RHEL 9.x (GNOME 40 + Mesa 22.x + older driver stack)
     ///
     /// See: docs/support-matrix.md for full platform compatibility details.
-    Avc444Unreliable,
+    ForceAvc420,
 
     /// Clipboard synchronization is not available
     ///
@@ -109,7 +109,7 @@ impl Quirk {
             Self::LimitedBufferFormats => "Limited GPU buffer format support",
             Self::SessionTimeoutOnIdle => "Portal session may timeout when idle",
             Self::ColorSpaceQuirk => "Color space may be incorrect",
-            Self::Avc444Unreliable => "AVC444 codec produces artifacts (use AVC420)",
+            Self::ForceAvc420 => "AVC444 disabled, AVC420 only (older driver stack)",
             Self::ClipboardUnavailable => "Clipboard sync not available (Portal v1)",
             Self::KdePortalClipboardUnstable => {
                 "Portal clipboard crashes on KDE (Klipper cooperation pending)"
@@ -205,15 +205,14 @@ impl CompositorProfile {
         // RHEL 9 specific quirks
         if let Some(ref os) = os_release {
             if os.is_rhel9() {
-                // AVC444 produces blurry output on RHEL 9 due to the combination
-                // of GNOME 40 + Mesa 22.x + older driver stack. Force AVC420.
-                quirks.push(Quirk::Avc444Unreliable);
-
                 // Portal v1 on RHEL 9/GNOME 40 doesn't support clipboard
                 quirks.push(Quirk::ClipboardUnavailable);
+                // AVC444 produces protocol errors or blurry text on RHEL 9 / GNOME 40.
+                // Root cause under investigation. Force AVC420-only encoding.
+                quirks.push(Quirk::ForceAvc420);
 
                 tracing::info!(
-                    "RHEL 9 detected ({}) - applying platform quirks: AVC444 disabled, clipboard unavailable",
+                    "RHEL 9 detected ({}) - applying platform quirks: clipboard unavailable, force AVC420",
                     os.version_id
                 );
             }

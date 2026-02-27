@@ -215,6 +215,10 @@ impl<T> FallbackChain<T> {
         }
     }
 
+    #[expect(
+        clippy::should_implement_trait,
+        reason = "builder pattern, not arithmetic addition"
+    )]
     pub fn add<S: FallbackStrategy<T> + 'static>(mut self, strategy: S) -> Self {
         self.strategies.push(Box::new(strategy));
         self

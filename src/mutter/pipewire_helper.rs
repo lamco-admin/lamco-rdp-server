@@ -3,37 +3,24 @@
 //! Mutter provides PipeWire node IDs instead of file descriptors.
 //! This module provides a helper to connect to PipeWire's default socket
 //! and obtain an FD that can be used with our existing PipeWire infrastructure.
-//!
-//! NOTE: This is a temporary solution. Ideally, lamco-pipewire would support
-//! both FD-based (portal) and socket-based (direct) connections. This helper
-//! allows us to use Mutter without modifying lamco-pipewire's architecture.
 
-use std::os::fd::{AsRawFd, RawFd};
+use std::os::fd::{IntoRawFd, RawFd};
 
 use anyhow::{Context, Result};
 use tracing::{debug, info};
 
 /// Connect to PipeWire's default socket and return an FD
 ///
-/// This establishes a connection to the PipeWire daemon running in the
-/// user's session, similar to what the portal does but without portal mediation.
+/// Establishes a connection to the PipeWire daemon running in the user's
+/// session, similar to what the portal does but without portal mediation.
 ///
-/// # Returns
-///
-/// Raw file descriptor connected to PipeWire daemon
-///
-/// # Errors
-///
-/// Returns error if:
-/// - PipeWire socket not found
-/// - Connection fails
-/// - Socket permissions incorrect
+/// The returned FD is intentionally leaked from the UnixStream so that it
+/// outlives this function. The caller is responsible for eventually closing it
+/// (typically when the PipeWire core takes ownership).
 pub fn connect_to_pipewire_daemon() -> Result<RawFd> {
     info!("Connecting to PipeWire default socket");
 
-    // PipeWire socket is typically at $XDG_RUNTIME_DIR/pipewire-0
     let runtime_dir = std::env::var("XDG_RUNTIME_DIR").context("XDG_RUNTIME_DIR not set")?;
-
     let socket_path = format!("{runtime_dir}/pipewire-0");
 
     debug!("Attempting to connect to PipeWire socket: {}", socket_path);
@@ -44,26 +31,20 @@ pub fn connect_to_pipewire_daemon() -> Result<RawFd> {
         "Failed to connect to PipeWire socket: {socket_path}"
     ))?;
 
-    let fd = stream.as_raw_fd();
+    // Transfer ownership of the FD out of the UnixStream.
+    // into_raw_fd() consumes the stream without closing the FD.
+    let fd = stream.into_raw_fd();
 
-    // Don't close the stream - we need the FD to stay open
-    std::mem::forget(stream);
-
-    info!("Connected to PipeWire daemon successfully, FD: {}", fd);
+    info!("Connected to PipeWire daemon, FD: {}", fd);
 
     Ok(fd)
 }
 
 /// Helper to get PipeWire FD from Mutter session
 ///
-/// Mutter sessions provide node IDs but not FDs. This helper:
-/// 1. Connects to PipeWire daemon
-/// 2. Returns FD that can be used with lamco-pipewire
-/// 3. The existing node_id can then be used to bind to specific stream
-///
-/// # Returns
-///
-/// Raw FD connected to PipeWire daemon
+/// Mutter sessions provide node IDs but not FDs. This helper connects to the
+/// PipeWire daemon and returns an FD that can be used with lamco-pipewire.
+/// The node_id is then used to bind to the specific stream.
 pub fn get_pipewire_fd_for_mutter() -> Result<RawFd> {
     connect_to_pipewire_daemon()
 }
@@ -73,15 +54,15 @@ mod tests {
     use super::*;
 
     #[test]
-    #[ignore] // Requires PipeWire running
+    #[ignore = "Requires PipeWire running"]
     fn test_connect_to_pipewire_daemon() {
         match connect_to_pipewire_daemon() {
             Ok(fd) => {
-                println!("Connected to PipeWire daemon, FD: {}", fd);
-                // Note: FD is leaked intentionally (mem::forget)
+                println!("Connected to PipeWire daemon, FD: {fd}");
+                // FD is intentionally leaked (same as production use)
             }
             Err(e) => {
-                println!("PipeWire daemon not available: {}", e);
+                println!("PipeWire daemon not available: {e}");
             }
         }
     }

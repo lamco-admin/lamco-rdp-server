@@ -60,16 +60,23 @@ pub enum InitQuirk {
     /// Affected: All Portal-based strategies
     ClipboardBeforeSession,
 
-    /// Mutter Direct API sessions can't be linked (screencast + remote desktop).
+    /// Mutter Direct API uses EIS for input on GNOME 46+.
     ///
-    /// The Mutter D-Bus API has separate RemoteDesktop and ScreenCast interfaces
-    /// but they can't share a session. RemoteDesktop.CreateSession() takes no
-    /// arguments, so we can't pass a session-id from ScreenCast.
+    /// On GNOME 46+, ConnectToEIS provides an EI socket for low-latency input
+    /// injection. On older GNOME versions, D-Bus methods are used as fallback.
+    /// When EIS is available, it is the preferred input path.
     ///
-    /// This makes the hybrid Mutter strategy non-functional.
+    /// Affected: GNOME with Mutter Direct API strategy
+    MutterEisAvailable,
+
+    /// Mutter clipboard is available via RemoteDesktop session.
     ///
-    /// Affected: GNOME with Mutter Direct API strategy (dormant)
-    MutterSessionLinkageBroken,
+    /// GNOME's Mutter provides EnableClipboard/DisableClipboard/SetSelection/
+    /// SelectionRead/SelectionWrite methods on the RemoteDesktop Session interface.
+    /// When available, this eliminates the need for a hybrid Portal session.
+    ///
+    /// Affected: GNOME 47+ with Mutter Direct API strategy
+    MutterClipboardAvailable,
 
     /// Portal v4+ restore tokens require secure storage.
     ///
@@ -122,7 +129,8 @@ impl InitQuirk {
             Self::AsyncSessionCleanup => "Async Session Cleanup",
             Self::GnomePersistenceRejected => "GNOME Persistence Rejected",
             Self::ClipboardBeforeSession => "Clipboard Before Session",
-            Self::MutterSessionLinkageBroken => "Mutter Session Linkage Broken",
+            Self::MutterEisAvailable => "Mutter EIS Available",
+            Self::MutterClipboardAvailable => "Mutter Clipboard Available",
             Self::RequiresSecureTokenStorage => "Requires Secure Token Storage",
             Self::WlrScreencopyBlockedBySandbox => "wlr-screencopy Blocked",
             Self::PamBlockedBySandbox => "PAM Blocked",
@@ -136,7 +144,8 @@ impl InitQuirk {
             Self::AsyncSessionCleanup => "Session Close() is asynchronous",
             Self::GnomePersistenceRejected => "GNOME rejects RemoteDesktop persistence",
             Self::ClipboardBeforeSession => "Create clipboard before session creation",
-            Self::MutterSessionLinkageBroken => "Mutter API can't link sessions",
+            Self::MutterEisAvailable => "EIS input available (GNOME 46+)",
+            Self::MutterClipboardAvailable => "Native clipboard via Mutter",
             Self::RequiresSecureTokenStorage => "Store restore tokens securely",
             Self::WlrScreencopyBlockedBySandbox => "Flatpak blocks wlr-screencopy",
             Self::PamBlockedBySandbox => "Flatpak blocks PAM authentication",
@@ -223,7 +232,20 @@ impl InitQuirkRegistry {
                 quirks.push(InitQuirk::RequiresSecureTokenStorage);
             }
             SessionStrategyType::MutterDirect => {
-                quirks.push(InitQuirk::MutterSessionLinkageBroken);
+                // Mutter-specific quirks based on GNOME version
+                if let CompositorType::Gnome { version } = compositor {
+                    let gnome_major: Option<u32> = version
+                        .as_deref()
+                        .and_then(|v| v.split('.').next())
+                        .and_then(|s| s.parse().ok());
+
+                    if gnome_major.is_some_and(|v| v >= 46) {
+                        quirks.push(InitQuirk::MutterEisAvailable);
+                    }
+                    if gnome_major.is_some_and(|v| v >= 47) {
+                        quirks.push(InitQuirk::MutterClipboardAvailable);
+                    }
+                }
             }
             SessionStrategyType::WlrScreencopy => {
                 // wlr-screencopy has its own session management

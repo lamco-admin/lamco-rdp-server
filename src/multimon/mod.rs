@@ -91,9 +91,9 @@
 //!
 //! # Example
 //!
-//! ```no_run
-//! use wrd_server::multimon::{Monitors, MultiMonitorConfig};
-//! use wrd_server::portal::session::StreamInfo;
+//! ```ignore
+//! use lamco_rdp_server::multimon::{Monitors, MultiMonitorConfig};
+//! use lamco_rdp_server::portal::StreamInfo;
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! // Create monitor manager

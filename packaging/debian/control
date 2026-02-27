@@ -1,0 +1,46 @@
+Source: lamco-rdp-server
+Section: non-free/net
+Priority: optional
+Maintainer: Greg Lamberson <greg@lamco.io>
+Build-Depends:
+ debhelper-compat (= 13),
+ cargo (>= 1.85),
+ rustc (>= 1.85),
+ pkgconf,
+ clang,
+ cmake,
+ nasm,
+ libpipewire-0.3-dev,
+ libspa-0.2-dev,
+ libwayland-dev,
+ libxkbcommon-dev,
+ libdbus-1-dev,
+ libssl-dev,
+ libpam0g-dev,
+ libfuse3-dev,
+ libva-dev
+Standards-Version: 4.7.3
+Homepage: https://www.lamco.ai/products/lamco-rdp-server/
+Vcs-Git: https://salsa.debian.org/glamberson/lamco-rdp-server.git
+Vcs-Browser: https://salsa.debian.org/glamberson/lamco-rdp-server
+Rules-Requires-Root: no
+
+Package: lamco-rdp-server
+Architecture: amd64
+Depends: ${shlibs:Depends}, ${misc:Depends},
+ pipewire,
+ xdg-desktop-portal
+Recommends:
+ libva2,
+ intel-media-va-driver | mesa-va-drivers
+Description: Native Wayland RDP server for Linux desktop sharing
+ lamco-rdp-server is a high-performance RDP server for Wayland-based
+ Linux desktops. It supports multiple screen capture and input backends:
+ xdg-desktop-portal for GNOME and KDE, native wlroots protocols for
+ Sway and Hyprland, with automatic capability detection.
+ .
+ Features include H.264 video encoding (AVC420/AVC444), hardware-
+ accelerated encoding via VA-API, multi-monitor support, clipboard
+ synchronization, and a graphical configuration GUI.
+ .
+ Built on IronRDP. Works with any standard RDP client.

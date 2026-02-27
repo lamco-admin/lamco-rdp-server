@@ -55,6 +55,10 @@ const FIRST_FILE_INODE: u64 = 2;
 /// Default TTL for file attributes (1 second - files are ephemeral)
 const TTL: Duration = Duration::from_secs(1);
 
+#[expect(
+    dead_code,
+    reason = "will be used when async file content requests are wired"
+)]
 /// Timeout for RDP file content requests
 const RDP_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -221,7 +225,7 @@ impl FuseClipboardFs {
 }
 
 impl Filesystem for FuseClipboardFs {
-    fn lookup(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
+    fn lookup(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEntry) {
         if parent != ROOT_INODE {
             reply.error(libc::ENOENT);
             return;
@@ -250,7 +254,7 @@ impl Filesystem for FuseClipboardFs {
         reply.error(libc::ENOENT);
     }
 
-    fn getattr(&mut self, _req: &Request, ino: u64, _fh: Option<u64>, reply: ReplyAttr) {
+    fn getattr(&mut self, _req: &Request<'_>, ino: u64, _fh: Option<u64>, reply: ReplyAttr) {
         if ino == ROOT_INODE {
             reply.attr(&TTL, &self.root_attr());
             return;
@@ -264,7 +268,7 @@ impl Filesystem for FuseClipboardFs {
         }
     }
 
-    fn open(&mut self, _req: &Request, ino: u64, flags: i32, reply: ReplyOpen) {
+    fn open(&mut self, _req: &Request<'_>, ino: u64, flags: i32, reply: ReplyOpen) {
         if flags & libc::O_WRONLY != 0 || flags & libc::O_RDWR != 0 {
             reply.error(libc::EACCES);
             return;
@@ -280,7 +284,7 @@ impl Filesystem for FuseClipboardFs {
 
     fn read(
         &mut self,
-        _req: &Request,
+        _req: &Request<'_>,
         ino: u64,
         _fh: u64,
         offset: i64,
@@ -350,7 +354,7 @@ impl Filesystem for FuseClipboardFs {
 
     fn readdir(
         &mut self,
-        _req: &Request,
+        _req: &Request<'_>,
         ino: u64,
         _fh: u64,
         offset: i64,
@@ -380,7 +384,7 @@ impl Filesystem for FuseClipboardFs {
         reply.ok();
     }
 
-    fn opendir(&mut self, _req: &Request, ino: u64, _flags: i32, reply: ReplyOpen) {
+    fn opendir(&mut self, _req: &Request<'_>, ino: u64, _flags: i32, reply: ReplyOpen) {
         if ino == ROOT_INODE {
             reply.opened(0, 0);
         } else {
@@ -394,6 +398,10 @@ impl Filesystem for FuseClipboardFs {
 /// fuser::BackgroundSession is thread-safe (it's a handle to a background thread),
 /// but doesn't implement Send + Sync because it contains internal raw pointers.
 /// This wrapper marks it as safe to send across threads.
+#[expect(
+    dead_code,
+    reason = "session field holds the FUSE background thread alive"
+)]
 struct SendableSession(fuser::BackgroundSession);
 
 // SAFETY: BackgroundSession is a handle to a FUSE background thread.
@@ -591,13 +599,15 @@ impl Drop for FuseMount {
 struct FuseClipboardFsShared {
     files: Arc<RwLock<HashMap<u64, VirtualFile>>>,
     name_to_inode: Arc<RwLock<HashMap<String, u64>>>,
+    #[expect(dead_code, reason = "inode allocation for dynamically added files")]
     next_inode: Arc<AtomicU64>,
     request_tx: mpsc::Sender<FileContentsRequest>,
+    #[expect(dead_code, reason = "needed for cleanup/unmount logging")]
     mount_point: PathBuf,
 }
 
 impl Filesystem for FuseClipboardFsShared {
-    fn lookup(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
+    fn lookup(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEntry) {
         if parent != ROOT_INODE {
             reply.error(libc::ENOENT);
             return;
@@ -626,7 +636,7 @@ impl Filesystem for FuseClipboardFsShared {
         reply.error(libc::ENOENT);
     }
 
-    fn getattr(&mut self, _req: &Request, ino: u64, _fh: Option<u64>, reply: ReplyAttr) {
+    fn getattr(&mut self, _req: &Request<'_>, ino: u64, _fh: Option<u64>, reply: ReplyAttr) {
         if ino == ROOT_INODE {
             reply.attr(&TTL, &root_attr());
             return;
@@ -640,7 +650,7 @@ impl Filesystem for FuseClipboardFsShared {
         }
     }
 
-    fn open(&mut self, _req: &Request, ino: u64, flags: i32, reply: ReplyOpen) {
+    fn open(&mut self, _req: &Request<'_>, ino: u64, flags: i32, reply: ReplyOpen) {
         if flags & libc::O_WRONLY != 0 || flags & libc::O_RDWR != 0 {
             reply.error(libc::EACCES);
             return;
@@ -656,7 +666,7 @@ impl Filesystem for FuseClipboardFsShared {
 
     fn read(
         &mut self,
-        _req: &Request,
+        _req: &Request<'_>,
         ino: u64,
         _fh: u64,
         offset: i64,
@@ -726,7 +736,7 @@ impl Filesystem for FuseClipboardFsShared {
 
     fn readdir(
         &mut self,
-        _req: &Request,
+        _req: &Request<'_>,
         ino: u64,
         _fh: u64,
         offset: i64,
@@ -756,7 +766,7 @@ impl Filesystem for FuseClipboardFsShared {
         reply.ok();
     }
 
-    fn opendir(&mut self, _req: &Request, ino: u64, _flags: i32, reply: ReplyOpen) {
+    fn opendir(&mut self, _req: &Request<'_>, ino: u64, _flags: i32, reply: ReplyOpen) {
         if ino == ROOT_INODE {
             reply.opened(0, 0);
         } else {

@@ -398,9 +398,6 @@ mod tests {
             "Should never return None, always have EncryptedFile fallback"
         );
 
-        println!(
-            "Detected: {} (encryption: {}, accessible: {})",
-            method, encryption, accessible
-        );
+        println!("Detected: {method} (encryption: {encryption}, accessible: {accessible})");
     }
 }

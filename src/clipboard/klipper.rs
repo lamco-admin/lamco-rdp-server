@@ -97,6 +97,7 @@ pub struct KlipperMonitor {
 
 impl KlipperMonitor {
     /// Check if klipper service is available on the session bus
+    #[expect(clippy::expect_used, reason = "static well-known D-Bus bus name")]
     pub async fn detect() -> KlipperInfo {
         info!("┌─ Klipper Detection ─────────────────────────────────────────");
 
@@ -112,7 +113,7 @@ impl KlipperMonitor {
         let dbus_proxy = zbus::fdo::DBusProxy::new(&connection).await;
         let service_exists = match &dbus_proxy {
             Ok(proxy) => proxy
-                .name_has_owner(KLIPPER_SERVICE.try_into().unwrap())
+                .name_has_owner(KLIPPER_SERVICE.try_into().expect("valid bus name"))
                 .await
                 .unwrap_or(false),
             Err(_) => false,
@@ -203,7 +204,11 @@ impl KlipperMonitor {
         std::env::var("KDE_SESSION_VERSION").ok()
     }
 
-    pub async fn new() -> Result<Self, zbus::Error> {
+    #[expect(
+        dead_code,
+        reason = "constructed when KDE Klipper monitoring is enabled"
+    )]
+    pub(crate) async fn new() -> Result<Self, zbus::Error> {
         let connection = Connection::session().await?;
 
         Ok(Self {

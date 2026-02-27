@@ -358,7 +358,6 @@ impl EgfxFrameSender {
 
             // Send via ServerEvent (unbounded channel - never blocks)
             let event = ServerEvent::Egfx(EgfxServerMessage::SendMessages {
-                channel_id,
                 messages: svc_messages,
             });
 
@@ -377,7 +376,7 @@ impl EgfxFrameSender {
         let count = self
             .frame_count
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        if count % 30 == 0 {
+        if count.is_multiple_of(30) {
             trace!(
                 "EGFX: Sent frame {} (id={}, display={}×{}, encoded={}×{}, {} bytes)",
                 count,
@@ -397,6 +396,10 @@ impl EgfxFrameSender {
     ///
     /// AVC444 provides full 4:4:4 chroma resolution for graphics/CAD applications.
     /// Both streams must use the same encoded dimensions.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "dual-stream AVC444 needs both bitstreams + geometry"
+    )]
     pub async fn send_avc444_frame(
         &self,
         stream1_data: &[u8],
@@ -471,7 +474,6 @@ impl EgfxFrameSender {
                     .map_err(|e| SendError::EncodingFailed(e.to_string()))?;
 
             let event = ServerEvent::Egfx(EgfxServerMessage::SendMessages {
-                channel_id,
                 messages: svc_messages,
             });
 
@@ -490,7 +492,7 @@ impl EgfxFrameSender {
         let count = self
             .frame_count
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        if count % 30 == 0 {
+        if count.is_multiple_of(30) {
             trace!(
                 "EGFX AVC444: Sent frame {} (id={}, {}×{}, stream1={}b, stream2={}b)",
                 count,
@@ -523,6 +525,10 @@ impl EgfxFrameSender {
     ///
     /// Damage regions tell the client which areas changed, enabling partial rendering.
     /// Empty damage_regions = full frame update.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "frame + damage regions + geometry"
+    )]
     pub async fn send_frame_with_regions(
         &self,
         h264_data: &[u8],
@@ -591,7 +597,6 @@ impl EgfxFrameSender {
                     .map_err(|e| SendError::EncodingFailed(e.to_string()))?;
 
             let event = ServerEvent::Egfx(EgfxServerMessage::SendMessages {
-                channel_id,
                 messages: svc_messages,
             });
 
@@ -615,6 +620,10 @@ impl EgfxFrameSender {
     /// The `stream2_data` parameter is now Optional. When `None`, IronRDP's
     /// `send_avc444_frame` will set LC=1 (luma only), instructing the client
     /// to reuse its cached auxiliary stream for bandwidth optimization.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "dual-stream AVC444 + damage regions + geometry"
+    )]
     pub async fn send_avc444_frame_with_regions(
         &self,
         stream1_data: &[u8],
@@ -664,22 +673,19 @@ impl EgfxFrameSender {
             let channel_id = server.channel_id().ok_or(SendError::NotReady)?;
 
             // === PHASE 1: PASS OPTIONAL AUX TO IRONRDP ===
-            // IronRDP's send_avc444_frame accepts Option<&[u8]> for aux stream
-            // - Some(data) → LC=0 (both streams present)
-            // - None → LC=1 (luma only, client reuses previous aux)
-            // This was verified in Step 0 of Phase 1 research
             let frame_id = server
                 .send_avc444_frame(
                     surface_id,
                     stream1_data,
                     &regions,
-                    stream2_data, // Pass Option<&[u8]> - IronRDP handles it!
-                    stream2_data.map(|_| regions.as_slice()), // Option<&[Avc420Region]>
+                    stream2_data,
+                    stream2_data.map(|_| regions.as_slice()),
                     timestamp_ms,
                 )
                 .ok_or(SendError::Backpressure)?;
 
             let messages = server.drain_output();
+
             (frame_id, messages, channel_id)
         };
 
@@ -689,7 +695,6 @@ impl EgfxFrameSender {
                     .map_err(|e| SendError::EncodingFailed(e.to_string()))?;
 
             let event = ServerEvent::Egfx(EgfxServerMessage::SendMessages {
-                channel_id,
                 messages: svc_messages,
             });
 

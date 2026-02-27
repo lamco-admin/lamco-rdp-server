@@ -143,6 +143,19 @@ fn view_capabilities_section(state: &AppState) -> Element<'_, Message> {
             caps.compositor_name,
             caps.compositor_version.as_deref().unwrap_or("unknown")
         );
+        // Mutter Direct API status (only shown for GNOME)
+        let mutter_api_str = if caps.compositor_name == "GNOME" {
+            caps.services
+                .iter()
+                .find(|s| s.id == "DirectCompositorAPI")
+                .map(|s| {
+                    let notes = s.notes.first().cloned().unwrap_or_default();
+                    format!("{} {}", s.level_emoji, notes)
+                })
+                .unwrap_or_else(|| "Not probed".to_string())
+        } else {
+            String::new()
+        };
 
         container(
             column![
@@ -160,6 +173,11 @@ fn view_capabilities_section(state: &AppState) -> Element<'_, Message> {
                         labeled_value("Portal Backend:", &caps.portal_backend),
                         labeled_value("ScreenCast:", &screencast_version_str),
                         labeled_value("RemoteDesktop:", &remote_desktop_version_str),
+                        if !mutter_api_str.is_empty() {
+                            labeled_value("Mutter API:", &mutter_api_str)
+                        } else {
+                            space().height(0.0).into()
+                        },
                         space().height(8.0),
                         labeled_value("Deployment:", &deployment_str),
                         labeled_value("XDG_RUNTIME_DIR:", &xdg_runtime_str),

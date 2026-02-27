@@ -45,9 +45,10 @@ use crate::server::{HandlerState, SharedHandlerState};
 ///
 /// # Platform Quirks
 ///
-/// Some platforms have known issues with AVC444. When `force_avc420_only` is set,
-/// the handler will disable AVC444 regardless of client capability. This is used
-/// for platforms like RHEL 9 where AVC444 produces visual artifacts.
+/// AVC444 works correctly on most platforms with the single-encoder architecture
+/// (validated in v1.3.0/v1.3.1). Some platforms (e.g., RHEL 9 / GNOME 40) exhibit
+/// AVC444-specific issues that remain under investigation. When `force_avc420_only`
+/// is set via platform quirk detection, the handler disables AVC444 for that platform.
 pub struct LamcoGraphicsHandler {
     /// Surface dimensions
     width: u16,
@@ -81,7 +82,7 @@ pub struct LamcoGraphicsHandler {
     /// Force AVC420-only mode due to platform quirks
     ///
     /// When true, AVC444 will be disabled even if the client supports it.
-    /// This is set based on platform detection (e.g., RHEL 9 has AVC444 blur issues).
+    /// Set based on compositor profile detection (e.g., RHEL 9 ForceAvc420 quirk).
     force_avc420_only: bool,
 
     /// Maximum frames in flight before backpressure
@@ -158,7 +159,7 @@ impl LamcoGraphicsHandler {
         max_frames_in_flight: u32,
     ) -> Self {
         if force_avc420_only {
-            info!("EGFX handler: AVC444 disabled due to platform quirks (force_avc420_only)");
+            info!("EGFX handler: AVC444 disabled by platform quirk (force_avc420_only)");
         }
         info!(
             "EGFX handler: max_frames_in_flight={}",
@@ -242,8 +243,8 @@ impl LamcoGraphicsHandler {
 impl GraphicsPipelineHandler for LamcoGraphicsHandler {
     fn capabilities_advertise(&mut self, pdu: &CapabilitiesAdvertisePdu) {
         info!("EGFX: Client advertised {} capability sets", pdu.0.len());
-        for cap in &pdu.0 {
-            debug!("  EGFX capability: {:?}", cap);
+        for (i, cap) in pdu.0.iter().enumerate() {
+            debug!("EGFX CAP-ADV[{}]: {:?}", i, cap);
         }
     }
 
@@ -262,7 +263,7 @@ impl GraphicsPipelineHandler for LamcoGraphicsHandler {
         // - V10+ with AVC420_ENABLED → AVC420 AND AVC444v2 (4:4:4 chroma via dual-stream)
         //
         // AVC444v2 provides superior text/UI rendering through full chroma resolution.
-        let (avc420, mut avc444) = match negotiated {
+        let (avc420, avc444) = match negotiated {
             CapabilitySet::V8_1 { flags, .. } => {
                 // V8.1: AVC420 only, no AVC444 support
                 let has_avc420 = flags.contains(CapabilitiesV81Flags::AVC420_ENABLED);
@@ -284,29 +285,34 @@ impl GraphicsPipelineHandler for LamcoGraphicsHandler {
             _ => (false, false),
         };
 
-        // Apply platform quirk: force AVC420-only if the platform has known AVC444 issues
-        // This is set during handler construction based on OS detection (e.g., RHEL 9)
-        if self.force_avc420_only && avc444 {
+        // Platform quirk: force AVC420 when ForceAvc420 is active.
+        // AVC444 works on most platforms but has known issues on some
+        // (e.g., RHEL 9 / GNOME 40 produces blurry text or protocol errors).
+        let effective_avc444 = if self.force_avc420_only && avc444 {
             warn!(
-                "EGFX: Client supports AVC444 but platform has Avc444Unreliable quirk - forcing AVC420 only"
+                "EGFX: ForceAvc420 quirk active: suppressing AVC444. \
+                 Client supports AVC444 but platform quirk forces AVC420 only."
             );
-            avc444 = false;
-        }
+            false
+        } else {
+            avc444
+        };
 
         self.avc420_enabled.store(avc420, Ordering::Release);
-        self.avc444_enabled.store(avc444, Ordering::Release);
+        self.avc444_enabled
+            .store(effective_avc444, Ordering::Release);
         self.ready.store(true, Ordering::Release);
 
         // Sync to shared state for EgfxFrameSender visibility
         self.sync_shared_state();
 
         // Log codec capabilities
-        match (avc420, avc444) {
+        match (avc420, effective_avc444) {
             (true, true) => {
                 info!("EGFX: AVC420 + AVC444v2 encoding enabled (V10+ capabilities)");
             }
             (true, false) if self.force_avc420_only => {
-                info!("EGFX: AVC420 encoding enabled (AVC444 disabled due to platform quirk)");
+                info!("EGFX: AVC420 encoding enabled (AVC444 suppressed by platform quirk)");
             }
             (true, false) => {
                 info!("EGFX: AVC420 (H.264 4:2:0) encoding enabled");
@@ -319,7 +325,7 @@ impl GraphicsPipelineHandler for LamcoGraphicsHandler {
 
     fn on_frame_ack(&mut self, frame_id: u32, queue_depth: u32) {
         trace!(
-            "EGFX: Frame {} acknowledged, client queue depth: {}",
+            "EGFX: frame_ack id={}, queue_depth={}",
             frame_id,
             queue_depth
         );
@@ -364,7 +370,13 @@ impl GraphicsPipelineHandler for LamcoGraphicsHandler {
     }
 
     fn on_close(&mut self) {
-        info!("EGFX: Channel closed");
+        debug!(
+            "EGFX: channel closed (was_ready={}, avc420={}, avc444={}, has_surface={})",
+            self.ready.load(Ordering::Acquire),
+            self.avc420_enabled.load(Ordering::Acquire),
+            self.avc444_enabled.load(Ordering::Acquire),
+            self.has_surface.load(Ordering::Acquire),
+        );
         self.ready.store(false, Ordering::Release);
         self.avc420_enabled.store(false, Ordering::Release);
         self.has_surface.store(false, Ordering::Release);

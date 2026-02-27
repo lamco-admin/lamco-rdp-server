@@ -61,8 +61,15 @@ use reis::{ei, tokio::EiEventStream, PendingRequestResult};
 use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, error, info, warn};
 
-use crate::session::strategy::{
-    ClipboardComponents, PipeWireAccess, SessionHandle, SessionStrategy, SessionType, StreamInfo,
+use crate::{
+    health::{HealthEvent, HealthReporter},
+    session::{
+        strategy::{
+            ClipboardComponents, PipeWireAccess, SessionHandle, SessionStrategy, SessionType,
+            StreamInfo,
+        },
+        Tokens,
+    },
 };
 
 /// libei/EIS strategy implementation
@@ -70,17 +77,26 @@ use crate::session::strategy::{
 /// Provides input injection via Portal RemoteDesktop + EIS protocol.
 pub struct LibeiStrategy {
     /// Optional Portal manager for session management
+    #[expect(dead_code, reason = "retained for future EIS session recovery")]
     portal_manager: Option<Arc<lamco_portal::PortalManager>>,
+    /// Token manager for session persistence (avoids permission dialog on restart)
+    token_manager: Option<Arc<Tokens>>,
 }
 
 impl LibeiStrategy {
-    pub fn new(portal_manager: Option<Arc<lamco_portal::PortalManager>>) -> Self {
-        Self { portal_manager }
+    pub fn new(
+        portal_manager: Option<Arc<lamco_portal::PortalManager>>,
+        token_manager: Option<Arc<Tokens>>,
+    ) -> Self {
+        Self {
+            portal_manager,
+            token_manager,
+        }
     }
 
     pub async fn is_available() -> bool {
         match RemoteDesktop::new().await {
-            Ok(rd) => {
+            Ok(_rd) => {
                 // Try to check if ConnectToEIS is available
                 // This is a v2+ method, older portals won't have it
                 debug!("[libei] Portal RemoteDesktop proxy created successfully");
@@ -98,7 +114,7 @@ impl LibeiStrategy {
 
 impl Default for LibeiStrategy {
     fn default() -> Self {
-        Self::new(None)
+        Self::new(None, None)
     }
 }
 
@@ -132,22 +148,57 @@ impl SessionStrategy for LibeiStrategy {
             .await
             .context("Failed to create RemoteDesktop session")?;
 
+        // Load restore token from previous session (avoids permission dialog)
+        let restore_token = if let Some(ref tm) = self.token_manager {
+            match tm.load_token("libei-default").await {
+                Ok(Some(token)) => {
+                    info!("libei: Loaded restore token ({} chars)", token.len());
+                    Some(token)
+                }
+                Ok(None) => {
+                    info!("libei: No restore token found, permission dialog will appear");
+                    None
+                }
+                Err(e) => {
+                    warn!("libei: Failed to load restore token: {}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         remote_desktop
             .select_devices(
                 &session,
                 DeviceType::Keyboard | DeviceType::Pointer,
-                None,
-                PersistMode::DoNot, // TODO: Support token persistence
+                restore_token.as_deref(),
+                PersistMode::ExplicitlyRevoked,
             )
             .await
             .context("Failed to select input devices")?;
 
         info!("✅ libei: Selected keyboard and pointer devices");
 
-        remote_desktop
+        let response = remote_desktop
             .start(&session, None)
             .await
             .context("Failed to start RemoteDesktop session")?;
+
+        // Extract and save restore token for future sessions
+        let selected = response.response()?;
+        let new_token = selected.restore_token().map(|s| s.to_string());
+
+        if let Some(ref token) = new_token {
+            info!("libei: Received restore token ({} chars)", token.len());
+            if let Some(ref tm) = self.token_manager {
+                if let Err(e) = tm.save_token("libei-default", token).await {
+                    warn!("libei: Failed to save restore token: {}", e);
+                }
+            }
+        } else {
+            debug!("[libei] No restore token in response (portal may not support persistence)");
+        }
 
         info!("✅ libei: RemoteDesktop session started");
 
@@ -191,6 +242,7 @@ impl SessionStrategy for LibeiStrategy {
             pointer_device: Arc::new(Mutex::new(None)),
             streams: Arc::new(Mutex::new(vec![])),
             last_serial: Arc::new(Mutex::new(handshake_resp.serial)),
+            health_reporter: std::sync::OnceLock::new(),
         });
 
         let handle_clone = handle.clone();
@@ -217,6 +269,7 @@ struct DeviceData {
     name: Option<String>,
     device_type: Option<ei::device::DeviceType>,
     interfaces: HashMap<String, reis::Object>,
+    #[expect(dead_code, reason = "tracks which seat owns this device")]
     seat: Option<ei::Seat>,
 }
 
@@ -237,6 +290,7 @@ struct SeatData {
 ///
 /// Implements SessionHandle trait using event-driven EIS protocol.
 pub struct LibeiSessionHandleImpl {
+    #[expect(dead_code, reason = "keeps Portal session alive for EIS lifetime")]
     portal_session: Arc<RwLock<ashpd::desktop::Session<'static, RemoteDesktop<'static>>>>,
     context: Arc<ei::Context>,
     connection: Arc<Mutex<ei::Connection>>,
@@ -247,6 +301,7 @@ pub struct LibeiSessionHandleImpl {
     pointer_device: Arc<Mutex<Option<ei::Device>>>,
     streams: Arc<Mutex<Vec<StreamInfo>>>,
     last_serial: Arc<Mutex<u32>>,
+    health_reporter: std::sync::OnceLock<HealthReporter>,
 }
 
 impl LibeiSessionHandleImpl {
@@ -269,6 +324,11 @@ impl LibeiSessionHandleImpl {
                 }
                 Err(e) => {
                     error!("❌ libei: Event stream error: {}", e);
+                    if let Some(r) = self.health_reporter.get() {
+                        r.report(HealthEvent::EisStreamEnded {
+                            reason: format!("stream error: {e}"),
+                        });
+                    }
                     return Err(e.into());
                 }
             };
@@ -277,6 +337,11 @@ impl LibeiSessionHandleImpl {
         }
 
         info!("🔌 libei: Event loop terminated");
+        if let Some(r) = self.health_reporter.get() {
+            r.report(HealthEvent::EisStreamEnded {
+                reason: "stream EOF".into(),
+            });
+        }
         Ok(())
     }
 
@@ -419,6 +484,10 @@ impl LibeiSessionHandleImpl {
 
 #[async_trait]
 impl SessionHandle for LibeiSessionHandleImpl {
+    fn set_health_reporter(&self, reporter: HealthReporter) {
+        let _ = self.health_reporter.set(reporter);
+    }
+
     fn pipewire_access(&self) -> PipeWireAccess {
         // libei provides input only (no video capture)
         // Video comes from Portal ScreenCast (separate session)
@@ -606,21 +675,21 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    #[ignore] // Requires Portal RemoteDesktop
+    #[ignore = "Requires Portal RemoteDesktop"]
     async fn test_libei_availability() {
         let available = LibeiStrategy::is_available().await;
         println!("libei available: {}", available);
     }
 
     #[tokio::test]
-    #[ignore] // Requires active Portal session and user approval
+    #[ignore = "Requires active Portal session and user approval"]
     async fn test_create_session() {
         if !LibeiStrategy::is_available().await {
             println!("Skipping: libei not available");
             return;
         }
 
-        let strategy = LibeiStrategy::new(None);
+        let strategy = LibeiStrategy::new(None, None);
         match strategy.create_session().await {
             Ok(session) => {
                 assert_eq!(session.session_type(), SessionType::Libei);

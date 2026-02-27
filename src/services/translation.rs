@@ -13,15 +13,15 @@ use crate::compositor::{
 };
 
 pub(super) fn translate_capabilities(caps: &CompositorCapabilities) -> Vec<AdvertisedService> {
-    let mut services = Vec::new();
-
-    services.push(translate_damage_tracking(caps));
-    services.push(translate_dmabuf(caps));
-    services.push(translate_explicit_sync(caps));
-    services.push(translate_fractional_scaling(caps));
-    services.push(translate_metadata_cursor(caps));
-    services.push(translate_multi_monitor(caps));
-    services.push(translate_window_capture(caps));
+    let mut services = vec![
+        translate_damage_tracking(caps),
+        translate_dmabuf(caps),
+        translate_explicit_sync(caps),
+        translate_fractional_scaling(caps),
+        translate_metadata_cursor(caps),
+        translate_multi_monitor(caps),
+        translate_window_capture(caps),
+    ];
     services.push(AdvertisedService::unavailable(ServiceId::HdrColorSpace));
     services.push(translate_clipboard(caps));
     services.push(translate_clipboard_manager(caps));
@@ -38,6 +38,8 @@ pub(super) fn translate_capabilities(caps: &CompositorCapabilities) -> Vec<Adver
 
     services.push(translate_pam_authentication(caps));
     services.push(translate_no_authentication(caps));
+
+    services.push(translate_clipboard_data_control(caps));
 
     services
 }
@@ -394,9 +396,11 @@ fn translate_video_capture(caps: &CompositorCapabilities) -> AdvertisedService {
             buffer_type: buffer_type.to_string(),
         };
 
-        let mut perf = PerformanceHints::default();
-        perf.recommended_fps = Some(caps.profile.recommended_fps_cap);
-        perf.zero_copy_available = caps.profile.recommended_buffer_type == BufferType::DmaBuf;
+        let perf = PerformanceHints {
+            recommended_fps: Some(caps.profile.recommended_fps_cap),
+            zero_copy_available: caps.profile.recommended_buffer_type == BufferType::DmaBuf,
+            ..PerformanceHints::default()
+        };
 
         AdvertisedService::guaranteed(ServiceId::VideoCapture, feature)
             .with_performance(perf)
@@ -481,28 +485,52 @@ fn translate_session_persistence(caps: &CompositorCapabilities) -> AdvertisedSer
 }
 
 fn translate_direct_compositor_api(caps: &CompositorCapabilities) -> AdvertisedService {
-    // Mutter Direct API: DORMANT - Tested and found broken on GNOME 40 and 46
-    //
-    // Test Results:
-    //   GNOME 40.10 (RHEL 9):     ScreenCast works, RemoteDesktop fails (1,137 input errors)
-    //   GNOME 46.0 (Ubuntu 24.04): ScreenCast broken, RemoteDesktop fails
-    //
-    // Root Cause: RemoteDesktop and ScreenCast sessions cannot be linked
-    //   - RemoteDesktop.CreateSession() takes no arguments (can't pass session-id)
-    //   - ScreenCast doesn't expose SessionId property
-    //   - Input injection fails: "No screen cast active" or silent failures
-    //
-    // Portal Strategy works universally on all tested GNOME versions.
-    //
-    // Code preserved in src/mutter/ (not deleted) in case GNOME fixes session linkage.
-    // To re-enable: Change Unavailable → BestEffort and test thoroughly.
-
     match &caps.compositor {
         CompositorType::Gnome { version } => {
-            AdvertisedService::unavailable(ServiceId::DirectCompositorAPI).with_note(&format!(
-            "Mutter API non-functional (tested on GNOME 40, 46 - session linkage broken). GNOME {}",
-            version.as_deref().unwrap_or("unknown")
-        ))
+            let ver_str = version.as_deref().unwrap_or("unknown");
+
+            // Parse GNOME version to determine capability level
+            let gnome_major: Option<u32> = version
+                .as_deref()
+                .and_then(|v| v.split('.').next())
+                .and_then(|s| s.parse().ok());
+
+            // Build the feature struct with what we know statically
+            let feature = WaylandFeature::MutterDirectAPI {
+                version: version.clone(),
+                has_screencast: true,
+                has_remote_desktop: true,
+            };
+
+            match gnome_major {
+                Some(v) if v >= 46 => {
+                    // GNOME 46+: EIS available, clipboard available, fully stable
+                    AdvertisedService::guaranteed(ServiceId::DirectCompositorAPI, feature)
+                        .with_note(&format!(
+                            "Mutter API (GNOME {ver_str}): EIS + clipboard available"
+                        ))
+                }
+                Some(v) if v >= 45 => {
+                    // GNOME 45: Session linkage works, D-Bus input, no EIS
+                    AdvertisedService::best_effort(ServiceId::DirectCompositorAPI, feature)
+                        .with_note(&format!(
+                            "Mutter API (GNOME {ver_str}): D-Bus input only (no EIS)"
+                        ))
+                }
+                Some(v) if v < 45 => {
+                    // GNOME < 45: Session linkage may not work reliably
+                    AdvertisedService::unavailable(ServiceId::DirectCompositorAPI).with_note(
+                        &format!("Mutter API requires GNOME 45+ (detected GNOME {ver_str})"),
+                    )
+                }
+                _ => {
+                    // Unknown version: try BestEffort since we have a GNOME compositor
+                    AdvertisedService::best_effort(ServiceId::DirectCompositorAPI, feature)
+                        .with_note(&format!(
+                            "Mutter API (GNOME {ver_str}): version unknown, probing at runtime"
+                        ))
+                }
+            }
         }
         _ => AdvertisedService::unavailable(ServiceId::DirectCompositorAPI)
             .with_note("Only implemented for GNOME compositor"),
@@ -818,6 +846,40 @@ fn translate_unattended_access(caps: &CompositorCapabilities) -> AdvertisedServi
     }
 }
 
+fn translate_clipboard_data_control(caps: &CompositorCapabilities) -> AdvertisedService {
+    use super::wayland_features::DataControlProtocol;
+    use crate::session::DeploymentContext;
+
+    // Blocked in Flatpak — security-context-v1 prevents privileged protocol access
+    if matches!(caps.deployment, DeploymentContext::Flatpak) {
+        return AdvertisedService::unavailable(ServiceId::ClipboardDataControl)
+            .with_note("data-control blocked by Flatpak sandbox (security-context-v1)");
+    }
+
+    // Prefer ext-data-control-v1 (Wayland staging) over wlr-data-control (legacy)
+    if let Some(version) = caps.get_protocol_version("ext_data_control_manager_v1") {
+        let feature = WaylandFeature::ClipboardDataControl {
+            protocol: DataControlProtocol::Ext,
+            version,
+        };
+        AdvertisedService::guaranteed(ServiceId::ClipboardDataControl, feature)
+            .with_rdp_capability(RdpCapability::clipboard_standard(10 * 1024 * 1024))
+            .with_note("ext-data-control-v1 (Wayland staging protocol)")
+    } else if let Some(version) = caps.get_protocol_version("zwlr_data_control_manager_v1") {
+        let feature = WaylandFeature::ClipboardDataControl {
+            protocol: DataControlProtocol::Wlr,
+            version,
+        };
+        AdvertisedService::best_effort(ServiceId::ClipboardDataControl, feature)
+            .with_rdp_capability(RdpCapability::clipboard_standard(10 * 1024 * 1024))
+            .with_note("wlr-data-control-unstable-v1 (legacy, functional)")
+    } else {
+        AdvertisedService::unavailable(ServiceId::ClipboardDataControl)
+            .with_note("No data-control protocol found in Wayland globals")
+    }
+}
+
+#[expect(dead_code, reason = "synchronous D-Bus check for non-async contexts")]
 fn check_dbus_interface_sync(interface: &str) -> bool {
     // Uses blocking to avoid nested runtime issues when called from async context
 
@@ -839,6 +901,7 @@ fn check_dbus_interface_sync(interface: &str) -> bool {
     })
 }
 
+#[expect(dead_code, reason = "used for compositor version comparison")]
 fn parse_gnome_version(version_str: &str) -> Option<f32> {
     // Parse "46.0" or "46.2" to 46.0, 46.2
     version_str

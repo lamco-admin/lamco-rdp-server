@@ -177,14 +177,15 @@ fn print_gpu_error_message(msg: &str) {
 
 /// Run the iced GUI application
 fn run_gui() -> Result<(), Box<dyn std::error::Error>> {
-    iced::application("Lamco RDP Server", ConfigGuiApp::update, ConfigGuiApp::view)
+    iced::application(ConfigGuiApp::new, ConfigGuiApp::update, ConfigGuiApp::view)
+        .title("Lamco RDP Server")
         .window_size(Size::new(1200.0, 800.0))
         .centered()
         .antialiasing(true)
         .default_font(FONT)
         .subscription(ConfigGuiApp::subscription)
         .exit_on_close_request(false)
-        .run_with(ConfigGuiApp::new)?;
+        .run()?;
 
     Ok(())
 }

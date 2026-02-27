@@ -763,6 +763,11 @@ impl HardwareEncoder for NvencEncoder {
 pub fn is_nvidia_available() -> bool {
     use std::path::Path;
 
+    // NVENC requires direct GPU access not available in Flatpak sandbox
+    if crate::config::is_flatpak() {
+        return false;
+    }
+
     // Check for NVIDIA device nodes
     let nvidia_devices = ["/dev/nvidia0", "/dev/nvidiactl", "/dev/nvidia-uvm"];
 

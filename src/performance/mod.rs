@@ -26,6 +26,7 @@
 //! let mut fps_controller = AdaptiveFpsController::new(config);
 //!
 //! // In frame loop:
+//! let damage_ratio = 0.5_f32;
 //! fps_controller.update(damage_ratio);
 //! if fps_controller.should_capture_frame() {
 //!     // Capture and encode frame

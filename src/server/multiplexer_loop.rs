@@ -33,6 +33,10 @@ pub(super) enum ClipboardEvent {
 /// Drains control and clipboard queues in priority order
 /// Note: Input is handled by input_handler's dedicated batching task
 ///       Graphics is handled by graphics_drain task
+#[expect(
+    clippy::too_many_arguments,
+    reason = "multiplexer needs all event sources and handlers"
+)]
 pub(super) async fn run_multiplexer_drain_loop(
     mut control_rx: mpsc::Receiver<ControlEvent>,
     mut clipboard_rx: mpsc::Receiver<ClipboardEvent>,

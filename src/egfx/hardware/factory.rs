@@ -214,6 +214,12 @@ fn probe_vaapi() -> bool {
 fn probe_nvenc() -> bool {
     use std::path::Path;
 
+    // NVENC requires direct GPU access not available in Flatpak sandbox
+    if crate::config::is_flatpak() {
+        debug!("NVENC: Skipping probe in Flatpak sandbox");
+        return false;
+    }
+
     // Check for NVIDIA driver presence
     let nvidia_indicators = [
         "/dev/nvidia0",

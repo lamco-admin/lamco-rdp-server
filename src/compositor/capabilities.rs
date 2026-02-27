@@ -244,6 +244,21 @@ impl CompositorCapabilities {
         self.has_protocol("wp_fractional_scale_manager_v1", 1)
     }
 
+    /// Check if ext-data-control-v1 is available (Wayland staging protocol)
+    pub fn has_ext_data_control(&self) -> bool {
+        self.has_protocol("ext_data_control_manager_v1", 1)
+    }
+
+    /// Check if wlr-data-control-v1 is available (wlroots legacy)
+    pub fn has_wlr_data_control(&self) -> bool {
+        self.has_protocol("zwlr_data_control_manager_v1", 1)
+    }
+
+    /// Check if any data-control clipboard protocol is available
+    pub fn has_any_data_control(&self) -> bool {
+        self.has_ext_data_control() || self.has_wlr_data_control()
+    }
+
     /// Get protocol version if available
     pub fn get_protocol_version(&self, interface: &str) -> Option<u32> {
         self.wayland_globals

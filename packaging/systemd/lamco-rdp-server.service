@@ -15,7 +15,7 @@
 
 [Unit]
 Description=Lamco RDP Server
-Documentation=https://github.com/anthropics/lamco-rdp-server
+Documentation=https://github.com/lamco-admin/lamco-rdp-server
 After=graphical-session.target
 Wants=graphical-session.target
 
@@ -38,18 +38,46 @@ StartLimitBurst=3
 # Environment
 Environment=RUST_LOG=info
 
-# Security hardening
+# Filesystem hardening
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=read-only
 PrivateTmp=yes
+ProtectProc=invisible
+ProcSubset=pid
 
-# Allow access to XDG runtime dir (for Wayland socket, PipeWire, D-Bus)
+# Allow writes to XDG runtime dir (Wayland socket, PipeWire, D-Bus)
 ReadWritePaths=%t
-
-# Allow access to config directory
+# Allow writes to config and state directories
 ReadWritePaths=%h/.config/lamco-rdp-server
 ReadWritePaths=%h/.local/share/lamco-rdp-server
+
+# Kernel and device hardening
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+
+# Restrict namespace creation
+RestrictNamespaces=yes
+
+# Network: only TCP (RDP listening)
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# Capability bounding (user service has no caps by default, but be explicit)
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+# Syscall filtering: allow only what an RDP server needs
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallArchitectures=native
 
 [Install]
 WantedBy=graphical-session.target

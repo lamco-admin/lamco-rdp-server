@@ -54,15 +54,10 @@
 //! See MS-RDPEGFX Section 3.3.8.3.2 for the AVC444 specification.
 
 #[cfg(feature = "h264")]
-use openh264::encoder::{
-    BitRate, Complexity, Encoder, EncoderConfig as OpenH264Config, FrameRate, FrameType, UsageType,
-    VuiConfig,
-};
-#[cfg(feature = "h264")]
-use openh264::formats::YUVSlices;
-#[cfg(feature = "h264")]
 use tracing::{debug, info, trace};
 
+#[cfg(feature = "h264")]
+use super::openh264_compat;
 use super::{
     color_convert::{bgra_to_yuv444, ColorMatrix},
     color_space::{ColorRange, ColorSpaceConfig},
@@ -171,7 +166,7 @@ pub struct Avc444Encoder {
     ///
     /// This ensures unified DPB (Decoded Picture Buffer) timeline between
     /// Main and Aux, preventing cross-stream reference corruption.
-    encoder: Encoder,
+    encoder: openh264_compat::VersionedEncoder,
 
     /// Configuration
     config: EncoderConfig,
@@ -278,38 +273,35 @@ impl Avc444Encoder {
             .map(|(w, h)| super::h264_level::H264Level::for_config(w, h, config.max_fps));
 
         // Build VuiConfig from ColorSpaceConfig for H.264 SPS signaling
-        // Map our color space configuration to openh264's VuiConfig presets
         let vui = match (color_space.matrix, color_space.range) {
-            (ColorMatrix::BT709, ColorRange::Full) => VuiConfig::bt709_full(),
-            (ColorMatrix::BT709, ColorRange::Limited) => VuiConfig::bt709(),
-            (ColorMatrix::BT601 | ColorMatrix::OpenH264, _) => VuiConfig::bt601(),
+            (ColorMatrix::BT709, ColorRange::Full) => openh264_compat::VuiConfig::bt709_full(),
+            (ColorMatrix::BT709, ColorRange::Limited) => openh264_compat::VuiConfig::bt709(),
+            (ColorMatrix::BT601 | ColorMatrix::OpenH264, _) => openh264_compat::VuiConfig::bt601(),
         };
 
-        // NOTE: No explicit QP range - let OpenH264 use full range (0-51) for optimal quality
-        // Use High complexity for better text sharpness (more encoder effort)
-        // See docs/AVC444-AUX-OMISSION-CRITICAL-FINDING.md for context.
-        let mut encoder_config = OpenH264Config::new()
-            .bitrate(BitRate::from_bps(config.bitrate_kbps * 1000))
-            .max_frame_rate(FrameRate::from_hz(config.max_fps))
-            .skip_frames(config.enable_skip_frame)
-            .usage_type(UsageType::ScreenContentRealTime)
-            .complexity(Complexity::High) // Better quality for text/UI (slower encoding)
-            .scene_change_detect(false) // Disable auto-IDR for bandwidth optimization
-            .vui(vui); // Signal color space to decoder (BT.709 full range)
+        // Build version-aware encoder config
+        // High complexity for better text sharpness, scene change detect disabled
+        // for bandwidth optimization. Full QP range (0-51) for optimal quality.
+        let compat_config = openh264_compat::EncoderConfig {
+            bitrate_bps: config.bitrate_kbps * 1000,
+            max_frame_rate: config.max_fps,
+            usage_type: openh264_compat::ffi_types::SCREEN_CONTENT_REAL_TIME,
+            enable_skip_frame: config.enable_skip_frame,
+            complexity: openh264_compat::HIGH_COMPLEXITY,
+            enable_scene_change_detect: false, // Disable auto-IDR for bandwidth optimization
+            level_idc: level.map(|l| l.to_openh264_level_idc()),
+            vui,
+            ..openh264_compat::EncoderConfig::default()
+        };
 
-        // Set level if we know dimensions
-        if let Some(level) = level {
-            encoder_config = encoder_config.level(level.to_openh264_level());
-        }
-
-        info!("🎬 AVC444: High complexity, OpenH264 default QP (0-51), VUI enabled");
+        info!("AVC444: High complexity, OpenH264 default QP (0-51), VUI enabled");
 
         // Create SINGLE encoder for both Main and Aux (MS-RDPEGFX spec compliant)
-        let encoder =
-            Encoder::with_api_config(openh264::OpenH264API::from_source(), encoder_config)
-                .map_err(|e| {
-                    EncoderError::InitFailed(format!("AVC444 single encoder init failed: {e:?}"))
-                })?;
+        let api = super::encoder::load_openh264_api()?;
+        info!("AVC444: {}", api.capabilities);
+        let encoder = openh264_compat::VersionedEncoder::new(api, compat_config).map_err(|e| {
+            EncoderError::InitFailed(format!("AVC444 single encoder init failed: {e}"))
+        })?;
 
         debug!(
             "Created AVC444 SINGLE encoder: {} color space, {}kbps, level={:?}",
@@ -318,7 +310,7 @@ impl Avc444Encoder {
             level
         );
         info!(
-            "🔧 AVC444: VUI enabled ({}, primaries={}, transfer={}, matrix={})",
+            "AVC444: VUI enabled ({}, primaries={}, transfer={}, matrix={})",
             if color_space.range == ColorRange::Full {
                 "full range"
             } else {
@@ -340,9 +332,6 @@ impl Avc444Encoder {
             cached_sps_pps: None,
             current_level: level,
             // DIAGNOSTIC FLAG: Force all keyframes to disable P-frame inter-prediction
-            // Set to true to diagnose P-frame specific issues
-            // CONFIRMED 2025-12-27: All-keyframes WORKS! P-frames cause lavender corruption
-            // Now testing with temporal stability logging to find WHY
             force_all_keyframes: false, // Re-enabled P-frames with temporal logging
             // Phase 1: Aux omission defaults
             // NOTE: These are now overridden by configure_aux_omission() called from display_handler
@@ -500,6 +489,7 @@ impl Avc444Encoder {
         false
     }
 
+    #[expect(clippy::unwrap_used, reason = "timing subtraction is always valid")]
     pub fn encode_bgra(
         &mut self,
         bgra_data: &[u8],
@@ -510,7 +500,7 @@ impl Avc444Encoder {
         let start = std::time::Instant::now();
 
         // Validate dimensions
-        if width == 0 || height == 0 || width % 2 != 0 || height % 2 != 0 {
+        if width == 0 || height == 0 || !width.is_multiple_of(2) || !height.is_multiple_of(2) {
             return Err(EncoderError::InvalidDimensions { width, height });
         }
 
@@ -536,29 +526,24 @@ impl Avc444Encoder {
         let (main_yuv420, aux_yuv420) = pack_dual_views(&yuv444);
         let pack_time = start.elapsed().checked_sub(convert_time).unwrap();
 
-        // Step 3: Encode both views using direct YUV input
-        // OPTIMIZATION: Use YUVSlices for zero-copy encoding instead of
-        // converting YUV420→BGRA→YUV420 (saves ~10-20ms per frame!)
+        // Step 3: Encode both views using direct YUV input via version-aware FFI
         //
         // NOTE: We use logical dimensions (width x height) not actual buffer dimensions.
         // The YUV420 frames may have padded chroma planes for macroblock alignment,
-        // but openh264 expects logical dimensions and will do its own padding internally.
-        // We pass the full buffers (including padding) but declare the logical size.
-        let dims = (width as usize, height as usize);
-        let strides = main_yuv420.strides();
+        // but OpenH264 expects logical dimensions and will do its own padding internally.
+        let (w, h) = (width as i32, height as i32);
+        let main_strides = main_yuv420.strides();
 
         // === PERIODIC IDR: Force keyframe at regular intervals or on PLI ===
-        // This clears accumulated compression artifacts automatically
         if self.should_force_idr() {
             self.encoder.force_intra_frame();
         }
 
         // === DIAGNOSTIC: Force keyframes if flag is set ===
-        // This disables P-frames to test if "original OK, changes wrong" is P-frame related
         if self.force_all_keyframes {
             self.encoder.force_intra_frame();
             if self.frame_count == 0 {
-                debug!("🔧 DIAGNOSTIC: force_all_keyframes=true - All frames will be IDR");
+                debug!("DIAGNOSTIC: force_all_keyframes=true - All frames will be IDR");
             }
         }
 
@@ -567,31 +552,30 @@ impl Avc444Encoder {
         // MS-RDPEGFX Section 3.3.8.3.2: "The two subframe bitstreams MUST be
         // encoded using the same H.264 encoder"
         //
-        // Implementation:
-        // 1. Encode Main subframe → Updates unified DPB
-        // 2. Encode Aux subframe → SAME DPB, sequential call
-        //
-        // This ensures decoder and encoder DPBs stay synchronized.
+        // 1. Encode Main subframe -> Updates unified DPB
+        // 2. Encode Aux subframe -> SAME DPB, sequential call
 
         // Encode Main subframe FIRST (luma + subsampled chroma)
-        let main_yuv_slices = YUVSlices::new(
-            (
+        let main_encoded = self
+            .encoder
+            .encode(
                 main_yuv420.y_plane(),
                 main_yuv420.u_plane(),
                 main_yuv420.v_plane(),
-            ),
-            dims,
-            strides,
-        );
-        let main_bitstream = self.encoder.encode(&main_yuv_slices).map_err(|e| {
-            EncoderError::EncodeFailed(format!("Main subframe encoding failed: {e:?}"))
-        })?;
+                main_strides.0 as i32,
+                main_strides.1 as i32,
+                main_strides.2 as i32,
+                w,
+                h,
+                timestamp_ms as i64,
+            )
+            .map_err(|e| {
+                EncoderError::EncodeFailed(format!("Main subframe encoding failed: {e}"))
+            })?;
 
-        // Convert main bitstream immediately to release borrow before should_send_aux call
-        let main_is_keyframe = matches!(main_bitstream.frame_type(), FrameType::IDR | FrameType::I);
-        let main_frame_type = main_bitstream.frame_type(); // Store for logging
-        let mut stream1_data = main_bitstream.to_vec();
-        // main_bitstream dropped here, mutable borrow of self.main_encoder ends
+        let main_is_keyframe = main_encoded.is_keyframe();
+        let main_frame_type_str = if main_is_keyframe { "IDR" } else { "P" };
+        let mut stream1_data = main_encoded.to_vec();
 
         // === PHASE 1: AUXILIARY STREAM (CONDITIONALLY ENCODED) ===
         //
@@ -636,33 +620,37 @@ impl Avc444Encoder {
             // Encode Aux subframe SECOND with SAME encoder (sequential call)
             // CRITICAL: This maintains unified DPB shared with Main
             let aux_strides = aux_yuv420.strides();
-            let aux_yuv_slices = YUVSlices::new(
-                (
+            let aux_encoded = self
+                .encoder
+                .encode(
                     aux_yuv420.y_plane(),
                     aux_yuv420.u_plane(),
                     aux_yuv420.v_plane(),
-                ),
-                dims,
-                aux_strides,
-            );
-            let aux_bitstream = self.encoder.encode(&aux_yuv_slices).map_err(|e| {
-                EncoderError::EncodeFailed(format!("Aux subframe encoding failed: {e:?}"))
-            })?;
+                    aux_strides.0 as i32,
+                    aux_strides.1 as i32,
+                    aux_strides.2 as i32,
+                    w,
+                    h,
+                    timestamp_ms as i64,
+                )
+                .map_err(|e| {
+                    EncoderError::EncodeFailed(format!("Aux subframe encoding failed: {e}"))
+                })?;
+
+            let aux_raw = aux_encoded.to_vec();
 
             // CRITICAL FIX: Check if aux encoder skipped the frame (0 bytes)
             // This happens when Main is IDR and rate control skips the second encode
-            let aux_data = aux_bitstream.to_vec();
+            let aux_data = aux_raw;
             if aux_data.is_empty() {
-                // Encoder skipped aux - treat as omitted rather than protocol error
                 trace!("Aux encoder skipped frame (rate control) - treating as omitted");
                 self.frames_since_aux += 1;
                 None
             } else {
-                // Normal case - aux encoded successfully
                 // Update aux tracking
                 self.last_aux_hash = Some(Self::hash_yuv420(&aux_yuv420));
                 self.frames_since_aux = 0;
-                Some(aux_bitstream)
+                Some(aux_encoded)
             }
         } else {
             // === AUX OMITTED: Don't encode at all! ===
@@ -678,11 +666,10 @@ impl Avc444Encoder {
             .and_then(|d| d.checked_sub(pack_time))
             .unwrap_or_default();
 
-        // Convert main bitstream (always present)
-        // Aux might be None (omitted for bandwidth optimization)
+        // Convert aux to byte data (aux_bitstream_opt contains EncodedFrameData)
         let stream2_data_opt = aux_bitstream_opt
             .as_ref()
-            .map(openh264::encoder::EncodedBitStream::to_vec);
+            .map(openh264_compat::EncodedFrameData::to_vec);
 
         // Handle empty main bitstream (encoder skip)
         if stream1_data.is_empty() {
@@ -693,35 +680,45 @@ impl Avc444Encoder {
         // Check aux frame type (if encoded)
         let _aux_is_keyframe = aux_bitstream_opt
             .as_ref()
-            .is_some_and(|bs| matches!(bs.frame_type(), FrameType::IDR | FrameType::I));
+            .is_some_and(openh264_compat::EncodedFrameData::is_keyframe);
 
-        // === PHASE 1: DIAGNOSTIC LOGGING ===
-        // Log omission statistics for bandwidth analysis
-        if let Some(ref aux_bitstream) = aux_bitstream_opt {
+        // Diagnostic logging for bandwidth analysis
+        if let Some(ref aux_data) = stream2_data_opt {
+            let aux_type_str = if aux_bitstream_opt
+                .as_ref()
+                .is_some_and(openh264_compat::EncodedFrameData::is_keyframe)
+            {
+                "IDR"
+            } else {
+                "P"
+            };
             debug!(
-                "[AVC444 Frame #{}] Main: {:?} ({}B), Aux: {:?} ({}B) [BOTH SENT]",
+                "[AVC444 Frame #{}] Main: {} ({}B), Aux: {} ({}B) [BOTH SENT]",
                 self.frame_count,
-                main_frame_type,
+                main_frame_type_str,
                 stream1_data.len(),
-                aux_bitstream.frame_type(),
-                aux_bitstream.to_vec().len()
+                aux_type_str,
+                aux_data.len()
             );
         } else {
             debug!(
-                "[AVC444 Frame #{}] Main: {:?} ({}B), Aux: OMITTED (LC=1) [BANDWIDTH SAVE]",
+                "[AVC444 Frame #{}] Main: {} ({}B), Aux: OMITTED (LC=1) [BANDWIDTH SAVE]",
                 self.frame_count,
-                main_frame_type,
+                main_frame_type_str,
                 stream1_data.len()
             );
         }
 
-        // Handle SPS/PPS caching for P-frames
-        // With single encoder, SPS/PPS is shared across both subframes
+        // Handle SPS/PPS caching for main stream P-frames.
+        // Cached SPS/PPS from the latest IDR is prepended to P-frames so the
+        // Windows MFT decoder always has parameter context.
         stream1_data = self.handle_sps_pps(stream1_data, main_is_keyframe);
-        let stream2_data_opt = stream2_data_opt.map(|data| {
-            // Strip SPS/PPS from aux (already in main)
-            Self::strip_sps_pps(data)
-        });
+
+        // Aux stream keeps its own SPS/PPS intact. Per ITU-H.264 Annex B, each
+        // independently decoded bitstream needs SPS/PPS preceding IDR slices.
+        // The VersionedEncoder FFI layer can produce different SPS parameter
+        // bytes between sequential encode calls even with CONSTANT_ID strategy,
+        // so stripping aux SPS/PPS and relying on main's parameters is unsafe.
 
         // Update statistics
         self.frame_count += 1;
@@ -740,7 +737,7 @@ impl Avc444Encoder {
         };
 
         // Periodic logging with omission statistics
-        if self.frame_count % 30 == 0 {
+        if self.frame_count.is_multiple_of(30) {
             let aux_size_display = stream2_data_opt.as_ref().map_or(0, std::vec::Vec::len);
             let omission_status = if stream2_data_opt.is_some() {
                 "sent"
@@ -775,6 +772,10 @@ impl Avc444Encoder {
     ///
     /// With single encoder, SPS/PPS is shared across both subframes.
     /// Cache from main stream IDRs, prepend to main stream P-frames.
+    #[expect(
+        clippy::unwrap_used,
+        reason = "cached_sps_pps is always Some when keyframe has been seen"
+    )]
     fn handle_sps_pps(&mut self, mut data: Vec<u8>, is_keyframe: bool) -> Vec<u8> {
         if is_keyframe {
             // Cache SPS/PPS from this IDR
@@ -793,57 +794,6 @@ impl Avc444Encoder {
             trace!("Prepended SPS/PPS to P-frame");
         }
         data
-    }
-
-    /// Strip SPS and PPS from auxiliary stream
-    ///
-    /// Aux doesn't need SPS/PPS since it's already in main stream.
-    /// This is standard practice for dual-stream encoding.
-    fn strip_sps_pps(data: Vec<u8>) -> Vec<u8> {
-        let mut result = Vec::new();
-        let mut i = 0;
-
-        while i < data.len() {
-            // Find start code
-            let start_code_len =
-                if i + 4 <= data.len() && data[i..i + 4] == [0x00, 0x00, 0x00, 0x01] {
-                    4
-                } else if i + 3 <= data.len() && data[i..i + 3] == [0x00, 0x00, 0x01] {
-                    3
-                } else {
-                    i += 1;
-                    continue;
-                };
-
-            let nal_start = i + start_code_len;
-            if nal_start >= data.len() {
-                break;
-            }
-
-            let nal_type = data[nal_start] & 0x1F;
-
-            // Find next start code
-            let mut nal_end = data.len();
-            let mut j = nal_start + 1;
-            while j + 2 < data.len() {
-                if (data[j..j + 3] == [0x00, 0x00, 0x01])
-                    || (j + 3 < data.len() && data[j..j + 4] == [0x00, 0x00, 0x00, 0x01])
-                {
-                    nal_end = j;
-                    break;
-                }
-                j += 1;
-            }
-
-            // Keep everything EXCEPT SPS (7) and PPS (8)
-            if nal_type != 7 && nal_type != 8 {
-                result.extend_from_slice(&data[i..nal_end]);
-            }
-
-            i = nal_end;
-        }
-
-        result
     }
 
     /// Extract SPS and PPS NAL units from Annex B bitstream
@@ -977,6 +927,10 @@ impl Avc444Encoder {
     /// 3. Next Main: references Main → P-frame works!
     ///
     /// The client handles Main IDR + cached aux correctly (LC=1 mode).
+    #[expect(
+        clippy::unwrap_used,
+        reason = "last_aux_hash is checked for Some before unwrap"
+    )]
     fn should_send_aux(
         &mut self, // Changed to &mut self to clear force flag
         aux_frame: &super::yuv444_packing::Yuv420Frame,
@@ -1118,13 +1072,42 @@ impl Avc444Encoder {
     pub fn level(&self) -> Option<super::h264_level::H264Level> {
         None
     }
+
+    pub fn configure_aux_omission(
+        &mut self,
+        _enable: bool,
+        _max_interval: u32,
+        _change_threshold: f32,
+        _force_idr_on_return: bool,
+    ) {
+    }
+    pub fn request_idr(&mut self) {}
+    pub fn is_periodic_idr_due(&self) -> bool {
+        false
+    }
+    pub fn configure_periodic_idr(&mut self, _interval_frames: u32) {}
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// Try to create an encoder, returning early if OpenH264 library is not installed.
+    /// Tests that require the library call this instead of unwrap() so CI environments
+    /// without the Cisco binary skip gracefully rather than failing.
+    #[cfg(feature = "h264")]
+    macro_rules! require_openh264 {
+        ($expr:expr) => {
+            match $expr {
+                Ok(enc) => enc,
+                Err(crate::egfx::encoder::EncoderError::InitFailed(_)) => return,
+                Err(e) => panic!("unexpected encoder error: {e:?}"),
+            }
+        };
+    }
+
     #[test]
+    #[expect(clippy::float_cmp, reason = "comparing against zero defaults")]
     fn test_avc444_timing_default() {
         let timing = Avc444Timing::default();
         assert_eq!(timing.color_convert_ms, 0.0);
@@ -1149,12 +1132,7 @@ mod tests {
     #[test]
     fn test_avc444_encoder_creation() {
         let config = EncoderConfig::default();
-        let encoder = Avc444Encoder::new(config);
-        assert!(
-            encoder.is_ok(),
-            "Failed to create AVC444 encoder: {:?}",
-            encoder.err()
-        );
+        let _encoder = require_openh264!(Avc444Encoder::new(config));
     }
 
     #[cfg(feature = "h264")]
@@ -1165,7 +1143,7 @@ mod tests {
             height: Some(1080),
             ..Default::default()
         };
-        let encoder = Avc444Encoder::new(config).unwrap();
+        let encoder = require_openh264!(Avc444Encoder::new(config));
         assert_eq!(encoder.color_matrix(), ColorMatrix::BT709);
     }
 
@@ -1177,7 +1155,7 @@ mod tests {
             height: Some(480),
             ..Default::default()
         };
-        let encoder = Avc444Encoder::new(config).unwrap();
+        let encoder = require_openh264!(Avc444Encoder::new(config));
         assert_eq!(encoder.color_matrix(), ColorMatrix::BT601);
     }
 
@@ -1185,7 +1163,7 @@ mod tests {
     #[test]
     fn test_encode_black_frame() {
         let config = EncoderConfig::default();
-        let mut encoder = Avc444Encoder::new(config).unwrap();
+        let mut encoder = require_openh264!(Avc444Encoder::new(config));
 
         let width = 64u32;
         let height = 64u32;
@@ -1208,7 +1186,7 @@ mod tests {
     #[test]
     fn test_encode_colored_frame() {
         let config = EncoderConfig::default();
-        let mut encoder = Avc444Encoder::new(config).unwrap();
+        let mut encoder = require_openh264!(Avc444Encoder::new(config));
 
         let width = 64u32;
         let height = 64u32;
@@ -1233,7 +1211,7 @@ mod tests {
     #[test]
     fn test_invalid_dimensions() {
         let config = EncoderConfig::default();
-        let mut encoder = Avc444Encoder::new(config).unwrap();
+        let mut encoder = require_openh264!(Avc444Encoder::new(config));
 
         // Odd width
         let bgra_data = vec![0u8; 63 * 64 * 4];
@@ -1263,7 +1241,7 @@ mod tests {
     #[test]
     fn test_buffer_too_small() {
         let config = EncoderConfig::default();
-        let mut encoder = Avc444Encoder::new(config).unwrap();
+        let mut encoder = require_openh264!(Avc444Encoder::new(config));
 
         // Buffer smaller than expected
         let bgra_data = vec![0u8; 64 * 32 * 4]; // Only half the expected size
@@ -1275,7 +1253,7 @@ mod tests {
     #[test]
     fn test_force_keyframe() {
         let config = EncoderConfig::default();
-        let mut encoder = Avc444Encoder::new(config).unwrap();
+        let mut encoder = require_openh264!(Avc444Encoder::new(config));
 
         // Should not panic
         encoder.force_keyframe();
@@ -1288,7 +1266,7 @@ mod tests {
             bitrate_kbps: 5000,
             ..Default::default()
         };
-        let encoder = Avc444Encoder::new(config).unwrap();
+        let encoder = require_openh264!(Avc444Encoder::new(config));
         let stats = encoder.stats();
 
         assert_eq!(stats.frames_encoded, 0);
@@ -1300,7 +1278,7 @@ mod tests {
     #[test]
     fn test_multiple_frames() {
         let config = EncoderConfig::default();
-        let mut encoder = Avc444Encoder::new(config).unwrap();
+        let mut encoder = require_openh264!(Avc444Encoder::new(config));
 
         let width = 64u32;
         let height = 64u32;
@@ -1337,6 +1315,7 @@ mod tests {
 
     #[cfg(feature = "h264")]
     #[test]
+    #[allow(deprecated)]
     fn test_with_color_matrix() {
         // Test explicit BT.601 on HD resolution (override auto-detection)
         let config = EncoderConfig {
@@ -1344,7 +1323,8 @@ mod tests {
             height: Some(1080),
             ..Default::default()
         };
-        let encoder = Avc444Encoder::with_color_matrix(config, ColorMatrix::BT601).unwrap();
+        let encoder =
+            require_openh264!(Avc444Encoder::with_color_matrix(config, ColorMatrix::BT601));
         assert_eq!(encoder.color_matrix(), ColorMatrix::BT601);
     }
 
@@ -1357,7 +1337,7 @@ mod tests {
             height: Some(720),
             ..Default::default()
         };
-        let encoder = Avc444Encoder::new(config).unwrap();
+        let encoder = require_openh264!(Avc444Encoder::new(config));
         assert_eq!(encoder.color_matrix(), ColorMatrix::BT709);
     }
 
@@ -1370,7 +1350,7 @@ mod tests {
             height: Some(719),
             ..Default::default()
         };
-        let encoder = Avc444Encoder::new(config).unwrap();
+        let encoder = require_openh264!(Avc444Encoder::new(config));
         assert_eq!(encoder.color_matrix(), ColorMatrix::BT601);
     }
 
@@ -1378,7 +1358,7 @@ mod tests {
     #[test]
     fn test_timing_breakdown() {
         let config = EncoderConfig::default();
-        let mut encoder = Avc444Encoder::new(config).unwrap();
+        let mut encoder = require_openh264!(Avc444Encoder::new(config));
 
         let width = 64u32;
         let height = 64u32;
@@ -1411,7 +1391,7 @@ mod tests {
             max_fps: 30.0,
             ..Default::default()
         };
-        let encoder = Avc444Encoder::new(config).unwrap();
+        let encoder = require_openh264!(Avc444Encoder::new(config));
         assert!(encoder.level().is_some());
     }
 
@@ -1425,7 +1405,7 @@ mod tests {
             bitrate_kbps: 8000,
             ..Default::default()
         };
-        let mut encoder = Avc444Encoder::new(config).unwrap();
+        let mut encoder = require_openh264!(Avc444Encoder::new(config));
 
         let width = 1920u32;
         let height = 1080u32;
@@ -1453,7 +1433,7 @@ mod tests {
     #[test]
     fn test_force_keyframe_produces_idr() {
         let config = EncoderConfig::default();
-        let mut encoder = Avc444Encoder::new(config).unwrap();
+        let mut encoder = require_openh264!(Avc444Encoder::new(config));
 
         let width = 64u32;
         let height = 64u32;
@@ -1487,7 +1467,7 @@ mod tests {
             bitrate_kbps: 3000,
             ..Default::default()
         };
-        let mut encoder = Avc444Encoder::new(config).unwrap();
+        let mut encoder = require_openh264!(Avc444Encoder::new(config));
 
         let width = 64u32;
         let height = 64u32;
@@ -1560,7 +1540,7 @@ mod tests {
     fn test_variable_frame_sizes() {
         // Test that encoder handles different frame sizes correctly
         let config = EncoderConfig::default();
-        let mut encoder = Avc444Encoder::new(config).unwrap();
+        let mut encoder = require_openh264!(Avc444Encoder::new(config));
 
         let test_sizes = [(64, 64), (128, 128), (256, 256), (320, 240)];
 
@@ -1588,12 +1568,13 @@ mod tests {
             total_size: 6,
             timing: Avc444Timing::default(),
         };
-        let debug_str = format!("{:?}", frame);
+        let debug_str = format!("{frame:?}");
         assert!(debug_str.contains("Avc444Frame"));
         assert!(debug_str.contains("is_keyframe: true"));
     }
 
     #[test]
+    #[expect(clippy::float_cmp, reason = "comparing cloned float literals")]
     fn test_avc444_timing_clone() {
         let timing = Avc444Timing {
             color_convert_ms: 1.5,
@@ -1609,6 +1590,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::float_cmp, reason = "comparing cloned float literals")]
     fn test_avc444_stats_clone() {
         let stats = Avc444Stats {
             frames_encoded: 100,

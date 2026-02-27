@@ -180,11 +180,7 @@ pub struct AdaptiveFpsStats {
 
 impl AdaptiveFpsController {
     pub fn new(config: AdaptiveFpsConfig) -> Self {
-        let current_fps = if config.enabled {
-            config.max_fps
-        } else {
-            config.max_fps
-        };
+        let current_fps = config.max_fps;
 
         Self {
             current_fps,
