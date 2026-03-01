@@ -259,6 +259,11 @@ impl CompositorCapabilities {
         self.has_ext_data_control() || self.has_wlr_data_control()
     }
 
+    /// Check if HDR color management is available (wp-color-management-v1, KDE 6.3+)
+    pub fn has_color_management(&self) -> bool {
+        self.has_protocol("wp_color_management_v1", 1)
+    }
+
     /// Get protocol version if available
     pub fn get_protocol_version(&self, interface: &str) -> Option<u32> {
         self.wayland_globals

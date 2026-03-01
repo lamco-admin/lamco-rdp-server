@@ -1,0 +1,16 @@
+# Vendored Rust crates contain prebuilt test artifacts for cross-platform
+# compatibility. These are not executed during build and cannot be removed
+# without breaking vendored checksum verification.
+lamco-rdp-server source: source-contains-prebuilt-windows-binary
+lamco-rdp-server source: source-contains-prebuilt-wasm-binary
+lamco-rdp-server source: source-contains-prebuilt-javascript-object
+
+# DEP-5 copyright format predates SPDX 2.3 WITH syntax. Compound expressions
+# like "Apache-2.0 WITH LLVM-exception" are valid SPDX but DEP-5 doesn't
+# recognize the WITH keyword.
+lamco-rdp-server source: bad-exception-format-in-dep5-copyright
+
+# Per-crate copyright entries were explicitly requested by reviewer (Tobias
+# Frost, 2026-02-15). The resulting granularity triggers superfluous-file-pattern
+# for crates that share the same license and copyright holder.
+lamco-rdp-server source: superfluous-file-pattern

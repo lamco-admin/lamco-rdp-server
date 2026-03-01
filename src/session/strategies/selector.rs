@@ -32,9 +32,12 @@ pub struct SessionStrategySelector {
     service_registry: Arc<ServiceRegistry>,
     token_manager: Arc<Tokens>,
     /// Keyboard layout from config (e.g., "us", "de", "auto")
-    #[expect(
-        dead_code,
-        reason = "passed to session handle for keyboard layout configuration"
+    #[cfg_attr(
+        not(feature = "wayland"),
+        expect(
+            dead_code,
+            reason = "used by WlrDirectStrategy when wayland feature is enabled"
+        )
     )]
     keyboard_layout: String,
 }
@@ -97,7 +100,10 @@ impl SessionStrategySelector {
                 info!("Flatpak deployment: checking Portal RemoteDesktop availability");
 
                 use ashpd::desktop::remote_desktop::RemoteDesktop;
-                let has_remote_desktop = RemoteDesktop::new().await.is_ok();
+                let has_remote_desktop = match RemoteDesktop::new().await {
+                    Ok(rd) => rd.available_device_types().await.is_ok(),
+                    Err(_) => false,
+                };
 
                 if has_remote_desktop {
                     info!("Portal RemoteDesktop available, using Portal + Token strategy");
@@ -120,7 +126,10 @@ impl SessionStrategySelector {
                     warn!("Portal RemoteDesktop unavailable in Flatpak sandbox");
                     warn!("Falling back to ScreenCast-only mode (view-only)");
                     warn!("Session will have video but no input injection or clipboard");
-                    return Ok(Box::new(ScreenCastOnlyStrategy::new()));
+                    let cursor_modes = caps.portal.available_cursor_modes.clone();
+                    return Ok(Box::new(ScreenCastOnlyStrategy::with_cursor_modes(
+                        cursor_modes,
+                    )));
                 }
 
                 return Err(anyhow::anyhow!(
@@ -250,7 +259,11 @@ impl SessionStrategySelector {
         // FALLBACK: Portal without tokens (portal v3 or below)
         // Check if Portal RemoteDesktop is available at all
         use ashpd::desktop::remote_desktop::RemoteDesktop;
-        if RemoteDesktop::new().await.is_ok() {
+        let has_remote_desktop = match RemoteDesktop::new().await {
+            Ok(rd) => rd.available_device_types().await.is_ok(),
+            Err(_) => false,
+        };
+        if has_remote_desktop {
             warn!("⚠️  No session persistence available");
             warn!("   Portal version: {}", caps.portal.version);
             warn!("   Falling back to Portal + Token strategy");
@@ -269,7 +282,10 @@ impl SessionStrategySelector {
             warn!("   Portal RemoteDesktop unavailable, all input methods exhausted");
             warn!("   Falling back to ScreenCast-only mode (view-only)");
             warn!("   Session will have video but no input injection or clipboard");
-            return Ok(Box::new(ScreenCastOnlyStrategy::new()));
+            let cursor_modes = caps.portal.available_cursor_modes.clone();
+            return Ok(Box::new(ScreenCastOnlyStrategy::with_cursor_modes(
+                cursor_modes,
+            )));
         }
 
         Err(anyhow::anyhow!(

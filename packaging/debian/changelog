@@ -1,3 +1,15 @@
+lamco-rdp-server (1.4.0-1) unstable; urgency=medium
+
+  * New upstream release
+  * Session health monitoring with D-Bus signal relay
+  * ext-data-control-v1 / wlr-data-control-v1 clipboard backends
+  * View-only mode (ScreenCast-only strategy)
+  * OpenH264 dynamic loading with dual ABI support
+  * Graceful shutdown (SIGTERM handling, explicit PipeWire cleanup)
+  * MSRV raised to 1.88
+
+ -- Greg Lamberson <greg@lamco.io>  Thu, 27 Feb 2026 00:00:00 +0000
+
 lamco-rdp-server (1.3.1-1) unstable; urgency=low
 
   * Initial release (Closes: #1127949)

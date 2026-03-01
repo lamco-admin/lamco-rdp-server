@@ -16,6 +16,7 @@ import os
 import re
 import subprocess
 import sys
+import tarfile
 import time
 import urllib.error
 import urllib.request
@@ -224,9 +225,13 @@ class CratesIOClient:
 # ---------------------------------------------------------------------------
 
 def run_cargo_metadata(project_dir: Path) -> dict:
-    """Run cargo metadata and return parsed JSON."""
+    """Run cargo metadata and return parsed JSON.
+
+    Uses --all-features so optional dependencies (iced/gui, rfd) are included
+    in the dependency graph. The Debian package builds with all features enabled.
+    """
     result = subprocess.run(
-        ["cargo", "metadata", "--format-version", "1"],
+        ["cargo", "metadata", "--format-version", "1", "--all-features"],
         cwd=project_dir,
         capture_output=True,
         text=True,
@@ -319,6 +324,68 @@ def extract_external_deps(meta: dict, project_dir: Path) -> tuple[list[CrateInfo
         external.append(info)
 
     return external, bundled
+
+
+def scan_vendor_for_missing(
+    known_crates: list[CrateInfo],
+    vendor_dir: Optional[Path] = None,
+    tarball: Optional[Path] = None,
+) -> list[CrateInfo]:
+    """Scan vendor/ for crates not already in the known list.
+
+    cargo metadata's resolve graph only includes runtime deps. But the vendor
+    tarball also contains dev-deps and build-deps (cc, cmake, criterion, etc.)
+    that are physically shipped in the source. DEP-5 must cover all shipped files.
+
+    Reads from either a local vendor/ directory or a tarball.
+    """
+    try:
+        import tomllib
+    except ImportError:
+        import tomli as tomllib
+
+    known = {(c.name, c.version) for c in known_crates}
+    extra = []
+
+    def _process_toml(raw: bytes, fallback_name: str):
+        data = tomllib.loads(raw.decode("utf-8"))
+        pkg = data.get("package", {})
+        name = pkg.get("name", fallback_name)
+        version = pkg.get("version", "0.0.0")
+        if isinstance(version, dict):
+            version = version.get("workspace", "0.0.0")
+        if (name, version) in known:
+            return
+        license_expr = pkg.get("license", "")
+        if isinstance(license_expr, dict):
+            license_expr = license_expr.get("workspace", "")
+        authors = pkg.get("authors", [])
+        extra.append(CrateInfo(
+            name=name,
+            version=version,
+            license=license_expr,
+            authors=authors,
+            repository=pkg.get("repository"),
+            source_kind="crates.io",
+            resolution="metadata" if authors else "unknown",
+        ))
+
+    if tarball and tarball.exists():
+        cargo_toml_re = re.compile(r'^[^/]+/vendor/([^/]+)/Cargo\.toml$')
+        with tarfile.open(tarball, 'r:*') as tf:
+            for member in tf.getmembers():
+                m = cargo_toml_re.match(member.name)
+                if not m:
+                    continue
+                f = tf.extractfile(member)
+                if f is None:
+                    continue
+                _process_toml(f.read(), m.group(1))
+    elif vendor_dir and vendor_dir.is_dir():
+        for cargo_toml in sorted(vendor_dir.glob("*/Cargo.toml")):
+            _process_toml(cargo_toml.read_bytes(), cargo_toml.parent.name)
+
+    return extra
 
 
 # ---------------------------------------------------------------------------
@@ -471,6 +538,13 @@ class DEP5Writer:
         self._add("Files: *")
         self._add("Copyright: 2025-2026 Lamco Development")
         self._add("License: BUSL-1.1")
+        # AppStream metainfo is CC0-1.0 per convention
+        metainfo = self.project_dir / "data" / "io.lamco.rdp-server.metainfo.xml"
+        if metainfo.exists():
+            self._add("")
+            self._add("Files: data/io.lamco.rdp-server.metainfo.xml")
+            self._add("Copyright: 2025-2026 Lamco Development")
+            self._add("License: CC0-1.0")
 
     def write_bundled_crates(self, bundled: list[CrateInfo]):
         if not bundled:
@@ -492,16 +566,32 @@ class DEP5Writer:
         licenses = set(SPDXNormalizer.normalize(c.license) for c in bundled)
         self._add(f"License: {' AND '.join(sorted(licenses))}")
 
-    def write_vendor_groups(self, groups: dict[str, list[CrateInfo]]):
+    def write_vendor_groups(self, groups: dict[str, list[CrateInfo]], multi_version_crates: set[str] = None):
         """Write one Files stanza per unique license group."""
+        if multi_version_crates is None:
+            multi_version_crates = set()
+
         for license_expr in sorted(groups.keys()):
             crates = groups[license_expr]
             self._add("")
 
-            # Files line: vendor/name-version/* for each crate
-            file_patterns = [f"vendor/{c.name}-{c.version}/*" for c in crates]
-            # DEP-5 allows multiple patterns on one Files: line
-            # But very long lines should be wrapped
+            # Determine actual vendor directory name: cargo vendor only
+            # appends version when multiple versions of the same crate coexist.
+            # Check the filesystem first, then fall back to heuristic.
+            file_patterns = []
+            for c in crates:
+                versioned = self.project_dir / "vendor" / f"{c.name}-{c.version}"
+                unversioned = self.project_dir / "vendor" / c.name
+                if versioned.is_dir():
+                    file_patterns.append(f"vendor/{c.name}-{c.version}/*")
+                elif unversioned.is_dir():
+                    file_patterns.append(f"vendor/{c.name}/*")
+                elif c.name in multi_version_crates:
+                    # Multiple versions exist: cargo vendor uses versioned dirs
+                    file_patterns.append(f"vendor/{c.name}-{c.version}/*")
+                else:
+                    # Single version: cargo vendor uses unversioned dir
+                    file_patterns.append(f"vendor/{c.name}/*")
             files_str = " ".join(file_patterns)
             self._add(f"Files: {files_str}")
 
@@ -736,7 +826,15 @@ class DEP5Writer:
         self.write_header()
         self.write_main_project()
         self.write_bundled_crates(bundled)
-        self.write_vendor_groups(groups)
+
+        # Detect crates with multiple versions (cargo vendor appends version
+        # to directory name only when multiple versions coexist)
+        from collections import Counter
+        all_crates = [c for group in groups.values() for c in group]
+        name_counts = Counter(c.name for c in all_crates)
+        multi_version = {name for name, count in name_counts.items() if count > 1}
+
+        self.write_vendor_groups(groups, multi_version)
         self.write_license_texts(groups, bundled)
         return "\n".join(self.lines) + "\n"
 
@@ -801,6 +899,10 @@ def main():
         "--overrides", type=Path,
         default=Path("packaging/scripts/copyright-overrides.json"),
         help="Overrides file (default: packaging/scripts/copyright-overrides.json)",
+    )
+    parser.add_argument(
+        "--tarball", type=Path, default=None,
+        help="Source tarball to scan vendor/ from (supplements cargo metadata)",
     )
     parser.add_argument(
         "--no-cache", action="store_true",
@@ -872,6 +974,16 @@ def main():
     log.info("Extracting dependencies...")
     external, bundled = extract_external_deps(meta, project_dir)
     log.info("Found %d external deps, %d bundled deps", len(external), len(bundled))
+
+    # Scan vendor/ for crates missed by cargo metadata (dev/build deps)
+    vendor_dir = project_dir / "vendor"
+    tarball_path = getattr(args, 'tarball', None)
+    if tarball_path and not tarball_path.is_absolute():
+        tarball_path = project_dir / tarball_path
+    vendor_extra = scan_vendor_for_missing(external + bundled, vendor_dir=vendor_dir, tarball=tarball_path)
+    if vendor_extra:
+        log.info("Found %d additional crates in vendor/ (dev/build deps)", len(vendor_extra))
+        external.extend(vendor_extra)
 
     # Resolve authors
     log.info("Resolving authors...")

@@ -170,6 +170,15 @@ impl SessionHealthMonitor {
                     warn!("EIS stream ended: {reason}");
                     state.input = SubsystemHealth::Failed(reason.clone());
                 }
+
+                HealthEvent::SubsystemNotAvailable { ref subsystem } => {
+                    debug!("{subsystem} not available in this session");
+                    match subsystem.as_str() {
+                        "clipboard" => state.clipboard = SubsystemHealth::NotApplicable,
+                        "input" => state.input = SubsystemHealth::NotApplicable,
+                        _ => {}
+                    }
+                }
             }
 
             state.recompute_overall();

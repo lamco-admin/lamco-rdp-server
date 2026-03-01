@@ -213,11 +213,16 @@ pub async fn detect_credential_storage(
             };
 
             let accessible = check_secret_service_unlocked().await;
+            if accessible {
+                info!("Secret Service detected: {} (unlocked)", method);
+                return (method, encryption, true);
+            }
+            // Secret Service exists but is locked (e.g. KWallet without PAM auto-unlock).
+            // Fall through to EncryptedFile rather than reporting Degraded.
             info!(
-                "Secret Service detected: {} (unlocked: {})",
-                method, accessible
+                "Secret Service detected ({}) but locked, using encrypted file fallback",
+                method
             );
-            return (method, encryption, accessible);
         }
     }
 

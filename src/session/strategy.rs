@@ -86,6 +86,13 @@ pub trait SessionHandle: Send + Sync {
     /// Default: no-op for strategies that don't support health reporting.
     fn set_health_reporter(&self, _reporter: HealthReporter) {}
 
+    /// Provide stream info from an external video source.
+    ///
+    /// wlr-direct creates input devices before ScreenCast streams are known.
+    /// The server calls this after obtaining streams so pointer coordinate
+    /// transformation uses the real resolution instead of a fallback.
+    fn set_streams(&self, _streams: Vec<StreamInfo>) {}
+
     // === Clipboard Support ===
 
     /// Returns Some for Portal strategy (shares session), None for Mutter (no clipboard API).

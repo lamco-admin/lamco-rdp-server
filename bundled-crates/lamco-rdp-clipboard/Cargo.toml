@@ -26,8 +26,8 @@ default = []
 
 [dependencies]
 lamco-clipboard-core = { path = "../lamco-clipboard-core" }
-ironrdp-cliprdr = { git = "https://github.com/lamco-admin/IronRDP", branch = "master" }
-ironrdp-core = { git = "https://github.com/lamco-admin/IronRDP", branch = "master" }
+ironrdp-cliprdr = { git = "https://github.com/Devolutions/IronRDP", branch = "master" }
+ironrdp-core = { git = "https://github.com/Devolutions/IronRDP", branch = "master" }
 thiserror = "2"
 tracing = "0.1"
 

@@ -178,8 +178,11 @@ impl LamcoRdpServer {
                     }
                 }
                 crate::compositor::Quirk::SlowPortalPermissions => {
-                    info!("📋 Increasing portal timeout for slow permissions");
-                    // Note: Portal timeout is handled via capabilities.profile.portal_timeout_ms
+                    info!(
+                        "📋 Slow portal permissions detected ({}ms timeout configured)",
+                        capabilities.profile.portal_timeout_ms
+                    );
+                    // TODO: portal_timeout_ms not yet applied to Portal API calls
                 }
                 crate::compositor::Quirk::PoorDmaBufSupport => {
                     info!("📋 DMA-BUF support may be limited, using MemFd fallback");
@@ -317,7 +320,11 @@ impl LamcoRdpServer {
         // View-only mode: bypass strategy selector and use ScreenCast-only directly
         let strategy: Box<dyn crate::session::SessionStrategy> = if config.server.view_only {
             info!("View-only mode requested via configuration");
-            Box::new(crate::session::strategies::ScreenCastOnlyStrategy::new())
+            Box::new(
+                crate::session::strategies::ScreenCastOnlyStrategy::with_cursor_modes(
+                    capabilities.portal.available_cursor_modes.clone(),
+                ),
+            )
         } else {
             info!("Selecting session strategy based on detected capabilities");
 
@@ -336,10 +343,34 @@ impl LamcoRdpServer {
         info!("🎯 Selected strategy: {}", strategy.name());
 
         info!("Creating session via selected strategy");
-        let session_handle = strategy
-            .create_session()
-            .await
-            .context("Failed to create session via strategy")?;
+        let session_handle: Arc<dyn crate::session::strategy::SessionHandle> =
+            match strategy.create_session().await {
+                Ok(handle) => handle,
+                Err(primary_err) => {
+                    warn!(
+                        "Primary strategy '{}' failed: {:#}",
+                        strategy.name(),
+                        primary_err
+                    );
+                    warn!("Attempting ScreenCast-only fallback (view-only mode)");
+
+                    use crate::session::{
+                        strategies::ScreenCastOnlyStrategy, strategy::SessionStrategy as _,
+                    };
+                    if ScreenCastOnlyStrategy::is_available().await {
+                        let fallback = ScreenCastOnlyStrategy::with_cursor_modes(
+                            capabilities.portal.available_cursor_modes.clone(),
+                        );
+                        fallback
+                            .create_session()
+                            .await
+                            .context("ScreenCast-only fallback also failed")?
+                    } else {
+                        return Err(primary_err)
+                            .context("Primary strategy failed and ScreenCast-only unavailable");
+                    }
+                }
+            };
 
         // Wire health reporter so session handles report lifecycle events
         session_handle.set_health_reporter(health_reporter.clone());
@@ -354,44 +385,170 @@ impl LamcoRdpServer {
 
         info!("✅ Session created successfully via {}", strategy.name());
 
-        let (pipewire_fd, stream_info) = match session_handle.pipewire_access() {
-            PipeWireAccess::FileDescriptor(fd) => {
-                // Portal path: FD directly provided
-                info!("Using Portal-provided PipeWire file descriptor: {}", fd);
+        // wlr-direct: input-only strategy, acquire video via standalone Portal ScreenCast
+        let (pipewire_fd, stream_info) = if session_handle.session_type() == SessionType::WlrDirect
+        {
+            info!("wlr-direct: acquiring video via standalone Portal ScreenCast");
 
-                let strategy_streams = session_handle.streams();
-                let portal_streams: Vec<crate::portal::StreamInfo> = strategy_streams
-                    .iter()
-                    .map(|s| crate::portal::StreamInfo {
-                        node_id: s.node_id,
-                        position: (s.position_x, s.position_y),
-                        size: (s.width, s.height),
-                        source_type: crate::portal::SourceType::Monitor,
-                    })
-                    .collect();
+            use ashpd::desktop::{
+                screencast::{CursorMode, Screencast, SourceType as ScSourceType},
+                PersistMode,
+            };
 
-                (fd, portal_streams)
+            let screencast = Screencast::new()
+                .await
+                .context("Failed to connect to ScreenCast portal for wlr-direct video")?;
+
+            let sc_session = screencast
+                .create_session()
+                .await
+                .context("Failed to create ScreenCast session for wlr-direct video")?;
+
+            // Pick best available cursor mode from what the portal actually supports.
+            // Hyprland's portal only offers Hidden+Embedded (no Metadata).
+            let cursor_mode = if capabilities
+                .portal
+                .available_cursor_modes
+                .contains(&crate::compositor::CursorMode::Metadata)
+            {
+                CursorMode::Metadata
+            } else if capabilities
+                .portal
+                .available_cursor_modes
+                .contains(&crate::compositor::CursorMode::Embedded)
+            {
+                CursorMode::Embedded
+            } else {
+                CursorMode::Hidden
+            };
+            debug!(
+                "wlr-direct: using cursor mode {:?} for ScreenCast",
+                cursor_mode
+            );
+
+            screencast
+                .select_sources(
+                    &sc_session,
+                    cursor_mode,
+                    ScSourceType::Monitor.into(),
+                    false,
+                    None,
+                    PersistMode::DoNot,
+                )
+                .await
+                .context("Failed to select ScreenCast sources for wlr-direct video")?;
+
+            let response = screencast
+                .start(&sc_session, None)
+                .await
+                .context("Failed to start ScreenCast for wlr-direct video")?
+                .response()
+                .context("ScreenCast start rejected by user (wlr-direct video)")?;
+
+            let portal_streams = response.streams();
+            if portal_streams.is_empty() {
+                return Err(anyhow::anyhow!(
+                    "No streams from ScreenCast for wlr-direct video"
+                ));
             }
-            PipeWireAccess::NodeId(node_id) => {
-                info!("Using Mutter-provided PipeWire node ID: {}", node_id);
 
-                let fd = crate::mutter::get_pipewire_fd_for_mutter()
-                    .context("Failed to connect to PipeWire daemon for Mutter")?;
-
-                info!("Connected to PipeWire daemon, FD: {}", fd);
-
-                let strategy_streams = session_handle.streams();
-                let portal_streams: Vec<crate::portal::StreamInfo> = strategy_streams
-                    .iter()
-                    .map(|s| crate::portal::StreamInfo {
-                        node_id: s.node_id,
-                        position: (s.position_x, s.position_y),
-                        size: (s.width, s.height),
+            let streams: Vec<crate::portal::StreamInfo> = portal_streams
+                .iter()
+                .map(|s| {
+                    let (width, height) = s.size().unwrap_or((0, 0));
+                    let (x, y) = s.position().unwrap_or((0, 0));
+                    crate::portal::StreamInfo {
+                        node_id: s.pipe_wire_node_id(),
+                        position: (x, y),
+                        size: (width as u32, height as u32),
                         source_type: crate::portal::SourceType::Monitor,
-                    })
-                    .collect();
+                    }
+                })
+                .collect();
 
-                (fd, portal_streams)
+            info!(
+                "wlr-direct: ScreenCast started with {} stream(s)",
+                streams.len()
+            );
+            for stream in &streams {
+                info!(
+                    "  Stream: node_id={}, {}x{} at ({},{})",
+                    stream.node_id,
+                    stream.size.0,
+                    stream.size.1,
+                    stream.position.0,
+                    stream.position.1
+                );
+            }
+
+            let fd = screencast
+                .open_pipe_wire_remote(&sc_session)
+                .await
+                .context("Failed to open PipeWire remote for wlr-direct video")?;
+
+            use std::os::fd::AsRawFd;
+            let raw_fd = fd.as_raw_fd();
+            // Leak the OwnedFd so the PipeWire connection stays alive for the session.
+            // Cleaned up when the server process exits.
+            std::mem::forget(fd);
+
+            info!("wlr-direct: PipeWire FD: {}", raw_fd);
+
+            // Provide stream dimensions to the session handle so pointer
+            // coordinate transformation uses the real resolution.
+            let handle_streams: Vec<_> = streams
+                .iter()
+                .map(|s| crate::session::strategy::StreamInfo {
+                    node_id: s.node_id,
+                    width: s.size.0,
+                    height: s.size.1,
+                    position_x: s.position.0,
+                    position_y: s.position.1,
+                })
+                .collect();
+            session_handle.set_streams(handle_streams);
+
+            (raw_fd, streams)
+        } else {
+            match session_handle.pipewire_access() {
+                PipeWireAccess::FileDescriptor(fd) => {
+                    // Portal path: FD directly provided
+                    info!("Using Portal-provided PipeWire file descriptor: {}", fd);
+
+                    let strategy_streams = session_handle.streams();
+                    let portal_streams: Vec<crate::portal::StreamInfo> = strategy_streams
+                        .iter()
+                        .map(|s| crate::portal::StreamInfo {
+                            node_id: s.node_id,
+                            position: (s.position_x, s.position_y),
+                            size: (s.width, s.height),
+                            source_type: crate::portal::SourceType::Monitor,
+                        })
+                        .collect();
+
+                    (fd, portal_streams)
+                }
+                PipeWireAccess::NodeId(node_id) => {
+                    info!("Using Mutter-provided PipeWire node ID: {}", node_id);
+
+                    let fd = crate::mutter::get_pipewire_fd_for_mutter()
+                        .context("Failed to connect to PipeWire daemon for Mutter")?;
+
+                    info!("Connected to PipeWire daemon, FD: {}", fd);
+
+                    let strategy_streams = session_handle.streams();
+                    let portal_streams: Vec<crate::portal::StreamInfo> = strategy_streams
+                        .iter()
+                        .map(|s| crate::portal::StreamInfo {
+                            node_id: s.node_id,
+                            position: (s.position_x, s.position_y),
+                            size: (s.width, s.height),
+                            source_type: crate::portal::SourceType::Monitor,
+                        })
+                        .collect();
+
+                    (fd, portal_streams)
+                }
             }
         };
 
@@ -403,14 +560,30 @@ impl LamcoRdpServer {
             std::os::fd::OwnedFd::from_raw_fd(pipewire_fd)
         };
 
-        // ScreenCast-only (view-only): skip input, clipboard, and portal RemoteDesktop
-        if session_handle.session_type() == SessionType::ScreenCastOnly {
-            info!("═══════════════════════════════════════════════════════════");
-            info!("  VIEW-ONLY MODE (ScreenCast-only)");
-            info!("═══════════════════════════════════════════════════════════");
-            info!("Video streaming enabled, input and clipboard disabled.");
-            info!("Used when Portal RemoteDesktop is unavailable (wlroots Flatpak).");
-            info!("═══════════════════════════════════════════════════════════");
+        // ScreenCast-only or wlr-direct: skip Portal RemoteDesktop entirely.
+        // ScreenCast-only = view-only (no input). WlrDirect = input via native Wayland protocols.
+        // Both use standalone Portal ScreenCast for video and bypass the full-featured path.
+        if matches!(
+            session_handle.session_type(),
+            SessionType::ScreenCastOnly | SessionType::WlrDirect
+        ) {
+            let is_wlr_direct = session_handle.session_type() == SessionType::WlrDirect;
+
+            if is_wlr_direct {
+                info!("═══════════════════════════════════════════════════════════");
+                info!("  WLR-DIRECT MODE (native Wayland input + Portal video)");
+                info!("═══════════════════════════════════════════════════════════");
+                info!("Video via Portal ScreenCast, input via wlr virtual-keyboard/pointer.");
+                info!("Clipboard not wired in this path (data-control is a separate task).");
+                info!("═══════════════════════════════════════════════════════════");
+            } else {
+                info!("═══════════════════════════════════════════════════════════");
+                info!("  VIEW-ONLY MODE (ScreenCast-only)");
+                info!("═══════════════════════════════════════════════════════════");
+                info!("Video streaming enabled, input and clipboard disabled.");
+                info!("Used when Portal RemoteDesktop is unavailable (wlroots Flatpak).");
+                info!("═══════════════════════════════════════════════════════════");
+            }
 
             let initial_size = stream_info
                 .first()
@@ -456,6 +629,20 @@ impl LamcoRdpServer {
                 .set_health_reporter(health_reporter.clone())
                 .await;
 
+            // Report subsystems that aren't wired in this code path
+            if !is_wlr_direct {
+                // ScreenCastOnly: no input injection at all
+                health_reporter.report(crate::health::HealthEvent::SubsystemNotAvailable {
+                    subsystem: "input".into(),
+                });
+                // ScreenCastOnly: no clipboard either
+                health_reporter.report(crate::health::HealthEvent::SubsystemNotAvailable {
+                    subsystem: "clipboard".into(),
+                });
+            }
+            // wlr-direct clipboard availability depends on whether initialization succeeded
+            // (reported after clipboard init below)
+
             let update_sender = display_handler.get_update_sender();
             let _graphics_drain_handle =
                 graphics_drain::start_graphics_drain_task(graphics_rx, update_sender);
@@ -473,7 +660,6 @@ impl LamcoRdpServer {
             let codecs = server_codecs_capabilities(&["remotefx"])
                 .map_err(|e| anyhow::anyhow!("Failed to create codec capabilities: {e}"))?;
 
-            // Audio still works in view-only mode
             let primary_stream_id = stream_info.first().map_or(0, |s| s.node_id);
             let audio_node_id = if primary_stream_id > 0 {
                 Some(primary_stream_id)
@@ -488,22 +674,147 @@ impl LamcoRdpServer {
                 .parse()
                 .context("Invalid listen address")?;
 
-            let rdp_server = RdpServer::builder()
-                .with_addr(listen_addr)
-                .with_tls(tls_acceptor)
-                .with_no_input()
-                .with_display_handler((*display_handler).clone())
-                .with_bitmap_codecs(codecs)
-                .with_cliprdr_factory(None)
-                .with_gfx_factory(Some(Box::new(gfx_factory)))
-                .with_sound_factory(Some(Box::new(sound_factory)))
-                .build();
+            // wlr-direct clipboard via wl-clipboard-rs (data-control protocol)
+            type CliprdrFactory = Box<dyn ironrdp_server::CliprdrServerFactory>;
+            let (wlr_clipboard_manager, wlr_clipboard_factory): (
+                Option<Arc<Mutex<ClipboardOrchestrator>>>,
+                Option<CliprdrFactory>,
+            ) = if is_wlr_direct && config.clipboard.enabled {
+                let all_allowed = config.clipboard.allowed_types.is_empty();
+                let has_type = |patterns: &[&str]| {
+                    all_allowed
+                        || config
+                            .clipboard
+                            .allowed_types
+                            .iter()
+                            .any(|t| patterns.iter().any(|p| t.contains(p)))
+                };
+
+                let clipboard_config = ClipboardOrchestratorConfig {
+                    max_data_size: config.clipboard.max_size,
+                    enable_images: has_type(&["image/"]),
+                    enable_files: has_type(&["uri-list", "file", "x-special"]),
+                    enable_html: has_type(&["text/html"]),
+                    enable_rtf: has_type(&["rtf"]),
+                    rate_limit_ms: config.clipboard.rate_limit_ms,
+                    kde_syncselection_hint: config.clipboard.kde_syncselection_hint,
+                    ..ClipboardOrchestratorConfig::default()
+                };
+
+                match ClipboardOrchestrator::new(clipboard_config).await {
+                    Ok(mut clipboard_mgr) => {
+                        clipboard_mgr.set_health_reporter(health_reporter.clone());
+
+                        #[cfg(feature = "wl-clipboard")]
+                        {
+                            let provider = crate::clipboard::providers::WlClipboardProvider::new();
+                            clipboard_mgr
+                                .set_clipboard_provider(Arc::new(provider))
+                                .await;
+                            info!("wlr-direct: clipboard via wl-clipboard-rs (data-control)");
+                        }
+
+                        #[cfg(not(feature = "wl-clipboard"))]
+                        {
+                            warn!("wlr-direct: no clipboard provider compiled in (need wl-clipboard feature)");
+                        }
+
+                        let mgr = Arc::new(Mutex::new(clipboard_mgr));
+                        let factory = LamcoCliprdrFactory::new(Arc::clone(&mgr));
+                        (Some(mgr), Some(Box::new(factory) as CliprdrFactory))
+                    }
+                    Err(e) => {
+                        warn!("Clipboard initialization failed, continuing without: {e}");
+                        (None, None)
+                    }
+                }
+            } else {
+                (None, None)
+            };
+
+            if is_wlr_direct && wlr_clipboard_manager.is_none() {
+                health_reporter.report(crate::health::HealthEvent::SubsystemNotAvailable {
+                    subsystem: "clipboard".into(),
+                });
+            }
+
+            let rdp_server = if is_wlr_direct {
+                // wlr-direct: video from ScreenCast, input from native Wayland protocols
+                let monitors: Vec<InputMonitorInfo> = stream_info
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, stream)| InputMonitorInfo {
+                        id: idx as u32,
+                        name: format!("Monitor {idx}"),
+                        x: stream.position.0,
+                        y: stream.position.1,
+                        width: stream.size.0,
+                        height: stream.size.1,
+                        dpi: 96.0,
+                        scale_factor: 1.0,
+                        stream_x: stream.position.0 as u32,
+                        stream_y: stream.position.1 as u32,
+                        stream_width: stream.size.0,
+                        stream_height: stream.size.1,
+                        is_primary: idx == 0,
+                    })
+                    .collect();
+
+                let (input_tx, input_rx) = tokio::sync::mpsc::channel(256);
+                let input_handler = LamcoInputHandler::new(
+                    session_handle.clone(),
+                    monitors,
+                    primary_stream_id,
+                    input_tx,
+                    input_rx,
+                    shutdown_broadcast.subscribe(),
+                )
+                .context("Failed to create wlr-direct input handler")?;
+
+                display_handler
+                    .set_input_handler(Arc::new(input_handler.clone()))
+                    .await;
+
+                info!("wlr-direct input handler created (virtual keyboard + pointer)");
+
+                RdpServer::builder()
+                    .with_addr(listen_addr)
+                    .with_tls(tls_acceptor)
+                    .with_input_handler(input_handler)
+                    .with_display_handler((*display_handler).clone())
+                    .with_bitmap_codecs(codecs)
+                    .with_cliprdr_factory(wlr_clipboard_factory)
+                    .with_gfx_factory(Some(Box::new(gfx_factory)))
+                    .with_sound_factory(Some(Box::new(sound_factory)))
+                    .build()
+            } else {
+                // ScreenCast-only: view-only, no input
+                RdpServer::builder()
+                    .with_addr(listen_addr)
+                    .with_tls(tls_acceptor)
+                    .with_no_input()
+                    .with_display_handler((*display_handler).clone())
+                    .with_bitmap_codecs(codecs)
+                    .with_cliprdr_factory(None)
+                    .with_gfx_factory(Some(Box::new(gfx_factory)))
+                    .with_sound_factory(Some(Box::new(sound_factory)))
+                    .build()
+            };
 
             display_handler
                 .set_server_event_sender(rdp_server.event_sender().clone())
                 .await;
 
-            info!("View-only server initialized successfully");
+            let _ = event_tx.send(ServerEvent::SessionTypeChanged {
+                session_type: session_handle.session_type().to_string(),
+            });
+
+            let mode_name = if is_wlr_direct {
+                "wlr-direct"
+            } else {
+                "view-only"
+            };
+            info!("{} server initialized successfully", mode_name);
 
             return Ok(Self {
                 config,
@@ -511,7 +822,7 @@ impl LamcoRdpServer {
                 portal_manager: None,
                 display_handler,
                 service_registry,
-                clipboard_manager: None,
+                clipboard_manager: wlr_clipboard_manager,
                 portal_session: None,
                 shutdown_broadcast,
                 event_tx,
@@ -781,15 +1092,10 @@ impl LamcoRdpServer {
         let codecs = server_codecs_capabilities(&["remotefx"])
             .map_err(|e| anyhow::anyhow!("Failed to create codec capabilities: {e}"))?;
 
-        // Check for KDE Portal Clipboard bug (Bug 515465)
-        // All current KDE versions (6.3.90-6.5.x) have threading bugs in Portal Clipboard
-        // Disable clipboard entirely on KDE until upstream fix (v6.6+, NOT backported to 6.5.x)
-        let kde_clipboard_disabled = matches!(
-            capabilities.compositor,
-            crate::compositor::CompositorType::Kde { .. }
-        );
-
-        let clipboard_manager = if config.clipboard.enabled && !kde_clipboard_disabled {
+        // KDE Bug 515465 (Portal clipboard crash) is handled by the
+        // KdePortalClipboardUnstable quirk in the service registry and
+        // ClipboardIntegrationMode::select(). No separate check needed here.
+        let clipboard_manager = if config.clipboard.enabled {
             info!("Initializing clipboard manager");
 
             // allowed_types: empty = all allowed, otherwise check for specific patterns
@@ -885,20 +1191,20 @@ impl LamcoRdpServer {
                 }
                 _ if uses_data_control => {
                     // Non-portal-generic session + data-control strategy: try standalone wl-clipboard-rs
-                    let provider_set = false;
-
                     #[cfg(feature = "wl-clipboard")]
-                    {
+                    let provider_set = {
                         let provider = crate::clipboard::providers::WlClipboardProvider::new();
                         clipboard_mgr
                             .set_clipboard_provider(Arc::new(provider))
                             .await;
                         info!("Clipboard provider: wl-clipboard-rs (standalone data-control)");
-                        provider_set = true;
-                    }
+                        true
+                    };
+
+                    #[cfg(not(feature = "wl-clipboard"))]
+                    let provider_set = false;
 
                     if !provider_set {
-                        // data-control strategy selected but no provider compiled in — fall back
                         warn!("WaylandDataControlMode selected but no data-control provider available");
                         warn!("Falling back to Portal clipboard provider");
                         if let Some(ref clipboard_mgr_arc) = portal_clipboard_manager {
@@ -1015,21 +1321,7 @@ impl LamcoRdpServer {
 
             Arc::new(Mutex::new(clipboard_mgr))
         } else {
-            if kde_clipboard_disabled {
-                warn!("═══════════════════════════════════════════════════════════");
-                warn!("  Clipboard DISABLED on KDE (Portal Bug 515465)");
-                warn!("═══════════════════════════════════════════════════════════");
-                warn!("KDE Portal Clipboard has critical threading bugs causing crashes.");
-                warn!("Bug: https://bugs.kde.org/show_bug.cgi?id=515465");
-                warn!("Status: Fix landed in KDE 6.6 (releases Feb 17, 2026)");
-                warn!("Note: Fix NOT backported to 6.5.x branch.");
-                warn!("");
-                warn!("Video and input work perfectly - only clipboard affected.");
-                warn!("Clipboard will be available after upgrading to KDE 6.6+.");
-                warn!("═══════════════════════════════════════════════════════════");
-            } else {
-                info!("Clipboard disabled by configuration");
-            }
+            info!("Clipboard disabled by configuration");
             let clipboard_mgr = ClipboardOrchestrator::new(ClipboardOrchestratorConfig::default())
                 .await
                 .context("Failed to create clipboard manager")?;
@@ -1085,6 +1377,10 @@ impl LamcoRdpServer {
             .set_server_event_sender(rdp_server.event_sender().clone())
             .await;
         info!("Server event sender configured in display handler");
+
+        let _ = event_tx.send(ServerEvent::SessionTypeChanged {
+            session_type: session_handle_for_clipboard.session_type().to_string(),
+        });
 
         info!("Server initialized successfully");
 
@@ -1356,6 +1652,13 @@ impl LamcoRdpServer {
         info!("═══════════════════════════════════════════════════════════");
         info!("  Server Shutdown - Cleaning Resources");
         info!("═══════════════════════════════════════════════════════════");
+
+        // Emit stopped status via D-Bus before tearing down subsystems
+        let _ = self.event_tx.send(ServerEvent::StatusChanged {
+            old: "running".into(),
+            new: "stopped".into(),
+            message: "Server shutting down".into(),
+        });
 
         info!("  Broadcast shutdown signal to all subsystems...");
         let subscriber_count = self.shutdown_broadcast.receiver_count();

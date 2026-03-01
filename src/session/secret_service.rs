@@ -9,8 +9,66 @@ use std::collections::HashMap;
 
 use anyhow::{anyhow, Context, Result};
 use secret_service::{EncryptionType, SecretService};
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 use zeroize::Zeroizing;
+
+/// Connect to Secret Service with DH encryption, falling back to Plain.
+/// KWallet's Secret Service shim doesn't always support DH key exchange.
+async fn connect_secret_service() -> Result<SecretService<'static>> {
+    match SecretService::connect(EncryptionType::Dh).await {
+        Ok(s) => Ok(s),
+        Err(dh_err) => {
+            debug!(
+                "Secret Service DH connection failed: {}, trying Plain",
+                dh_err
+            );
+            SecretService::connect(EncryptionType::Plain)
+                .await
+                .context("Failed to connect to Secret Service (tried DH and Plain)")
+        }
+    }
+}
+
+/// Get a usable (unlocked) collection. Tries default first, then falls back to
+/// any unlocked collection. KWallet doesn't always expose a "default" collection
+/// since it uses named wallets (e.g. "kdewallet").
+async fn get_usable_collection<'a>(
+    service: &'a SecretService<'a>,
+) -> Result<secret_service::Collection<'a>> {
+    // Try default collection first
+    if let Ok(collection) = service.get_default_collection().await {
+        if !collection.is_locked().await.unwrap_or(true) {
+            return Ok(collection);
+        }
+        // Try unlocking default
+        if collection.unlock().await.is_ok() && !collection.is_locked().await.unwrap_or(true) {
+            return Ok(collection);
+        }
+    }
+
+    // Fall back to first unlocked collection (covers KWallet's named wallets)
+    if let Ok(collections) = service.get_all_collections().await {
+        for collection in collections {
+            if !collection.is_locked().await.unwrap_or(true) {
+                debug!("Using non-default unlocked collection");
+                return Ok(collection);
+            }
+        }
+    }
+
+    // Last resort: try to get default and unlock it
+    let collection = service
+        .get_default_collection()
+        .await
+        .context("No Secret Service collection available")?;
+
+    collection
+        .unlock()
+        .await
+        .context("Failed to unlock Secret Service collection")?;
+
+    Ok(collection)
+}
 
 /// Async Secret Service client wrapper
 ///
@@ -24,11 +82,7 @@ impl AsyncSecretServiceClient {
     pub async fn connect() -> Result<Self> {
         debug!("Connecting to Secret Service (org.freedesktop.secrets)...");
 
-        // Test connection by attempting to connect
-        // Use Dh (Diffie-Hellman) for secure session encryption
-        let _service = SecretService::connect(EncryptionType::Dh)
-            .await
-            .context("Failed to connect to Secret Service")?;
+        let _service = connect_secret_service().await?;
 
         info!("Connected to Secret Service successfully");
 
@@ -43,29 +97,8 @@ impl AsyncSecretServiceClient {
     ) -> Result<()> {
         info!("Storing secret in Secret Service: {}", key);
 
-        let service = SecretService::connect(EncryptionType::Dh)
-            .await
-            .context("Failed to connect to Secret Service")?;
-
-        let collection = service
-            .get_default_collection()
-            .await
-            .context("Failed to get default Secret Service collection")?;
-
-        if collection.is_locked().await.unwrap_or(true) {
-            warn!("Secret Service collection is locked, attempting unlock");
-
-            collection
-                .unlock()
-                .await
-                .context("Failed to unlock Secret Service collection")?;
-
-            if collection.is_locked().await.unwrap_or(true) {
-                return Err(anyhow!("Collection remains locked after unlock attempt"));
-            }
-
-            info!("Secret Service collection unlocked successfully");
-        }
+        let service = connect_secret_service().await?;
+        let collection = get_usable_collection(&service).await?;
 
         let mut attrs = HashMap::new();
         attrs.insert("application", "lamco-rdp-server");
@@ -98,9 +131,7 @@ impl AsyncSecretServiceClient {
     pub async fn lookup_secret(&self, key: String) -> Result<String> {
         debug!("Looking up secret in Secret Service: {}", key);
 
-        let service = SecretService::connect(EncryptionType::Dh)
-            .await
-            .context("Failed to connect to Secret Service")?;
+        let service = connect_secret_service().await?;
 
         let mut search_attrs = HashMap::new();
         search_attrs.insert("application", "lamco-rdp-server");
@@ -154,9 +185,7 @@ impl AsyncSecretServiceClient {
     pub async fn delete_secret(&self, key: String) -> Result<()> {
         info!("Deleting secret from Secret Service: {}", key);
 
-        let service = SecretService::connect(EncryptionType::Dh)
-            .await
-            .context("Failed to connect to Secret Service")?;
+        let service = connect_secret_service().await?;
 
         let mut search_attrs = HashMap::new();
         search_attrs.insert("application", "lamco-rdp-server");
@@ -189,20 +218,57 @@ pub fn check_secret_service_unlocked() -> bool {
     let handle = tokio::runtime::Handle::try_current();
 
     match handle {
-        Ok(h) => h.block_on(async {
-            match SecretService::connect(EncryptionType::Dh).await {
-                Ok(service) => match service.get_default_collection().await {
-                    Ok(collection) => !collection.is_locked().await.unwrap_or(true),
-                    Err(_) => false,
-                },
-                Err(_) => false,
-            }
-        }),
+        Ok(h) => h.block_on(async { check_unlocked_async().await }),
         Err(_) => {
             // No runtime, can't check async
             false
         }
     }
+}
+
+/// Check if any Secret Service collection is unlocked.
+/// Tries DH encryption first, falls back to Plain. KWallet's Secret Service
+/// shim doesn't always support DH key exchange, and may not have a "default"
+/// collection (KWallet uses named wallets like "kdewallet" instead).
+async fn check_unlocked_async() -> bool {
+    // Try DH first (more secure), fall back to Plain (needed for some KWallet versions)
+    let service = match SecretService::connect(EncryptionType::Dh).await {
+        Ok(s) => s,
+        Err(_) => match SecretService::connect(EncryptionType::Plain).await {
+            Ok(s) => {
+                debug!("Secret Service: DH failed, connected with Plain encryption");
+                s
+            }
+            Err(e) => {
+                debug!("Secret Service connection failed: {}", e);
+                return false;
+            }
+        },
+    };
+
+    // Try default collection first
+    if let Ok(collection) = service.get_default_collection().await {
+        if let Ok(locked) = collection.is_locked().await {
+            if !locked {
+                return true;
+            }
+        }
+    }
+
+    // KWallet may not expose a "default" collection. Check all collections
+    // for at least one unlocked wallet.
+    if let Ok(collections) = service.get_all_collections().await {
+        for collection in &collections {
+            if let Ok(locked) = collection.is_locked().await {
+                if !locked {
+                    debug!("Secret Service: found unlocked collection (non-default)");
+                    return true;
+                }
+            }
+        }
+    }
+
+    false
 }
 
 #[cfg(test)]

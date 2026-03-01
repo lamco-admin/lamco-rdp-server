@@ -5,67 +5,12 @@ Description: Fix cros-libva VA-API struct compatibility with libva >= 2.22
  with Rust struct update syntax (..Default::default()) to make all
  VA-API buffer type constructors forward-compatible.
 Author: Greg Lamberson <greg@lamco.io>
-Forwarded: https://github.com/chromeos/cros-libva/issues
-Last-Update: 2026-02-17
+Forwarded: https://github.com/nicira/cros-libva/issues
+Last-Update: 2026-02-28
 ---
---- a/vendor/cros-libva/src/buffer/vp9.rs
-+++ b/vendor/cros-libva/src/buffer/vp9.rs
-@@ -115,7 +115,7 @@
-             segment_pred_probs,
-             profile,
-             bit_depth,
--            va_reserved: Default::default(),
-+            ..Default::default()
-         }))
-     }
-
-@@ -183,7 +183,7 @@
-             luma_dc_quant_scale,
-             chroma_ac_quant_scale,
-             chroma_dc_quant_scale,
--            va_reserved: Default::default(),
-+            ..Default::default()
-         })
-     }
- }
-@@ -206,7 +206,7 @@
-             slice_data_offset,
-             slice_data_flag,
-             seg_param,
--            va_reserved: Default::default(),
-+            ..Default::default()
-         }))
-     }
-
-@@ -236,7 +236,7 @@
-             long_term_indication,
-             next_frame_width,
-             next_frame_height,
--            va_reserved: Default::default(),
-+            ..Default::default()
-         }))
-     }
- }
-@@ -261,7 +261,7 @@
-             kf_max_dist,
-             bits_per_second,
-             intra_period,
--            va_reserved: Default::default(),
-+            ..Default::default()
-         }))
-     }
-
-@@ -434,7 +434,7 @@
-             skip_frame_flag,
-             number_skip_frames,
-             skip_frames_size,
--            va_reserved: Default::default(),
-+            ..Default::default()
-         }))
-     }
-
---- a/vendor/cros-libva/src/buffer/av1.rs
-+++ b/vendor/cros-libva/src/buffer/av1.rs
+diff -ruN -x '*.orig' a/vendor/cros-libva/src/buffer/av1.rs b/vendor/cros-libva/src/buffer/av1.rs
+--- a/vendor/cros-libva/src/buffer/av1.rs	2006-07-23 20:21:28.000000000 -0500
++++ b/vendor/cros-libva/src/buffer/av1.rs	2026-02-28 07:17:47.404502162 -0600
 @@ -99,7 +99,7 @@
              segment_info_fields,
              feature_data,
@@ -101,7 +46,7 @@ Last-Update: 2026-02-17
 +            ..Default::default()
          }))
      }
-
+ 
 @@ -552,7 +552,7 @@
              tg_end,
              anchor_frame_idx,
@@ -110,7 +55,7 @@ Last-Update: 2026-02-17
 +            ..Default::default()
          });
      }
-
+ 
 @@ -915,7 +915,7 @@
              segment_number,
              feature_data,
@@ -137,9 +82,10 @@ Last-Update: 2026-02-17
 +            ..Default::default()
          }))
      }
-
---- a/vendor/cros-libva/src/buffer/h264.rs
-+++ b/vendor/cros-libva/src/buffer/h264.rs
+ 
+diff -ruN -x '*.orig' a/vendor/cros-libva/src/buffer/h264.rs b/vendor/cros-libva/src/buffer/h264.rs
+--- a/vendor/cros-libva/src/buffer/h264.rs	2006-07-23 20:21:28.000000000 -0500
++++ b/vendor/cros-libva/src/buffer/h264.rs	2026-02-28 07:17:47.404502162 -0600
 @@ -24,7 +24,7 @@
              flags,
              TopFieldOrderCnt: top_field_order_cnt,
@@ -157,7 +103,7 @@ Last-Update: 2026-02-17
 +            ..Default::default()
          }))
      }
-
+ 
 @@ -342,7 +342,7 @@
              chroma_weight_l1_flag,
              chroma_weight_l1,
@@ -165,7 +111,7 @@ Last-Update: 2026-02-17
 -            va_reserved: Default::default(),
 +            ..Default::default()
          };
-
+ 
          self.0.push(buf);
 @@ -370,7 +370,7 @@
          Self(Box::new(bindings::VAIQMatrixBufferH264 {
@@ -175,9 +121,10 @@ Last-Update: 2026-02-17
 +            ..Default::default()
          }))
      }
-
---- a/vendor/cros-libva/src/buffer/hevc.rs
-+++ b/vendor/cros-libva/src/buffer/hevc.rs
+ 
+diff -ruN -x '*.orig' a/vendor/cros-libva/src/buffer/hevc.rs b/vendor/cros-libva/src/buffer/hevc.rs
+--- a/vendor/cros-libva/src/buffer/hevc.rs	2006-07-23 20:21:28.000000000 -0500
++++ b/vendor/cros-libva/src/buffer/hevc.rs	2026-02-28 07:17:47.404502162 -0600
 @@ -17,7 +17,7 @@
              picture_id,
              pic_order_cnt,
@@ -186,7 +133,7 @@ Last-Update: 2026-02-17
 +            ..Default::default()
          })
      }
-
+ 
 @@ -253,7 +253,7 @@
              pps_tc_offset_div2,
              num_extra_slice_header_bits,
@@ -195,7 +142,7 @@ Last-Update: 2026-02-17
 +            ..Default::default()
          }))
      }
-
+ 
 @@ -555,7 +555,7 @@
              num_entry_point_offsets,
              entry_offset_to_subset_array,
@@ -204,7 +151,7 @@ Last-Update: 2026-02-17
 +            ..Default::default()
          }))
      }
-
+ 
 @@ -668,7 +668,7 @@
              ScalingList32x32: scaling_list32x32,
              ScalingListDC16x16: scaling_list_dc16x16,
@@ -213,7 +160,7 @@ Last-Update: 2026-02-17
 +            ..Default::default()
          }))
      }
-
+ 
 @@ -861,7 +861,7 @@
              max_bytes_per_pic_denom,
              max_bits_per_min_cu_denom,
@@ -222,7 +169,7 @@ Last-Update: 2026-02-17
 +            ..Default::default()
          }))
      }
-
+ 
 @@ -1012,7 +1012,7 @@
              hierarchical_level_plus1,
              va_byte_reserved,
@@ -231,7 +178,7 @@ Last-Update: 2026-02-17
 +            ..Default::default()
          }))
      }
-
+ 
 @@ -1144,7 +1144,7 @@
              slice_fields,
              pred_weight_table_bit_offset,
@@ -240,9 +187,10 @@ Last-Update: 2026-02-17
 +            ..Default::default()
          }))
      }
-
---- a/vendor/cros-libva/src/buffer/mpeg2.rs
-+++ b/vendor/cros-libva/src/buffer/mpeg2.rs
+ 
+diff -ruN -x '*.orig' a/vendor/cros-libva/src/buffer/mpeg2.rs b/vendor/cros-libva/src/buffer/mpeg2.rs
+--- a/vendor/cros-libva/src/buffer/mpeg2.rs	2006-07-23 20:21:28.000000000 -0500
++++ b/vendor/cros-libva/src/buffer/mpeg2.rs	2026-02-28 07:17:47.408502184 -0600
 @@ -79,7 +79,7 @@
              picture_coding_type,
              f_code,
@@ -251,7 +199,7 @@ Last-Update: 2026-02-17
 +            ..Default::default()
          }))
      }
-
+ 
 @@ -118,7 +118,7 @@
              slice_vertical_position,
              quantiser_scale_code,
@@ -260,7 +208,7 @@ Last-Update: 2026-02-17
 +            ..Default::default()
          }))
      }
-
+ 
 @@ -157,7 +157,7 @@
              non_intra_quantiser_matrix,
              chroma_intra_quantiser_matrix,
@@ -269,9 +217,10 @@ Last-Update: 2026-02-17
 +            ..Default::default()
          }))
      }
-
---- a/vendor/cros-libva/src/buffer/vp8.rs
-+++ b/vendor/cros-libva/src/buffer/vp8.rs
+ 
+diff -ruN -x '*.orig' a/vendor/cros-libva/src/buffer/vp8.rs b/vendor/cros-libva/src/buffer/vp8.rs
+--- a/vendor/cros-libva/src/buffer/vp8.rs	2006-07-23 20:21:28.000000000 -0500
++++ b/vendor/cros-libva/src/buffer/vp8.rs	2026-02-28 07:17:47.408502184 -0600
 @@ -122,7 +122,7 @@
              uv_mode_probs,
              mv_probs,
@@ -280,7 +229,7 @@ Last-Update: 2026-02-17
 +            ..Default::default()
          }))
      }
-
+ 
 @@ -156,7 +156,7 @@
              macroblock_offset,
              num_of_partitions,
@@ -289,7 +238,7 @@ Last-Update: 2026-02-17
 +            ..Default::default()
          }))
      }
-
+ 
 @@ -178,7 +178,7 @@
      pub fn new(quantization_index: [[u16; 6usize]; 4usize]) -> Self {
          Self(Box::new(bindings::VAIQMatrixBufferVP8 {
@@ -298,7 +247,7 @@ Last-Update: 2026-02-17
 +            ..Default::default()
          }))
      }
-
+ 
 @@ -200,7 +200,7 @@
      pub fn new(dct_coeff_probs: [[[[u8; 11usize]; 3usize]; 8usize]; 4usize]) -> Self {
          Self(Box::new(bindings::VAProbabilityDataBufferVP8 {
@@ -307,7 +256,7 @@ Last-Update: 2026-02-17
 +            ..Default::default()
          }))
      }
-
+ 
 @@ -243,7 +243,7 @@
              bits_per_second,
              intra_period,
@@ -316,7 +265,7 @@ Last-Update: 2026-02-17
 +            ..Default::default()
          }))
      }
-
+ 
 @@ -387,7 +387,7 @@
              sharpness_level,
              clamp_qindex_high,
@@ -325,4 +274,60 @@ Last-Update: 2026-02-17
 +            ..Default::default()
          }))
      }
-
+ 
+diff -ruN -x '*.orig' a/vendor/cros-libva/src/buffer/vp9.rs b/vendor/cros-libva/src/buffer/vp9.rs
+--- a/vendor/cros-libva/src/buffer/vp9.rs	2026-02-27 22:32:53.000000000 -0600
++++ b/vendor/cros-libva/src/buffer/vp9.rs	2026-02-28 07:17:47.404502162 -0600
+@@ -115,7 +115,6 @@
+             segment_pred_probs,
+             profile,
+             bit_depth,
+-            va_reserved: Default::default(),
+             ..Default::default()
+         }))
+     }
+@@ -184,7 +183,7 @@
+             luma_dc_quant_scale,
+             chroma_ac_quant_scale,
+             chroma_dc_quant_scale,
+-            va_reserved: Default::default(),
++            ..Default::default()
+         })
+     }
+ }
+@@ -207,7 +206,7 @@
+             slice_data_offset,
+             slice_data_flag,
+             seg_param,
+-            va_reserved: Default::default(),
++            ..Default::default()
+         }))
+     }
+ 
+@@ -237,7 +236,7 @@
+             long_term_indication,
+             next_frame_width,
+             next_frame_height,
+-            va_reserved: Default::default(),
++            ..Default::default()
+         }))
+     }
+ }
+@@ -262,7 +261,7 @@
+             kf_max_dist,
+             bits_per_second,
+             intra_period,
+-            va_reserved: Default::default(),
++            ..Default::default()
+         }))
+     }
+ 
+@@ -435,7 +434,7 @@
+             skip_frame_flag,
+             number_skip_frames,
+             skip_frames_size,
+-            va_reserved: Default::default(),
++            ..Default::default()
+         }))
+     }
+ 

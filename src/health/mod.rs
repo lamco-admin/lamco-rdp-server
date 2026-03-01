@@ -50,11 +50,13 @@ pub enum SubsystemHealth {
     Degraded(String),
     /// Not working — recovery may be possible
     Failed(String),
+    /// Not applicable in this session configuration (e.g., clipboard on view-only)
+    NotApplicable,
 }
 
 impl SubsystemHealth {
     pub fn is_healthy(&self) -> bool {
-        matches!(self, Self::Healthy)
+        matches!(self, Self::Healthy | Self::NotApplicable)
     }
 
     pub fn is_failed(&self) -> bool {
@@ -68,6 +70,7 @@ impl fmt::Display for SubsystemHealth {
             Self::Healthy => write!(f, "healthy"),
             Self::Degraded(reason) => write!(f, "degraded: {reason}"),
             Self::Failed(reason) => write!(f, "failed: {reason}"),
+            Self::NotApplicable => write!(f, "not applicable"),
         }
     }
 }
@@ -173,6 +176,9 @@ pub enum HealthEvent {
 
     /// EIS event stream ended (device loss)
     EisStreamEnded { reason: String },
+
+    /// A subsystem is not available in this session configuration
+    SubsystemNotAvailable { subsystem: String },
 }
 
 /// PipeWire stream states relevant to health monitoring

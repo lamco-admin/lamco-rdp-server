@@ -49,6 +49,9 @@ pub enum ServerEvent {
         new_health: String,
         detail: String,
     },
+
+    /// Session type determined (emitted once during initialization)
+    SessionTypeChanged { session_type: String },
 }
 
 /// Create an event channel for server events.
@@ -137,6 +140,15 @@ pub fn start_signal_relay(
                     if let Err(e) = emit_config_reloaded(&connection, config_path).await {
                         warn!("Failed to emit config_reloaded signal: {e}");
                     }
+                }
+
+                ServerEvent::SessionTypeChanged { session_type } => {
+                    // Update shared state
+                    {
+                        let mut s = state.write().await;
+                        s.session_type.clone_from(session_type);
+                    }
+                    debug!("Session type set: {session_type}");
                 }
 
                 ServerEvent::SessionHealthChanged {

@@ -1,0 +1,4 @@
+# Rust embeds absolute build paths in binaries via proc macros and panic
+# messages. This is standard for Rust packages and cannot be avoided without
+# breaking error reporting.
+lamco-rdp-server: file-references-package-build-path

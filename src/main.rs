@@ -120,29 +120,34 @@ async fn main() -> Result<()> {
     let config = Config::load(&config_path)
         .unwrap_or_else(|_| Config::default_config().expect("Default config should always work"));
 
-    // Initialize logging (uses config.logging, CLI args override)
-    init_logging(&args, &config.logging)?;
+    // Machine-readable output modes: skip logging banner to keep stdout clean
+    let quiet_mode = args.show_capabilities && args.format == "json";
 
-    info!("════════════════════════════════════════════════════════");
-    info!("  lamco-rdp-server v{}", env!("CARGO_PKG_VERSION"));
-    info!(
-        "  Built: {} {}",
-        option_env!("BUILD_DATE").unwrap_or("unknown"),
-        option_env!("BUILD_TIME").unwrap_or("")
-    );
-    info!(
-        "  Commit: {}",
-        option_env!("GIT_HASH").unwrap_or("vendored")
-    );
-    info!(
-        "  Profile: {}",
-        if cfg!(debug_assertions) {
-            "debug"
-        } else {
-            "release"
-        }
-    );
-    info!("════════════════════════════════════════════════════════");
+    // Initialize logging (uses config.logging, CLI args override)
+    init_logging(&args, &config.logging, quiet_mode)?;
+
+    if !quiet_mode {
+        info!("════════════════════════════════════════════════════════");
+        info!("  lamco-rdp-server v{}", env!("CARGO_PKG_VERSION"));
+        info!(
+            "  Built: {} {}",
+            option_env!("BUILD_DATE").unwrap_or("unknown"),
+            option_env!("BUILD_TIME").unwrap_or("")
+        );
+        info!(
+            "  Commit: {}",
+            option_env!("GIT_HASH").unwrap_or("vendored")
+        );
+        info!(
+            "  Profile: {}",
+            if cfg!(debug_assertions) {
+                "debug"
+            } else {
+                "release"
+            }
+        );
+        info!("════════════════════════════════════════════════════════");
+    }
 
     if args.show_capabilities {
         return show_capabilities(&args.format).await;
@@ -234,20 +239,39 @@ async fn main() -> Result<()> {
     let shutdown_broadcast = server.shutdown_broadcast();
 
     tokio::spawn(async move {
-        if let Ok(()) = tokio::signal::ctrl_c().await {
+        // Listen for both SIGINT (Ctrl-C) and SIGTERM (systemd, GUI stop button, kill)
+        #[cfg(unix)]
+        {
+            use tokio::signal::unix::{signal, SignalKind};
+
+            let mut sigint =
+                signal(SignalKind::interrupt()).expect("failed to register SIGINT handler");
+            let mut sigterm =
+                signal(SignalKind::terminate()).expect("failed to register SIGTERM handler");
+
+            let signal_name = tokio::select! {
+                _ = sigint.recv() => "SIGINT (Ctrl-C)",
+                _ = sigterm.recv() => "SIGTERM",
+            };
+
             warn!("═══════════════════════════════════════════════════════════");
-            warn!("  Ctrl-C received - Initiating graceful shutdown");
+            warn!("  {signal_name} received - Initiating graceful shutdown");
             warn!("═══════════════════════════════════════════════════════════");
-            warn!("Shutdown sequence:");
-            warn!("  1. Stop accepting new connections");
-            warn!("  2. Shutdown clipboard manager");
-            warn!("  3. Shutdown PipeWire thread");
-            warn!("  4. Close Portal session");
-            warn!("═══════════════════════════════════════════════════════════");
-            let _ = shutdown_sender.send(ironrdp_server::ServerEvent::Quit(
-                "Ctrl-C received".to_string(),
-            ));
+            let _ = shutdown_sender.send(ironrdp_server::ServerEvent::Quit(format!(
+                "{signal_name} received"
+            )));
             let _ = shutdown_broadcast.send(());
+        }
+
+        #[cfg(not(unix))]
+        {
+            if let Ok(()) = tokio::signal::ctrl_c().await {
+                warn!("Ctrl-C received - Initiating graceful shutdown");
+                let _ = shutdown_sender.send(ironrdp_server::ServerEvent::Quit(
+                    "Ctrl-C received".to_string(),
+                ));
+                let _ = shutdown_broadcast.send(());
+            }
         }
     });
 
@@ -312,6 +336,7 @@ fn output_capabilities_json(
     os_release: Option<&lamco_rdp_server::compositor::OsRelease>,
     kernel_version: &str,
 ) {
+    use lamco_rdp_server::services::{ServiceLevel, ServiceRegistry};
     use serde_json::json;
 
     let distribution = os_release.as_ref().map_or_else(
@@ -319,101 +344,39 @@ fn output_capabilities_json(
         |os| format!("{} {}", os.pretty_name, os.version_id),
     );
 
-    let mut services = Vec::new();
+    let registry = ServiceRegistry::from_compositor(caps.clone());
 
-    services.push(json!({
-        "id": "screen_capture",
-        "name": "Screen Capture",
-        "level": if caps.portal.supports_screencast { "guaranteed" } else { "unavailable" },
-        "wayland_source": format!("ScreenCast Portal v{}", caps.portal.version),
-        "rdp_capability": "MS-RDPEGFX",
-        "notes": []
-    }));
-
-    // Keyboard input
-    services.push(json!({
-        "id": "keyboard_input",
-        "name": "Keyboard Input",
-        "level": if caps.portal.supports_remote_desktop { "guaranteed" } else { "unavailable" },
-        "wayland_source": format!("RemoteDesktop Portal v{}", caps.portal.version),
-        "rdp_capability": "Input PDUs",
-        "notes": []
-    }));
-
-    // Pointer input
-    services.push(json!({
-        "id": "pointer_input",
-        "name": "Pointer Input",
-        "level": if caps.portal.supports_remote_desktop { "guaranteed" } else { "unavailable" },
-        "wayland_source": format!("RemoteDesktop Portal v{}", caps.portal.version),
-        "rdp_capability": "Input PDUs",
-        "notes": []
-    }));
-
-    let clipboard_level = if caps.portal.supports_clipboard {
-        "best_effort"
-    } else {
-        "unavailable"
-    };
-    services.push(json!({
-        "id": "clipboard",
-        "name": "Clipboard Sync",
-        "level": clipboard_level,
-        "wayland_source": if caps.portal.supports_clipboard { Some("Portal Clipboard") } else { None::<&str> },
-        "rdp_capability": "CLIPRDR",
-        "notes": if caps.portal.version < 46 { vec!["File transfer requires Portal v46+"] } else { vec![] }
-    }));
-
-    services.push(json!({
-        "id": "audio",
-        "name": "Audio Playback",
-        "level": "unavailable",
-        "wayland_source": null,
-        "rdp_capability": "RDPSND",
-        "notes": ["Not yet implemented"]
-    }));
-
-    // PAM Authentication - unavailable in Flatpak sandbox
-    let pam_available = !matches!(
-        deployment,
-        lamco_rdp_server::session::DeploymentContext::Flatpak
-    );
-    services.push(json!({
-        "id": "PamAuthentication",
-        "name": "PAM Authentication",
-        "level": if pam_available { "guaranteed" } else { "unavailable" },
-        "wayland_source": null,
-        "rdp_capability": "NLA",
-        "notes": if pam_available {
-            vec![]
-        } else {
-            vec!["PAM blocked by Flatpak sandbox"]
+    // Convert ServiceLevel to lowercase snake_case for JSON backward compat
+    // (GUI expects "guaranteed", "best_effort", "degraded", "unavailable")
+    fn level_str(level: ServiceLevel) -> &'static str {
+        match level {
+            ServiceLevel::Guaranteed => "guaranteed",
+            ServiceLevel::BestEffort => "best_effort",
+            ServiceLevel::Degraded => "degraded",
+            ServiceLevel::Unavailable => "unavailable",
         }
-    }));
+    }
 
-    // No Authentication - always available
-    services.push(json!({
-        "id": "NoAuthentication",
-        "name": "No Authentication",
-        "level": "guaranteed",
-        "wayland_source": null,
-        "rdp_capability": null,
-        "notes": ["Always available, no password required"]
-    }));
+    let services: Vec<serde_json::Value> = registry
+        .all_services()
+        .iter()
+        .map(|svc| {
+            json!({
+                "id": format!("{:?}", svc.id),
+                "name": &svc.name,
+                "level": level_str(svc.level),
+                "wayland_source": svc.wayland_source.as_ref().map(ToString::to_string),
+                "rdp_capability": svc.rdp_capability.as_ref().map(ToString::to_string),
+                "notes": svc.notes.as_deref().map(|n| vec![n]).unwrap_or_default()
+            })
+        })
+        .collect();
 
-    let guaranteed = services
-        .iter()
-        .filter(|s| s["level"] == "guaranteed")
-        .count();
-    let best_effort = services
-        .iter()
-        .filter(|s| s["level"] == "best_effort")
-        .count();
-    let degraded = services.iter().filter(|s| s["level"] == "degraded").count();
-    let unavailable = services
-        .iter()
-        .filter(|s| s["level"] == "unavailable")
-        .count();
+    let counts = registry.service_counts();
+    let guaranteed = counts.guaranteed;
+    let best_effort = counts.best_effort;
+    let degraded = counts.degraded;
+    let unavailable = counts.unavailable;
 
     let quirks: Vec<serde_json::Value> = caps
         .profile
@@ -733,11 +696,15 @@ async fn run_diagnostics() -> Result<()> {
 fn init_logging(
     args: &Args,
     logging_config: &lamco_rdp_server::config::types::LoggingConfig,
+    quiet_mode: bool,
 ) -> Result<()> {
     use std::fs::{self, File};
 
-    // CLI -v flag overrides config
-    let log_level = if args.verbose > 0 {
+    // Quiet mode: suppress all logs so stdout stays clean for machine-readable output
+    let log_level = if quiet_mode {
+        "error"
+    } else if args.verbose > 0 {
+        // CLI -v flag overrides config
         match args.verbose {
             1 => "debug",
             _ => "trace",

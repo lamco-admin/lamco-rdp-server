@@ -34,14 +34,12 @@ path = "src/lib.rs"
 # -----------------------------------------------------------------------------
 # Updated 2026-02-26: Using latest published versions
 #
-# NOTE: Clipboard crates are bundled as path deps because we [patch.crates-io]
-# ALL ironrdp crates to the lamco-admin fork (for EGFX compression). If
-# clipboard crates used crates.io versions, they'd link against upstream
-# ironrdp-cliprdr while the rest of the binary links against the fork,
-# causing a "two versions of the same crate" trait diamond conflict.
-# The file-transfer/locking APIs are now upstream (ironrdp-cliprdr 0.5.0).
-# Once the fork is eliminated (EGFX compression merged + ironrdp-egfx
-# published), clipboard crates can switch to crates.io versions.
+# NOTE: Clipboard crates are bundled as path deps because [patch.crates-io]
+# redirects all ironrdp crates to upstream git (ironrdp-egfx unpublished).
+# If clipboard crates used crates.io versions, they'd link against a
+# different ironrdp-cliprdr than the rest of the binary, causing trait
+# diamond conflicts. Once ironrdp-egfx is published to crates.io and
+# the [patch] section is removed, clipboard crates can use crates.io.
 lamco-wayland = "0.2.6"
 lamco-rdp = "0.5.0"
 lamco-portal = { version = "0.3.1", features = ["dbus-clipboard"] }
@@ -91,22 +89,23 @@ bytes = "1.5"
 rustls-pemfile = "2.2"
 
 # -----------------------------------------------------------------------------
-# RDP protocol (IronRDP from lamco-admin fork)
-# Fork: 1 commit ahead of upstream (ZGFX compression in EGFX server)
-# See: https://github.com/lamco-admin/IronRDP
+# RDP protocol (IronRDP upstream)
+# Git deps required: ironrdp-egfx is not published to crates.io yet
+# (publish = false in upstream Cargo.toml)
+# See: https://github.com/Devolutions/IronRDP
 # -----------------------------------------------------------------------------
-ironrdp = { git = "https://github.com/lamco-admin/IronRDP", branch = "master", default-features = false, features = ["server"] }
-ironrdp-server = { git = "https://github.com/lamco-admin/IronRDP", branch = "master", features = ["egfx"] }
-ironrdp-tokio = { git = "https://github.com/lamco-admin/IronRDP", branch = "master", features = ["reqwest"] }
-ironrdp-pdu = { git = "https://github.com/lamco-admin/IronRDP", branch = "master" }
-ironrdp-displaycontrol = { git = "https://github.com/lamco-admin/IronRDP", branch = "master" }
-ironrdp-cliprdr = { git = "https://github.com/lamco-admin/IronRDP", branch = "master" }
-ironrdp-core = { git = "https://github.com/lamco-admin/IronRDP", branch = "master" }
-ironrdp-dvc = { git = "https://github.com/lamco-admin/IronRDP", branch = "master" }
-ironrdp-svc = { git = "https://github.com/lamco-admin/IronRDP", branch = "master" }
-ironrdp-egfx = { git = "https://github.com/lamco-admin/IronRDP", branch = "master" }
-ironrdp-graphics = { git = "https://github.com/lamco-admin/IronRDP", branch = "master" }
-ironrdp-rdpsnd = { git = "https://github.com/lamco-admin/IronRDP", branch = "master" }
+ironrdp = { git = "https://github.com/Devolutions/IronRDP", branch = "master", default-features = false, features = ["server"] }
+ironrdp-server = { git = "https://github.com/Devolutions/IronRDP", branch = "master", features = ["egfx"] }
+ironrdp-tokio = { git = "https://github.com/Devolutions/IronRDP", branch = "master", features = ["reqwest"] }
+ironrdp-pdu = { git = "https://github.com/Devolutions/IronRDP", branch = "master" }
+ironrdp-displaycontrol = { git = "https://github.com/Devolutions/IronRDP", branch = "master" }
+ironrdp-cliprdr = { git = "https://github.com/Devolutions/IronRDP", branch = "master" }
+ironrdp-core = { git = "https://github.com/Devolutions/IronRDP", branch = "master" }
+ironrdp-dvc = { git = "https://github.com/Devolutions/IronRDP", branch = "master" }
+ironrdp-svc = { git = "https://github.com/Devolutions/IronRDP", branch = "master" }
+ironrdp-egfx = { git = "https://github.com/Devolutions/IronRDP", branch = "master" }
+ironrdp-graphics = { git = "https://github.com/Devolutions/IronRDP", branch = "master" }
+ironrdp-rdpsnd = { git = "https://github.com/Devolutions/IronRDP", branch = "master" }
 
 # -----------------------------------------------------------------------------
 # Wayland and Portal integration
@@ -248,7 +247,7 @@ proptest = "1.4"
 # =============================================================================
 
 [features]
-default = ["pam-auth", "h264"]
+default = ["pam-auth", "h264", "wayland", "wl-clipboard", "portal-generic"]
 
 # GUI for configuration (optional, adds ~40MB to binary)
 gui = ["iced", "rfd"]
@@ -391,43 +390,32 @@ cast_precision_loss = "allow"
 # Patches - Override transitive dependencies
 # =============================================================================
 #
-# IronRDP from lamco-admin public fork.
-# Fork is 1 commit ahead of upstream: ZGFX compression in EGFX server
-# (GraphicsPipelineServer::with_compression() constructor).
-# Compression PR NOT YET SUBMITTED upstream.
-# Additionally, ironrdp-egfx is NOT published to crates.io (Devolutions
-# disabled publishing for it), so git deps are required for EGFX regardless.
+# IronRDP upstream. Git deps required because ironrdp-egfx is not
+# published to crates.io (publish = false in upstream Cargo.toml).
+# All lamco contributions merged upstream via PRs #1057, #1063-1066,
+# #1076, #1091-1093, #1096-1100, #1110, #1125.
 #
-# All previous fork commits merged upstream via PRs #1057, #1063-1066,
-# #1096, #1097, #1099, #1100. ironrdp-cliprdr 0.5.0 on crates.io includes
-# all file-transfer and locking APIs.
-#
-# Fork: https://github.com/lamco-admin/IronRDP
-# Local: ~/IronRDP-public
-#
-# To eliminate the fork:
-# 1. Submit compression PR upstream
-# 2. Wait for Devolutions to publish ironrdp-egfx to crates.io
-# 3. Remove this [patch] section
-# 4. Update ironrdp-* direct deps to crates.io versions
-# 5. Switch clipboard crates from bundled path deps to crates.io versions
+# To eliminate this [patch] section:
+# 1. Wait for Devolutions to publish ironrdp-egfx to crates.io
+# 2. Remove this [patch] section
+# 3. Update ironrdp-* direct deps to crates.io versions
+# 4. Switch clipboard crates from bundled path deps to crates.io versions
 # =============================================================================
 
 [patch.crates-io]
-# IronRDP from lamco-admin fork - ZGFX compression in EGFX server
-# All crates patched to same source to avoid trait conflicts
-ironrdp = { git = "https://github.com/lamco-admin/IronRDP", branch = "master" }
-ironrdp-pdu = { git = "https://github.com/lamco-admin/IronRDP", branch = "master" }
-ironrdp-server = { git = "https://github.com/lamco-admin/IronRDP", branch = "master" }
-ironrdp-graphics = { git = "https://github.com/lamco-admin/IronRDP", branch = "master" }
-ironrdp-cliprdr = { git = "https://github.com/lamco-admin/IronRDP", branch = "master" }
-ironrdp-svc = { git = "https://github.com/lamco-admin/IronRDP", branch = "master" }
-ironrdp-dvc = { git = "https://github.com/lamco-admin/IronRDP", branch = "master" }
-ironrdp-core = { git = "https://github.com/lamco-admin/IronRDP", branch = "master" }
-ironrdp-tokio = { git = "https://github.com/lamco-admin/IronRDP", branch = "master" }
-ironrdp-displaycontrol = { git = "https://github.com/lamco-admin/IronRDP", branch = "master" }
-ironrdp-egfx = { git = "https://github.com/lamco-admin/IronRDP", branch = "master" }
-ironrdp-rdpsnd = { git = "https://github.com/lamco-admin/IronRDP", branch = "master" }
+# IronRDP upstream git - all crates from same source to avoid trait conflicts
+ironrdp = { git = "https://github.com/Devolutions/IronRDP", branch = "master" }
+ironrdp-pdu = { git = "https://github.com/Devolutions/IronRDP", branch = "master" }
+ironrdp-server = { git = "https://github.com/Devolutions/IronRDP", branch = "master" }
+ironrdp-graphics = { git = "https://github.com/Devolutions/IronRDP", branch = "master" }
+ironrdp-cliprdr = { git = "https://github.com/Devolutions/IronRDP", branch = "master" }
+ironrdp-svc = { git = "https://github.com/Devolutions/IronRDP", branch = "master" }
+ironrdp-dvc = { git = "https://github.com/Devolutions/IronRDP", branch = "master" }
+ironrdp-core = { git = "https://github.com/Devolutions/IronRDP", branch = "master" }
+ironrdp-tokio = { git = "https://github.com/Devolutions/IronRDP", branch = "master" }
+ironrdp-displaycontrol = { git = "https://github.com/Devolutions/IronRDP", branch = "master" }
+ironrdp-egfx = { git = "https://github.com/Devolutions/IronRDP", branch = "master" }
+ironrdp-rdpsnd = { git = "https://github.com/Devolutions/IronRDP", branch = "master" }
 
 # NOTE: The [patch."https://github.com/glamberson/IronRDP"] section was removed
 # on 2026-02-26. lamco-rdp-workspace now uses crates.io ironrdp (0.5.0+),

@@ -120,6 +120,12 @@ impl RdpServerManager {
             .unwrap_or_default()
     }
 
+    /// Active session strategy (e.g., "Portal", "wlr-direct", "Mutter Direct API")
+    #[zbus(property)]
+    async fn session_type(&self) -> String {
+        self.state.read().await.session_type.clone()
+    }
+
     /// Number of active RDP connections
     #[zbus(property)]
     async fn active_connections(&self) -> u32 {

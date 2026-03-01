@@ -20,6 +20,8 @@ depends=(
 makedepends=(
     'cargo'
     'clang'
+    'cmake'
+    'make'
     'nasm'
     'pkg-config'
 )
@@ -30,17 +32,27 @@ optdepends=(
     'xdg-desktop-portal-kde: screen capture and remote input for KDE Plasma'
     'xdg-desktop-portal-wlr: screen capture for Sway and wlroots compositors'
     'xdg-desktop-portal-hyprland: screen capture for Hyprland'
+    'openh264: H.264 software encoding via EGFX (Cisco binary, BSD-2-Clause)'
 )
+# makepkg's LTO injects -flto=auto into CFLAGS; GCC LTO bitcode in native
+# C libraries (aws-lc-sys, ring, opus) is invisible to the Rust linker.
+options=(!lto)
 backup=('etc/dbus-1/system.d/io.lamco.RdpServer.System.conf')
 source=("$pkgname-$pkgver.tar.xz::https://github.com/lamco-admin/$pkgname/releases/download/v$pkgver/$pkgname-$pkgver.tar.xz")
-sha256sums=('2fcba24f2a23b7df045566f8ff796a57099646b0cd343f620938fa5d85aa8738')
+sha256sums=('38b549510dfd15ab923a165a9af19217b7c212c919c949f88b3bc4ade9d7ab74')
 
 build() {
     cd "$pkgname-$pkgver"
     export RUSTUP_TOOLCHAIN=stable
     export CARGO_TARGET_DIR=target
+    # rust-lld (default since Rust 1.93) fails to link native C libraries
+    # (aws-lc-sys, ring, opus). Force the system cc linker via RUSTFLAGS.
+    # Thin LTO: fat LTO peaks at 8-10GB RAM; thin builds with ~4GB.
+    export RUSTFLAGS="-C linker=cc ${RUSTFLAGS:-}"
+    export CARGO_PROFILE_RELEASE_LTO=thin
+    export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=4
     # Vendored tarball: dependencies already in vendor/ with .cargo/config.toml
-    cargo build --frozen --release --no-default-features --features "pam-auth,h264,gui"
+    cargo build --frozen --release --no-default-features --features "pam-auth,h264,gui,wayland,libei,wl-clipboard"
 }
 
 check() {
@@ -48,7 +60,7 @@ check() {
     export RUSTUP_TOOLCHAIN=stable
     export CARGO_TARGET_DIR=target
     # Some tests require a Wayland session; allow failure in chroot builds
-    cargo test --frozen --no-default-features --features "pam-auth,h264,gui" || true
+    cargo test --frozen --no-default-features --features "pam-auth,h264,gui,wayland,libei,wl-clipboard" || true
 }
 
 package() {

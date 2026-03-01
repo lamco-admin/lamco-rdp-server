@@ -42,7 +42,7 @@ use tracing::{debug, info, warn};
 use wayland_client::{protocol::wl_seat::WlSeat, QueueHandle};
 use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::{
     zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1,
-    zwp_virtual_keyboard_v1::{self, ZwpVirtualKeyboardV1},
+    zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1,
 };
 use xkbcommon::xkb;
 
@@ -264,21 +264,17 @@ fn create_keymap_fd(keymap: &str) -> Result<OwnedFd> {
             Ok(n) => {
                 if n == 0 {
                     return Err(anyhow!(
-                        "Failed to write keymap to memfd: unexpected zero-length write at offset {}",
-                        written
+                        "Failed to write keymap to memfd: unexpected zero-length write at offset {written}",
                     ));
                 }
                 written += n;
             }
             Err(nix::errno::Errno::EINTR) => {
                 // Interrupted by signal, retry
-                continue;
             }
             Err(e) => {
                 return Err(anyhow!(
-                    "Failed to write keymap to memfd at offset {}: {}",
-                    written,
-                    e
+                    "Failed to write keymap to memfd at offset {written}: {e}",
                 ));
             }
         }

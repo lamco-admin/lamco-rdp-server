@@ -4,8 +4,8 @@ Priority: optional
 Maintainer: Greg Lamberson <greg@lamco.io>
 Build-Depends:
  debhelper-compat (= 13),
- cargo (>= 1.85),
- rustc (>= 1.85),
+ cargo (>= 1.88),
+ rustc (>= 1.88),
  pkgconf,
  clang,
  cmake,

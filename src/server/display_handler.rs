@@ -1207,8 +1207,12 @@ impl LamcoDisplayHandler {
                             }
                         }
 
-                        // Create EGFX sender and surface
-                        if let (Some(gfx_handle), Some(event_tx)) = (
+                        // Only create EGFX surface when we have an encoder.
+                        // Without an encoder, frames go via RemoteFX bitmaps and
+                        // an orphan EGFX surface would put the client in mixed mode.
+                        if video_encoder.is_none() {
+                            info!("No H.264 encoder available, using RemoteFX bitmap path (no EGFX surface)");
+                        } else if let (Some(gfx_handle), Some(event_tx)) = (
                             handler.gfx_server_handle.read().await.clone(),
                             handler.server_event_tx.read().await.clone(),
                         ) {

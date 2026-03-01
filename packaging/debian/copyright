@@ -7,6 +7,10 @@ Files: *
 Copyright: 2025-2026 Lamco Development
 License: BUSL-1.1
 
+Files: data/io.lamco.rdp-server.metainfo.xml
+Copyright: 2025-2026 Lamco Development
+License: CC0-1.0
+
 Files: bundled-crates/lamco-clipboard-core/* bundled-crates/lamco-rdp-clipboard/*
 Copyright: Lamco <contact@lamco.ai>
 License: Apache-2.0 OR MIT
@@ -23,6 +27,10 @@ Files: vendor/moka/*
 Copyright: Tatsuya Kawano
 License: (Apache-2.0 OR MIT) AND Apache-2.0
 
+Files: vendor/libfuzzer-sys/*
+Copyright: The rust-fuzz Project Developers
+License: (Apache-2.0 OR MIT) AND NCSA
+
 Files: vendor/unicode-ident/*
 Copyright: David Tolnay <dtolnay@gmail.com>
 License: (Apache-2.0 OR MIT) AND Unicode-3.0
@@ -32,22 +40,45 @@ Copyright: Jonas Schievink <jonasschievink@gmail.com>
            oyvindln <oyvindln@users.noreply.github.com>
 License: 0BSD OR Apache-2.0 OR MIT
 
-Files: vendor/cryptoki/* vendor/cryptoki-sys/* vendor/flagset/* vendor/sync_wrapper/*
+Files: vendor/ab_glyph/* vendor/ab_glyph_rasterizer/* vendor/ciborium/* vendor/ciborium-io/* vendor/ciborium-ll/* vendor/clang-sys/* vendor/clipboard_macos/* vendor/clipboard_wayland/* vendor/codespan-reporting/* vendor/cryptoki/* vendor/cryptoki-sys/* vendor/flagset/* vendor/fragile/* vendor/gethostname/* vendor/gl_generator/* vendor/glutin_wgl_sys/* vendor/khronos_api/* vendor/mundy/* vendor/owned_ttf_parser/* vendor/spirv/* vendor/sync_wrapper/* vendor/unicode-linebreak/* vendor/winit/*
 Copyright: Actyx AG <developer@actyx.io>
+           Alex Butler <alexheretic@gmail.com>
+           Armin Ronacher <armin.ronacher@active-4.com>
+           Arseny Kapoulkine
+           Axel Forsman <axelsfor@gmail.com>
+           Brendan Zabarauskas <bjzaba@yahoo.com.au>
            Contributors to the Parsec project
+           Corey Richardson
+           Héctor Ramón Jiménez <hector0193@gmail.com>
+           Kirill Chibisov <contact@kchibisov.com>
+           Kyle Mayes <kyle@mayeses.com>
+           Lei Zhang <antiagainst@gmail.com>
            Nathaniel McCallum <nathaniel@profian.com>
+           Nathaniel McCallum <npmccallum@profian.com>
+           Pierre Krieger <pierre.krieger1708@gmail.com>
+           Sebastian Wiesner <sebastian@swsnr.de>
+           Tau Gärtli
+           The winit contributors
 License: Apache-2.0
 
 Files: vendor/ring/*
 Copyright: Brian Smith
 License: Apache-2.0 AND ISC
 
-Files: vendor/linux-raw-sys/* vendor/rustix/* vendor/wasi/* vendor/wasip2/* vendor/wit-bindgen/*
+Files: vendor/dpi/*
+Copyright: Kirill Chibisov
+License: Apache-2.0 AND MIT
+
+Files: vendor/linux-raw-sys-0.12.1/* vendor/linux-raw-sys-0.4.15/* vendor/rustix-0.38.44/* vendor/rustix-1.1.4/* vendor/wasi/* vendor/wasip2/* vendor/wasip3/* vendor/wasm-encoder/* vendor/wasm-metadata/* vendor/wasmparser/* vendor/wit-bindgen/* vendor/wit-bindgen-core/* vendor/wit-bindgen-rust/* vendor/wit-bindgen-rust-macro/* vendor/wit-component/* vendor/wit-parser/*
 Copyright: Alex Crichton
            Alex Crichton <alex@alexcrichton.com>
            Dan Gohman <dev@sunfishcode.online>
            Jakub Konka <kubkon@jakubkonka.com>
+           Nick Fitzgerald <fitzgen@gmail.com>
+           Peter Huene <peter@huene.dev>
            The Cranelift Project Developers
+           Yury Delendik <ydelendik@mozilla.com>
+           wasmtime-publish
 License: Apache-2.0 OR Apache-2.0 WITH LLVM-exception OR MIT
 
 Files: vendor/fiat-crypto/*
@@ -63,9 +94,27 @@ Files: vendor/moxcms/* vendor/pxfm/* vendor/yuv/*
 Copyright: Radzivon Bartoshyk
 License: Apache-2.0 OR BSD-3-Clause
 
+Files: vendor/num_enum/* vendor/num_enum_derive/*
+Copyright: Daniel Henry-Mantilla <daniel.henry.mantilla@gmail.com>
+           Daniel Wagner-Hall <dawagner@gmail.com>
+           Vincent Esche <regexident@gmail.com>
+License: Apache-2.0 OR BSD-3-Clause OR MIT
+
 Files: vendor/ryu/*
 Copyright: David Tolnay <dtolnay@gmail.com>
 License: Apache-2.0 OR BSL-1.0
+
+Files: vendor/imgref/*
+Copyright: Kornel Lesiński <kornel@geekhood.net>
+License: Apache-2.0 OR CC0-1.0
+
+Files: vendor/dunce/*
+Copyright: Kornel <kornel@geekhood.net>
+License: Apache-2.0 OR CC0-1.0 OR MIT-0
+
+Files: vendor/self_cell/*
+Copyright: Lukas Bergdoll <lukas.bergdoll@gmail.com>
+License: Apache-2.0 OR GPL-2.0-only
 
 Files: vendor/hyper-rustls/* vendor/rustls/* vendor/rustls-native-certs/* vendor/rustls-pemfile/*
 Copyright: Dirkjan Ochtman
@@ -76,32 +125,59 @@ Files: vendor/r-efi/*
 Copyright: David Rheinsberg
 License: Apache-2.0 OR LGPL-2.1-or-later OR MIT
 
-Files: vendor/aead-0.5.2/* vendor/aead/* vendor/aes-0.8.4/* vendor/aes/* vendor/aes-gcm-0.10.3/* vendor/aes-gcm/* vendor/aes-kw/* vendor/android_system_properties/* vendor/anstream/* vendor/anstyle/* vendor/anstyle-parse/* vendor/anstyle-query/* vendor/anstyle-wincon/* vendor/anyhow/* vendor/asn1-rs/* vendor/asn1-rs-derive/* vendor/asn1-rs-impl/* vendor/async-broadcast/* vendor/async-channel/* vendor/async-executor/* vendor/async-fs/* vendor/async-io/* vendor/async-lock/* vendor/async-process/* vendor/async-recursion/* vendor/async-signal/* vendor/async-task/* vendor/async-trait/* vendor/atomic-polyfill/* vendor/atomic-waker/* vendor/base16ct-0.3.0/* vendor/base16ct/* vendor/base64/* vendor/base64ct/* vendor/bit_field/* vendor/bitflags-1.3.2/* vendor/bitflags/* vendor/block-buffer-0.10.4/* vendor/block-buffer/* vendor/block-padding-0.3.3/* vendor/block-padding/* vendor/blocking/* vendor/bumpalo/* vendor/cbc-0.1.2/* vendor/cbc/* vendor/cfg-if/* vendor/chrono/* vendor/cipher-0.4.4/* vendor/cipher/* vendor/clap/* vendor/clap_builder/* vendor/clap_derive/* vendor/clap_lex/* vendor/colorchoice/* vendor/concurrent-queue/* vendor/const-oid/* vendor/const-oid-0.9.6/* vendor/core-foundation/* vendor/core-foundation-0.9.4/* vendor/core-foundation-sys/* vendor/cpufeatures/* vendor/crc32fast/* vendor/critical-section/* vendor/crossbeam-channel/* vendor/crossbeam-deque/* vendor/crossbeam-epoch/* vendor/crossbeam-utils/* vendor/crypto-bigint/* vendor/crypto-common-0.1.7/* vendor/crypto-common/* vendor/crypto-mac/* vendor/crypto-primes/* vendor/ctr/* vendor/ctr-0.9.2/* vendor/curve25519-dalek-derive/* vendor/der-0.7.10/* vendor/der/* vendor/der-parser/* vendor/der_derive/* vendor/deranged/* vendor/des/* vendor/digest-0.10.7/* vendor/digest/* vendor/dirs/* vendor/dirs-sys/* vendor/displaydoc/* vendor/ecdsa/* vendor/ed25519/* vendor/either/* vendor/elliptic-curve/* vendor/enum-as-inner/* vendor/enumflags2/* vendor/enumflags2_derive/* vendor/equivalent/* vendor/errno/* vendor/event-listener/* vendor/event-listener-strategy/* vendor/fastrand/* vendor/fdeflate/* vendor/ff/* vendor/flate2/* vendor/fnv/* vendor/form_urlencoded/* vendor/futures/* vendor/futures-channel/* vendor/futures-core/* vendor/futures-executor/* vendor/futures-io/* vendor/futures-lite/* vendor/futures-macro/* vendor/futures-sink/* vendor/futures-task/* vendor/futures-util/* vendor/getrandom-0.2.17/* vendor/getrandom/* vendor/ghash-0.5.1/* vendor/ghash/* vendor/gif/* vendor/group/* vendor/hash32/* vendor/hashbrown/* vendor/heapless/* vendor/heck/* vendor/hermit-abi/* vendor/hex/* vendor/hickory-proto/* vendor/hickory-resolver/* vendor/hkdf-0.12.4/* vendor/hkdf/* vendor/hmac-0.12.1/* vendor/hmac/* vendor/http/* vendor/httparse/* vendor/hybrid-array/* vendor/iana-time-zone/* vendor/iana-time-zone-haiku/* vendor/idna/* vendor/idna_adapter/* vendor/image/* vendor/indexmap/* vendor/inout-0.1.4/* vendor/inout/* vendor/ipconfig/* vendor/ipnet/* vendor/iri-string/* vendor/ironrdp/* vendor/ironrdp-acceptor/* vendor/ironrdp-ainput/* vendor/ironrdp-async/* vendor/ironrdp-cliprdr/* vendor/ironrdp-connector/* vendor/ironrdp-core/* vendor/ironrdp-displaycontrol/* vendor/ironrdp-dvc/* vendor/ironrdp-egfx/* vendor/ironrdp-error/* vendor/ironrdp-graphics/* vendor/ironrdp-pdu/* vendor/ironrdp-rdpsnd/* vendor/ironrdp-server/* vendor/ironrdp-svc/* vendor/ironrdp-tokio/* vendor/is_terminal_polyfill/* vendor/iso7816/* vendor/itoa/* vendor/js-sys/* vendor/keccak/* vendor/lamco-clipboard-core/* vendor/lamco-pipewire/* vendor/lamco-portal/* vendor/lamco-rdp/* vendor/lamco-rdp-input/* vendor/lamco-video/* vendor/lamco-wayland/* vendor/lazy_static/* vendor/libc/* vendor/libz-sys/* vendor/lock_api/* vendor/log/* vendor/md-5-0.10.6/* vendor/md-5/* vendor/md4/* vendor/memmap2-0.8.0/* vendor/memmap2/* vendor/minimal-lexical/* vendor/ntapi/* vendor/num/* vendor/num-bigint/* vendor/num-complex/* vendor/num-conv/* vendor/num-derive/* vendor/num-integer/* vendor/num-iter/* vendor/num-rational/* vendor/num-traits/* vendor/oid/* vendor/once_cell/* vendor/once_cell_polyfill/* vendor/opaque-debug/* vendor/openssl-probe/* vendor/opus2/* vendor/ordered-stream/* vendor/p256/* vendor/p384/* vendor/p521/* vendor/page_size/* vendor/pam/* vendor/pam-sys/* vendor/parking/* vendor/parking_lot/* vendor/parking_lot_core/* vendor/paste/* vendor/pbkdf2/* vendor/pem-rfc7468-0.7.0/* vendor/pem-rfc7468/* vendor/percent-encoding/* vendor/picky/* vendor/picky-asn1/* vendor/picky-asn1-der/* vendor/picky-asn1-x509/* vendor/picky-krb/* vendor/pin-project-lite/* vendor/pin-utils/* vendor/piper/* vendor/pkcs1-0.7.5/* vendor/pkcs1/* vendor/pkcs8/* vendor/png/* vendor/polling/* vendor/polyval-0.6.2/* vendor/polyval/* vendor/portable-atomic/* vendor/powerfmt/* vendor/ppv-lite86/* vendor/primefield/* vendor/primeorder/* vendor/proc-macro-crate/* vendor/proc-macro2/* vendor/qoicoubeh/* vendor/quote/* vendor/rand-0.8.5/* vendor/rand/* vendor/rand_chacha-0.3.1/* vendor/rand_chacha/* vendor/rand_core-0.6.4/* vendor/rand_core/* vendor/rayon/* vendor/rayon-core/* vendor/rc2/* vendor/rcgen/* vendor/regex-automata/* vendor/regex-syntax/* vendor/reqwest/* vendor/resolv-conf/* vendor/rfc6979/* vendor/rsa/* vendor/rusticata-macros/* vendor/rustls-pki-types/* vendor/scopeguard/* vendor/sec1/* vendor/secrecy/* vendor/secret-service/* vendor/security-framework/* vendor/security-framework-sys/* vendor/serde/* vendor/serde_bytes/* vendor/serde_core/* vendor/serde_derive/* vendor/serde_json/* vendor/serde_repr/* vendor/serde_spanned/* vendor/serde_urlencoded/* vendor/serdect/* vendor/sha1-0.10.6/* vendor/sha1/* vendor/sha2-0.10.9/* vendor/sha2/* vendor/sha3/* vendor/signal-hook-registry/* vendor/signature/* vendor/smallvec/* vendor/socket2-0.5.10/* vendor/socket2/* vendor/spki-0.7.3/* vendor/spki/* vendor/sspi/* vendor/stable_deref_trait/* vendor/static_assertions/* vendor/syn/* vendor/system-configuration/* vendor/system-configuration-sys/* vendor/tagptr/* vendor/tempfile/* vendor/thiserror-1.0.69/* vendor/thiserror/* vendor/thiserror-impl-1.0.69/* vendor/thiserror-impl/* vendor/thread_local/* vendor/time/* vendor/time-core/* vendor/time-macros/* vendor/tls_codec/* vendor/tls_codec_derive/* vendor/tokio-rustls/* vendor/toml/* vendor/toml_datetime-0.6.11/* vendor/toml_datetime/* vendor/toml_edit-0.22.27/* vendor/toml_edit/* vendor/toml_parser/* vendor/toml_write/* vendor/typenum/* vendor/unicode-segmentation/* vendor/universal-hash-0.5.1/* vendor/universal-hash/* vendor/url/* vendor/utf8_iter/* vendor/utf8parse/* vendor/uuid/* vendor/wasm-bindgen/* vendor/wasm-bindgen-futures/* vendor/wasm-bindgen-macro/* vendor/wasm-bindgen-macro-support/* vendor/wasm-bindgen-shared/* vendor/web-sys/* vendor/weezl/* vendor/widestring/* vendor/winapi/* vendor/winapi-i686-pc-windows-gnu/* vendor/winapi-x86_64-pc-windows-gnu/* vendor/windows-0.52.0/* vendor/windows/* vendor/windows-collections/* vendor/windows-core-0.52.0/* vendor/windows-core/* vendor/windows-future/* vendor/windows-implement/* vendor/windows-interface/* vendor/windows-link/* vendor/windows-numerics/* vendor/windows-registry/* vendor/windows-result/* vendor/windows-strings/* vendor/windows-sys-0.48.0/* vendor/windows-sys-0.52.0/* vendor/windows-sys-0.59.0/* vendor/windows-sys-0.60.2/* vendor/windows-sys/* vendor/windows-targets-0.48.5/* vendor/windows-targets-0.52.6/* vendor/windows-targets/* vendor/windows-threading/* vendor/windows_aarch64_gnullvm-0.48.5/* vendor/windows_aarch64_gnullvm-0.52.6/* vendor/windows_aarch64_gnullvm/* vendor/windows_aarch64_msvc-0.48.5/* vendor/windows_aarch64_msvc-0.52.6/* vendor/windows_aarch64_msvc/* vendor/windows_i686_gnu-0.48.5/* vendor/windows_i686_gnu-0.52.6/* vendor/windows_i686_gnu/* vendor/windows_i686_gnullvm-0.52.6/* vendor/windows_i686_gnullvm/* vendor/windows_i686_msvc-0.48.5/* vendor/windows_i686_msvc-0.52.6/* vendor/windows_i686_msvc/* vendor/windows_x86_64_gnu-0.48.5/* vendor/windows_x86_64_gnu-0.52.6/* vendor/windows_x86_64_gnu/* vendor/windows_x86_64_gnullvm-0.48.5/* vendor/windows_x86_64_gnullvm-0.52.6/* vendor/windows_x86_64_gnullvm/* vendor/windows_x86_64_msvc-0.48.5/* vendor/windows_x86_64_msvc-0.52.6/* vendor/windows_x86_64_msvc/* vendor/winscard/* vendor/x509-cert/* vendor/yasna/* vendor/zeroize/* vendor/zeroize_derive/* vendor/zstd-safe/* vendor/zstd-sys/*
-Copyright: Aleksey Kladov <aleksey.kladov@gmail.com>
+Files: vendor/aead-0.5.2/* vendor/aead-0.6.0-rc.2/* vendor/aes-0.8.4/* vendor/aes-0.9.0-rc.1/* vendor/aes-gcm-0.10.3/* vendor/aes-gcm-0.11.0-rc.1/* vendor/aes-kw/* vendor/ahash/* vendor/aligned/* vendor/android-activity/* vendor/android_system_properties/* vendor/anes/* vendor/annotate-snippets/* vendor/anstream/* vendor/anstyle/* vendor/anstyle-parse/* vendor/anstyle-query/* vendor/anstyle-wincon/* vendor/anyhow/* vendor/arbitrary/* vendor/arrayvec/* vendor/as-raw-xcb-connection/* vendor/as-slice/* vendor/ash/* vendor/asn1-rs/* vendor/asn1-rs-derive/* vendor/asn1-rs-impl/* vendor/async-broadcast/* vendor/async-channel/* vendor/async-executor/* vendor/async-fs/* vendor/async-io/* vendor/async-lock/* vendor/async-process/* vendor/async-recursion/* vendor/async-signal/* vendor/async-task/* vendor/async-trait/* vendor/atomic-polyfill/* vendor/atomic-waker/* vendor/autocfg/* vendor/base16ct-0.3.0/* vendor/base16ct-1.0.0/* vendor/base64/* vendor/base64ct/* vendor/bit-set/* vendor/bit-vec/* vendor/bit_field/* vendor/bitflags-1.3.2/* vendor/bitflags-2.11.0/* vendor/bitstream-io/* vendor/block-buffer-0.10.4/* vendor/block-buffer-0.11.0-rc.5/* vendor/block-padding-0.3.3/* vendor/block-padding-0.4.0-rc.4/* vendor/blocking/* vendor/bumpalo/* vendor/cast/* vendor/cbc-0.1.2/* vendor/cbc-0.2.0-rc.1/* vendor/cc/* vendor/cesu8/* vendor/cexpr/* vendor/cfg-expr/* vendor/cfg-if/* vendor/chrono/* vendor/cipher-0.4.4/* vendor/cipher-0.5.0-rc.1/* vendor/clap/* vendor/clap_builder/* vendor/clap_derive/* vendor/clap_lex/* vendor/cmake/* vendor/colorchoice/* vendor/concurrent-queue/* vendor/const-oid-0.10.2/* vendor/const-oid-0.9.6/* vendor/core-foundation-0.10.1/* vendor/core-foundation-0.9.4/* vendor/core-foundation-sys/* vendor/core-graphics/* vendor/core-graphics-types-0.1.3/* vendor/core-graphics-types-0.2.0/* vendor/core2/* vendor/cosmic-text/* vendor/cpufeatures/* vendor/crc32fast/* vendor/criterion/* vendor/criterion-plot/* vendor/critical-section/* vendor/crossbeam-channel/* vendor/crossbeam-deque/* vendor/crossbeam-epoch/* vendor/crossbeam-utils/* vendor/crypto-bigint/* vendor/crypto-common-0.1.7/* vendor/crypto-common-0.2.0-rc.4/* vendor/crypto-mac/* vendor/crypto-primes/* vendor/ctor-lite/* vendor/ctr-0.10.0-rc.1/* vendor/ctr-0.9.2/* vendor/cudarc/* vendor/curve25519-dalek-derive/* vendor/data-url/* vendor/der-0.7.10/* vendor/der-0.8.0-rc.9/* vendor/der-parser/* vendor/der_derive/* vendor/deranged/* vendor/des/* vendor/digest-0.10.7/* vendor/digest-0.11.0-rc.3/* vendor/dirs/* vendor/dirs-sys/* vendor/displaydoc/* vendor/document-features/* vendor/downcast-rs/* vendor/ecdsa/* vendor/ed25519/* vendor/either/* vendor/elliptic-curve/* vendor/enum-as-inner/* vendor/enumflags2/* vendor/enumflags2_derive/* vendor/equivalent/* vendor/errno/* vendor/etagere/* vendor/euclid/* vendor/event-listener/* vendor/event-listener-strategy/* vendor/fastrand/* vendor/fdeflate/* vendor/ff/* vendor/find-msvc-tools/* vendor/fixedbitset/* vendor/flate2/* vendor/fnv/* vendor/font-types/* vendor/foreign-types/* vendor/foreign-types-macros/* vendor/foreign-types-shared/* vendor/form_urlencoded/* vendor/futures/* vendor/futures-channel/* vendor/futures-core/* vendor/futures-executor/* vendor/futures-io/* vendor/futures-lite/* vendor/futures-macro/* vendor/futures-sink/* vendor/futures-task/* vendor/futures-util/* vendor/getrandom-0.2.17/* vendor/getrandom-0.3.4/* vendor/getrandom-0.4.1/* vendor/ghash-0.5.1/* vendor/ghash-0.6.0-rc.2/* vendor/gif-0.13.3/* vendor/gif-0.14.1/* vendor/glam/* vendor/glob/* vendor/gpu-alloc/* vendor/gpu-alloc-types/* vendor/gpu-allocator/* vendor/gpu-descriptor/* vendor/gpu-descriptor-types/* vendor/group/* vendor/guillotiere/* vendor/half/* vendor/hash32/* vendor/hashbrown-0.15.5/* vendor/hashbrown-0.16.1/* vendor/heapless/* vendor/heck-0.4.1/* vendor/heck-0.5.0/* vendor/hermit-abi/* vendor/hex/* vendor/hickory-proto/* vendor/hickory-resolver/* vendor/hkdf-0.12.4/* vendor/hkdf-0.13.0-rc.2/* vendor/hmac-0.12.1/* vendor/hmac-0.13.0-rc.2/* vendor/http/* vendor/httparse/* vendor/hybrid-array/* vendor/iana-time-zone/* vendor/iana-time-zone-haiku/* vendor/id-arena/* vendor/idna/* vendor/idna_adapter/* vendor/image/* vendor/image-webp/* vendor/indexmap/* vendor/inout-0.1.4/* vendor/inout-0.2.0-rc.6/* vendor/ipconfig/* vendor/ipnet/* vendor/iri-string/* vendor/ironrdp/* vendor/ironrdp-acceptor/* vendor/ironrdp-ainput/* vendor/ironrdp-async/* vendor/ironrdp-cliprdr/* vendor/ironrdp-connector/* vendor/ironrdp-core/* vendor/ironrdp-displaycontrol/* vendor/ironrdp-dvc/* vendor/ironrdp-echo/* vendor/ironrdp-egfx/* vendor/ironrdp-error/* vendor/ironrdp-graphics/* vendor/ironrdp-pdu/* vendor/ironrdp-rdpsnd/* vendor/ironrdp-server/* vendor/ironrdp-svc/* vendor/ironrdp-tokio/* vendor/is_terminal_polyfill/* vendor/iso7816/* vendor/itertools-0.14.0/* vendor/itertools-0.13.0/* vendor/itertools-0.12.1/* vendor/itertools-0.10.5/* vendor/itoa/* vendor/jni/* vendor/jni-sys/* vendor/jobserver/* vendor/js-sys/* vendor/keccak/* vendor/khronos-egl/* vendor/kurbo-0.10.4/* vendor/kurbo-0.11.3/* vendor/lamco-clipboard-core/* vendor/lamco-pipewire/* vendor/lamco-portal/* vendor/lamco-rdp/* vendor/lamco-rdp-input/* vendor/lamco-video/* vendor/lamco-wayland/* vendor/lazy_static/* vendor/lazycell/* vendor/leb128fmt/* vendor/libc/* vendor/libz-sys/* vendor/linebender_resource_handle/* vendor/litrs/* vendor/lock_api/* vendor/log/* vendor/lyon/* vendor/lyon_algorithms/* vendor/lyon_geom/* vendor/lyon_path/* vendor/lyon_tessellation/* vendor/md-5-0.10.6/* vendor/md-5-0.11.0-rc.2/* vendor/md4/* vendor/memmap2-0.8.0/* vendor/memmap2-0.9.10/* vendor/metal/* vendor/minimal-lexical/* vendor/mockall/* vendor/mockall_derive/* vendor/naga/* vendor/nasm-rs/* vendor/ndk/* vendor/ndk-context/* vendor/ndk-sys/* vendor/ntapi/* vendor/num/* vendor/num-bigint/* vendor/num-complex/* vendor/num-conv/* vendor/num-derive/* vendor/num-integer/* vendor/num-iter/* vendor/num-rational/* vendor/num-traits/* vendor/oid/* vendor/once_cell/* vendor/once_cell_polyfill/* vendor/opaque-debug/* vendor/openssl-probe/* vendor/opus2/* vendor/ordered-stream/* vendor/ouroboros/* vendor/ouroboros_macro/* vendor/p256/* vendor/p384/* vendor/p521/* vendor/page_size/* vendor/pam/* vendor/pam-sys/* vendor/parking/* vendor/parking_lot/* vendor/parking_lot_core/* vendor/paste/* vendor/pastey/* vendor/pbkdf2/* vendor/pem-rfc7468-0.7.0/* vendor/pem-rfc7468-1.0.0-rc.3/* vendor/percent-encoding/* vendor/petgraph/* vendor/picky/* vendor/picky-asn1/* vendor/picky-asn1-der/* vendor/picky-asn1-x509/* vendor/picky-krb/* vendor/pin-project/* vendor/pin-project-internal/* vendor/pin-project-lite/* vendor/pin-utils/* vendor/piper/* vendor/pkcs1-0.7.5/* vendor/pkcs1-0.8.0-rc.4/* vendor/pkcs8/* vendor/pkg-config/* vendor/png-0.17.16/* vendor/png-0.18.1/* vendor/polling/* vendor/pollster/* vendor/polyval-0.6.2/* vendor/polyval-0.7.0-rc.2/* vendor/portable-atomic/* vendor/portable-atomic-util/* vendor/powerfmt/* vendor/ppv-lite86/* vendor/predicates/* vendor/predicates-core/* vendor/predicates-tree/* vendor/presser/* vendor/prettyplease/* vendor/primefield/* vendor/primeorder/* vendor/proc-macro-crate/* vendor/proc-macro2/* vendor/proc-macro2-diagnostics/* vendor/profiling/* vendor/profiling-procmacros/* vendor/proptest/* vendor/qoi/* vendor/qoicoubeh/* vendor/quick-error-2.0.1/* vendor/quick-error-1.2.3/* vendor/quote/* vendor/rand-0.8.5/* vendor/rand-0.9.2/* vendor/rand_chacha-0.3.1/* vendor/rand_chacha-0.9.0/* vendor/rand_core-0.6.4/* vendor/rand_core-0.9.5/* vendor/rand_xorshift/* vendor/range-alloc/* vendor/rangemap/* vendor/rayon/* vendor/rayon-core/* vendor/rc2/* vendor/rcgen/* vendor/read-fonts/* vendor/regex/* vendor/regex-automata/* vendor/regex-syntax/* vendor/renderdoc-sys/* vendor/reqwest/* vendor/resolv-conf/* vendor/resvg/* vendor/rfc6979/* vendor/roxmltree/* vendor/rsa/* vendor/rustc-hash-1.1.0/* vendor/rustc-hash-2.1.1/* vendor/rustc_version/* vendor/rusticata-macros/* vendor/rustls-pki-types/* vendor/rustversion/* vendor/rusty-fork/* vendor/scoped-tls/* vendor/scopeguard/* vendor/sec1/* vendor/secrecy/* vendor/secret-service/* vendor/security-framework/* vendor/security-framework-sys/* vendor/semver/* vendor/serde/* vendor/serde_bytes/* vendor/serde_core/* vendor/serde_derive/* vendor/serde_json/* vendor/serde_repr/* vendor/serde_spanned/* vendor/serde_urlencoded/* vendor/serdect/* vendor/sha1-0.10.6/* vendor/sha1-0.11.0-rc.2/* vendor/sha2-0.10.9/* vendor/sha2-0.11.0-rc.2/* vendor/sha3/* vendor/shlex/* vendor/signal-hook-registry/* vendor/signature/* vendor/simplecss/* vendor/siphasher/* vendor/skrifa/* vendor/smallvec/* vendor/smol_str/* vendor/socket2-0.5.10/* vendor/socket2-0.6.2/* vendor/softbuffer/* vendor/spki-0.7.3/* vendor/spki-0.8.0-rc.4/* vendor/sspi/* vendor/stable_deref_trait/* vendor/static_assertions/* vendor/svg_fmt/* vendor/svgtypes/* vendor/swash/* vendor/syn/* vendor/sys-locale/* vendor/system-configuration/* vendor/system-configuration-sys/* vendor/system-deps/* vendor/tagptr/* vendor/tempfile/* vendor/thiserror-1.0.69/* vendor/thiserror-2.0.18/* vendor/thiserror-impl-1.0.69/* vendor/thiserror-impl-2.0.18/* vendor/thread_local/* vendor/time/* vendor/time-core/* vendor/time-macros/* vendor/tinytemplate/* vendor/tls_codec/* vendor/tls_codec_derive/* vendor/tokio-rustls/* vendor/toml/* vendor/toml_datetime-0.6.11/* vendor/toml_datetime-0.7.5+spec-1.1.0/* vendor/toml_edit-0.22.27/* vendor/toml_edit-0.23.10+spec-1.0.0/* vendor/toml_parser/* vendor/toml_write/* vendor/ttf-parser/* vendor/typenum/* vendor/unarray/* vendor/unicode-bidi/* vendor/unicode-bidi-mirroring/* vendor/unicode-ccc/* vendor/unicode-properties/* vendor/unicode-script/* vendor/unicode-segmentation/* vendor/unicode-vo/* vendor/unicode-width-0.2.2/* vendor/unicode-width-0.1.14/* vendor/unicode-xid/* vendor/universal-hash-0.5.1/* vendor/universal-hash-0.6.0-rc.2/* vendor/url/* vendor/usvg/* vendor/utf8_iter/* vendor/utf8parse/* vendor/uuid/* vendor/vcpkg/* vendor/version_check/* vendor/wait-timeout/* vendor/wasm-bindgen/* vendor/wasm-bindgen-futures/* vendor/wasm-bindgen-macro/* vendor/wasm-bindgen-macro-support/* vendor/wasm-bindgen-shared/* vendor/web-sys/* vendor/web-time/* vendor/weezl/* vendor/wgpu/* vendor/wgpu-core/* vendor/wgpu-core-deps-apple/* vendor/wgpu-core-deps-emscripten/* vendor/wgpu-core-deps-windows-linux-android/* vendor/wgpu-hal/* vendor/wgpu-types/* vendor/widestring/* vendor/winapi/* vendor/winapi-i686-pc-windows-gnu/* vendor/winapi-x86_64-pc-windows-gnu/* vendor/windows-0.52.0/* vendor/windows-0.58.0/* vendor/windows-0.62.2/* vendor/windows-collections/* vendor/windows-core-0.52.0/* vendor/windows-core-0.58.0/* vendor/windows-core-0.62.2/* vendor/windows-future/* vendor/windows-implement-0.58.0/* vendor/windows-implement-0.60.2/* vendor/windows-interface-0.58.0/* vendor/windows-interface-0.59.3/* vendor/windows-link/* vendor/windows-numerics/* vendor/windows-registry/* vendor/windows-result-0.2.0/* vendor/windows-result-0.4.1/* vendor/windows-strings-0.1.0/* vendor/windows-strings-0.5.1/* vendor/windows-sys-0.45.0/* vendor/windows-sys-0.48.0/* vendor/windows-sys-0.52.0/* vendor/windows-sys-0.59.0/* vendor/windows-sys-0.60.2/* vendor/windows-sys-0.61.2/* vendor/windows-targets-0.42.2/* vendor/windows-targets-0.48.5/* vendor/windows-targets-0.52.6/* vendor/windows-targets-0.53.5/* vendor/windows-threading/* vendor/windows_aarch64_gnullvm-0.42.2/* vendor/windows_aarch64_gnullvm-0.48.5/* vendor/windows_aarch64_gnullvm-0.52.6/* vendor/windows_aarch64_gnullvm-0.53.1/* vendor/windows_aarch64_msvc-0.42.2/* vendor/windows_aarch64_msvc-0.48.5/* vendor/windows_aarch64_msvc-0.52.6/* vendor/windows_aarch64_msvc-0.53.1/* vendor/windows_i686_gnu-0.42.2/* vendor/windows_i686_gnu-0.48.5/* vendor/windows_i686_gnu-0.52.6/* vendor/windows_i686_gnu-0.53.1/* vendor/windows_i686_gnullvm-0.52.6/* vendor/windows_i686_gnullvm-0.53.1/* vendor/windows_i686_msvc-0.42.2/* vendor/windows_i686_msvc-0.48.5/* vendor/windows_i686_msvc-0.52.6/* vendor/windows_i686_msvc-0.53.1/* vendor/windows_x86_64_gnu-0.42.2/* vendor/windows_x86_64_gnu-0.48.5/* vendor/windows_x86_64_gnu-0.52.6/* vendor/windows_x86_64_gnu-0.53.1/* vendor/windows_x86_64_gnullvm-0.42.2/* vendor/windows_x86_64_gnullvm-0.48.5/* vendor/windows_x86_64_gnullvm-0.52.6/* vendor/windows_x86_64_gnullvm-0.53.1/* vendor/windows_x86_64_msvc-0.42.2/* vendor/windows_x86_64_msvc-0.48.5/* vendor/windows_x86_64_msvc-0.52.6/* vendor/windows_x86_64_msvc-0.53.1/* vendor/winscard/* vendor/wl-clipboard-rs/* vendor/x11rb/* vendor/x11rb-protocol/* vendor/x509-cert/* vendor/xdg-desktop-portal-generic/* vendor/yansi/* vendor/yasna/* vendor/yazi/* vendor/zeno/* vendor/zeroize/* vendor/zeroize_derive/* vendor/zstd-safe/* vendor/zstd-sys/*
+Copyright: 1Password
+           Aditya Kumar <git@adityais.dev>
+           Adrian Taylor <adetaylor@chromium.org>
+           Alan Somers <asomers@gmail.com>
+           Aleksey Kladov <aleksey.kladov@gmail.com>
            Alex Crichton <alex@alexcrichton.com>
            Alex Huszagh <ahuszagh@gmail.com>
+           Alex Touchet <alextouchet@outlook.com>
            Alexandr Yusuk <aleksandr.yusuk@apriorit.com>
            Alexandre Bury <alexandre.bury@gmail.com>
+           Alexis Beingessner <a.beingessner@gmail.com>
+           Allen Goodman <allen@goodman.io>
            Amanieu d'Antras <amanieu@gmail.com>
            Andre Bogus <bogusandre@gmail.com>
            Andrew Gallant <jamslam@gmail.com>
            Andrew Straw <strawman@astraw.com>
            Anthony Ramine <n.oxyde@gmail.com>
+           Ashish Myles <marcianx@gmail.com>
            Ashley Mannix <ashleymannix@live.com.au>
            Ashley Mannix<ashleymannix@live.com.au>
            Bastian Köcher <git@kchr.de>
            Benjamin Fry <benjaminfry@me.com>
+           Benjamin Saunders <ben.e.saunders@gmail.com>
            Benoît CORTIER <bcortier@devolutions.net>
            Bogdan Opanchuk
+           Brendan Molloy <brendan@bbqsrc.net>
+           Brian L. Troutwine <brian@troutwine.us>
+           Brian Langenberger <bjl@usa.net>
            Brian Maher
+           Brook Heisler <brookheisler@gmail.com>
+           Bruce Mitchener
+           Bryant Luk <code@bryantluk.com>
+           Caleb Maclennan <caleb@alerque.com>
+           Cameron Hart <cameron.hart@gmail.com>
+           Cameron Mcloughlin
            Carl Lerche <me@carllerche.com>
+           Chad Brokaw
+           Chad Brokaw <cbrokaw@gmail.com>
+           Charles Lew <crlf0710@gmail.com>
+           Chelsea Lowman
            Chris Wong <lambda.fairy@gmail.com>
            Christian Duerr <contact@christianduerr.com>
+           Colin Kiegel <kiegel@gmx.de>
            Contributors to futures-rs
+           Corey Farwell <coreyf@rwell.org>
+           Cosimo Lupo
            Dan Burkert <dan@danburkert.com>
            Dan Gohman <dev@sunfishcode.online>
            Daniel De Graaf <code@danieldg.net>
            Daniel McCarney
+           Daniel McNab
+           Daniel Parks <dp+git@oxidized.org>
            Dario Nieuwenhuis
            Dario Nieuwenhuis <dirbaio@dirbaio.net>
            David Tolnay <dtolnay@gmail.com>
@@ -110,47 +186,81 @@ Copyright: Aleksey Kladov <aleksey.kladov@gmail.com>
            Dirkjan Ochtman
            Dylan DPC<dylan.dpc@gmail.com>
            Ed Page
+           Eduardo Sánchez Muñoz <eduardosm-dev@e64.io>
+           Embark <opensource@embark-studios.com>
            Emil Fresk <emil.fresk@gmail.com>
+           Eric Kidd <git@randomhacks.net>
            Erick Tryzelaar <erick.tryzelaar@gmail.com>
+           Evgeniy Reizner <razrfalcon@gmail.com>
+           Eyal Kalderon <ebkalderon@gmail.com>
+           Fenhl <fenhl@fenhl.net>
            Flavio Castelli <flavio@castelli.me>
            Florian Wilkens <gh@1wilkens.org>
            Frank Denis <github@pureftpd.org>
            François Dubois <fdubois@devolutions.net>
+           Garrett Berg <googberg@gmail.com>
+           Gavin Massey <mdk@mystacktrace.org>
+           Gray Olson <gray@grayolson.com
            Greg Lamberson <greg@lamco.io>
+           Guillaume Desmottes <guillaume.desmottes@collabora.com>
            Henri Sivonen <hsivonen@hsivonen.fi>
            Hugues de Valon <hugues.devalon@arm.com>
            Hunar Roop Kahlon<hunar.roop@gmail.com>
            Ionut Mihalcea <ionut.mihalcea@arm.com>
            Isode Ltd./Geobert Quach <geobert.quach@isode.com>
+           Ivan Molodetskikh <yalterz@gmail.com>
            Ivan Smirnov <rust@ivan.smirnov.ie>
            Jack Grigg <jack@z.cash>
            Jack Grigg <thestr4d@gmail.com>
            Jacob Pratt <jacob@jhpratt.dev>
            Jacob Pratt <open-source@jhpratt.dev>
+           Jake Shadle <jake.shadle@embark-studios.com>
+           James Munns
            Jane Lusby <jlusby@yaah.dev>
+           Jason Lingle
            Jason White <me@jasonwhite.io>
+           Jeff Parsons <jeff@parsons.io>
+           Jeremy Soller <jeremy@system76.com>
+           Jerome Rasky <jyrome.112@gmail.com>
+           Jethro Beekman <jethro@jbeekman.nl>
+           Jim McGrath <jimmc2@gmail.com>
            Joe Ellis <joe.ellis@arm.com>
            Joe Wilm <joe@jwilm.com>
            John Nunley <dev@notgull.net>
            Jonas Platte
+           Jonathan Behrens
            Jonathan Trepanier <jtrepanier@devolutions.net>
+           Jorge Aparicio <japaricious@gmail.com>
            Jorge Aparicio <jorge@japaric.io>
            Josef Brandl <mail@josefbrandl.de>
+           Josh <someguynamedjosh@github.com>
+           Josh Chase <josh@prevoty.com>
            Josh Stone
+           Josh Stone <cuviper@gmail.com>
            Josh Triplett <josh@joshtriplett.org>
+           Joshua Barretto <joshua.s.barretto@gmail.com>
+           Justinas Stankevičius <justinas@users.noreply.github.com>
            Kathryn Long
+           Kathryn Long <squeeself@gmail.com>
            Kenny Kerr
            Kim Altintop <kim@monadic.xyz>
            KizzyCode Software Labs./Keziah Biermann <development@kizzycode.de>
            KokaKiwi <kokakiwi@kokakiwi.net>
            Kornel <kornel@geekhood.net>
+           Kornel Lesinski <kornel@geekhood.net>
            Kris Price <kris@krisprice.nz>
            Lamco <contact@lamco.ai>
+           Laurenz Stampfl
+           Laurenz Stampfl <laurenz.stampfl@gmail.com>
            Liran Ringel <liranringel@gmail.com>
+           Lukas Kalbertodt <lukas.kalbertodt@gmail.com>
            MSxDOS <melcodos@gmail.com>
+           Mads Marquart
+           Maik Klein <maikklein@googlemail.com>
            Maja Kądziołka <maya@compilercrim.es>
            Manish Goregaokar <manishsmail@gmail.com>
            Marc-André Lureau <marcandre.lureau@redhat.com>
+           Marijn Suijten <marijn@traverseresearch.nl>
            Marshall Pierce <marshall@mpierce.org>
            Marvin Löbel <loebel.marvin@gmail.com>
            Masaki Hara <ackie.h.gmai@gmail.com>
@@ -159,29 +269,42 @@ Copyright: Aleksey Kladov <aleksey.kladov@gmail.com>
            Microsoft
            Mullvad VPN
            Nick Fitzgerald <fitzgen@gmail.com>
+           Nick Stevens <nick@bitcurry.com>
            Nicolas Silva <nical@fastmail.com>
+           Nikita Pekin <contact@nikitapek.in>
            Nikolai Vazquez
            Oliver Giersch
            Paho Lurie-Gregg <paho@paholg.com>
+           Paul Colomiets <paul@colomiets.name>
            Per Lindgren <per.lindgren@ltu.se>
            Peter Atashian <retep998@gmail.com>
+           Philip Degarmo <aclysma@gmail.com>
            Philip Woods <elzairthesorcerer@gmail.com>
            Philipp Oppermann <dev@phil-opp.com>
            Pierre Chifflier <chifflier@wzdftpd.net>
+           Raph Levien <raph.levien@gmail.com>
            René Kijewski <crates.io@k6i.de>
            René Kijewski <rene.kijewski@fu-berlin.de>
            Richard Markiewicz <rmarkiewicz@devolutions.net>
+           Robert Bragg
            Robert Grosse <n210241048576@gmail.com>
            Robert Usher <266585+dcchut@users.noreply.github.com>
+           Robert Vojta <rvojta@me.com>
+           Runji Wang <wangrunji0408@163.com>
            RustCrypto Developers
            Ryan Lopopolo <rjl@hyperbo.la>
            Sam Rijs <srijs@airpost.net>
            Sean Bowe <ewillbefull@gmail.com>
            Sean Bruton <sean@unnecessary.engineering>
+           Sean Kerr <sean@metatomic.io>
            Sean McArthur <sean@seanmonstar.com>
            Sebastian Thiel <sebastian.thiel@icloud.com>
            Sergey Noskov <snoskov@avito.ru>
+           Sergio Benitez <sb@sergio.bz>
            Simon Ochsenreither <simon@ochsenreither.de>
+           Simon Sapin <simon.sapin@exyr.org>
+           Simonas Kazlauskas <arbitrary@kazlauskas.me>
+           Slint Developers <info@slint.dev>
            Stefan Lankes
            Steven Allen <steven@stebalien.com>
            Steven Fackler <sfackler@gmail.com>
@@ -190,9 +313,13 @@ Copyright: Aleksey Kladov <aleksey.kladov@gmail.com>
            Taiki Endo
            Taiki Endo <te316e89@gmail.com>
            Teleport <goteleport.com>
+           The Contributors
            The CryptoCorrosion Contributors
            The Rand Project Developers
+           The Rust Mobile contributors
            The Rust Project Developers
+           The Rust Windowing contributors
+           The Rust-Fuzz Project Developers
            The RustCrypto Project Developers
            The Servo Project Developers
            The Trussed developers
@@ -202,43 +329,94 @@ Copyright: Aleksey Kladov <aleksey.kladov@gmail.com>
            The wasm-bindgen Developers
            Thomas de Zeeuw <thomasdezeeuw@gmail.com>
            Time contributors
+           Timothée Haudebourg <author@haudebourg.net>
+           Tom Kaitchuck <Tom.Kaitchuck@gmail.com>
            Tony Arcieri <tony@iqlusion.io>
+           Traverse Research <opensource@traverseresearch.nl>
+           Uli Schlachter
+           Uli Schlachter <psychon@znc.in>
            Walther Chen <walther.chen@gmail.com>
+           Without Boats <woboats@gmail.com>
            Xynnn_ <xynnn@linux.alibaba.com>
            YOSHIOKA Takuma <nop_thread@nops.red>
            Yevhenii Reizner <razrfalcon@gmail.com>
            Yoshua Wuyts <yoshuawuyts@gmail.com>
+           Zakarum <zakarumych@ya.ru>
            Zeeshan Ali Khan <zeeshanak@gnome.org>
+           Zibi Braniecki <gandalf@mozilla.com>
            bluss
+           comex <comexk@gmail.com>
+           daxpedda
            dignifiedquire <dignifiedquire@gmail.com>
+           erick.tryzelaar <erick.tryzelaar@gmail.com>
+           gfx-rs developers
            kwantam <kwantam@gmail.com>
            maik klein <maikklein@googlemail.com>
+           mitchmindtree
            nemurubaka <cijiugechu@gmail.com>
+           notgull <jtnunley01@gmail.com>
+           rust-lang-owner
+           the gfx-rs Developers
+           خالد حسني (Khaled Hosny) <khaled@aliftype.com>
 License: Apache-2.0 OR MIT
 
-Files: vendor/bytemuck/* vendor/miniz_oxide/* vendor/safe_arch/* vendor/tinyvec/* vendor/tinyvec_macros/* vendor/wide/* vendor/xkeysym/* vendor/zune-core/* vendor/zune-jpeg/*
+Files: vendor/bytemuck/* vendor/bytemuck_derive/* vendor/cryoglyph/* vendor/cursor-icon/* vendor/dispatch2/* vendor/glow/* vendor/miniz_oxide/* vendor/objc2-app-kit-0.3.2/* vendor/objc2-cloud-kit-0.3.2/* vendor/objc2-core-data-0.3.2/* vendor/objc2-core-foundation/* vendor/objc2-core-graphics/* vendor/objc2-core-image-0.3.2/* vendor/objc2-core-text/* vendor/objc2-core-video/* vendor/objc2-io-surface/* vendor/objc2-quartz-core-0.3.2/* vendor/raw-window-handle/* vendor/safe_arch/* vendor/tiny-xlib/* vendor/tinyvec/* vendor/tinyvec_macros/* vendor/wide/* vendor/xkeysym/* vendor/zune-core-0.4.12/* vendor/zune-core-0.5.1/* vendor/zune-inflate/* vendor/zune-jpeg-0.4.21/* vendor/zune-jpeg-0.5.12/*
 Copyright: Caleb Etemesi
+           Dzmitry Malyshau <kvarkus@gmail.com>
            Frommi <daniil.liferenko@gmail.com>
+           Héctor Ramón Jiménez <hector@hecrj.dev>
+           John Nunley <dev@notgull.net>
            John Nunley <jtnunley01@gmail.com>
+           Joshua Groves <josh@joshgroves.com>
+           Kirill Chibisov <contact@kchibisov.com>
            Lokathor <zefria@gmail.com>
+           Mads Marquart
+           Mads Marquart <mads@marquart.dk>
+           Mary <mary@mary.zone>
+           Osspial <osspial@gmail.com>
            Rich Geldreich richgel99@gmail.com
            Soveu <marx.tomasz@gmail.com>
            caleb <etemesicaleb@gmail.com>
            oyvindln <oyvindln@users.noreply.github.com>
 License: Apache-2.0 OR MIT OR Zlib
 
-Files: vendor/openh264/* vendor/openh264-sys2/*
-Copyright: Ralf Biedert <rb@xr.io>
+Files: vendor/target-lexicon/*
+Copyright: Dan Gohman <sunfish@mozilla.com>
+License: Apache-2.0 WITH LLVM-exception
+
+Files: vendor/arrayref/* vendor/av1-grain/* vendor/kamadak-exif/* vendor/mutate_once/* vendor/openh264/* vendor/openh264-sys2/* vendor/rav1e/* vendor/v_frame/*
+Copyright: David Roundy <roundyd@physics.oregonstate.edu>
+           Josh Holmer
+           KAMADA Ken'ichi <kamada@nanohz.org>
+           Luca Barbato <lu_zero@gentoo.org>
+           Ralf Biedert <rb@xr.io>
+           Thomas Daede <tdaede@xiph.org>
 License: BSD-2-Clause
 
-Files: vendor/curve25519-dalek/* vendor/ed25519-dalek/* vendor/subtle/* vendor/x25519-dalek/*
+Files: vendor/avif-serialize/* vendor/bindgen-0.70.1/* vendor/bindgen-0.69.5/* vendor/cros-libva/* vendor/curve25519-dalek/* vendor/ed25519-dalek/* vendor/exr/* vendor/lebe/* vendor/ravif/* vendor/subtle/* vendor/tiny-skia/* vendor/tiny-skia-path/* vendor/x25519-dalek/*
 Copyright: DebugSteven <debugsteven@gmail.com>
+           Emilio Cobos Álvarez <emilio@crisal.io>
            Henry de Valence <hdevalence@hdevalence.ca>
            Isis Lovecruft <isis@patternsinthevoid.net>
+           Jyun-Yan You <jyyou.tw@gmail.com>
+           Kornel Lesiński <kornel@geekhood.net>
            Michael Rosenberg <michael@mrosenberg.pub>
+           Nick Fitzgerald <fitzgen@gmail.com>
+           The Chromium OS Authors
+           The Servo project developers
            Tony Arcieri <bascule@gmail.com>
+           Yevhenii Reizner <razrfalcon@gmail.com>
            isis lovecruft <isis@patternsinthevoid.net>
+           johannesvollmer <contact@johannesvollmer.com>
 License: BSD-3-Clause
+
+Files: vendor/clipboard-win/* vendor/error-code/*
+Copyright: Douman <douman@gmx.se>
+License: BSL-1.0
+
+Files: vendor/hexf-parse/*
+Copyright: Kang Seonghoon <public+rust@mearie.org>
+License: CC0-1.0
 
 Files: vendor/iso7816-tlv/* vendor/libloading/* vendor/rustls-webpki/* vendor/untrusted/*
 Copyright: Brian Smith <brian@briansmith.org>
@@ -247,74 +425,139 @@ Copyright: Brian Smith <brian@briansmith.org>
            Simonas Kazlauskas <libloading@kazlauskas.me>
 License: ISC
 
-Files: vendor/ashpd/* vendor/async-dnssd/* vendor/bitvec/* vendor/bytes/* vendor/color_quant/* vendor/convert_case/* vendor/cookie-factory/* vendor/data-encoding/* vendor/endi/* vendor/funty/* vendor/fuser/* vendor/generic-array/* vendor/h2/* vendor/hostname/* vendor/http-body/* vendor/http-body-util/* vendor/hyper/* vendor/hyper-util/* vendor/libm/* vendor/libopus_sys/* vendor/libredox/* vendor/libspa/* vendor/libspa-sys/* vendor/matchers/* vendor/memoffset/* vendor/mio/* vendor/nix-0.27.1/* vendor/nix/* vendor/nom/* vendor/nu-ansi-term/* vendor/pem/* vendor/pipewire/* vendor/pipewire-sys/* vendor/radium/* vendor/redox_syscall-0.5.18/* vendor/redox_users/* vendor/schannel/* vendor/sharded-slab/* vendor/simd-adler32/* vendor/slab/* vendor/spin/* vendor/strsim/* vendor/synstructure/* vendor/sysinfo/* vendor/tap/* vendor/tokio/* vendor/tokio-macros/* vendor/tokio-util/* vendor/tower/* vendor/tower-http/* vendor/tower-layer/* vendor/tower-service/* vendor/tracing/* vendor/tracing-appender/* vendor/tracing-attributes/* vendor/tracing-core/* vendor/tracing-log/* vendor/tracing-serde/* vendor/tracing-subscriber/* vendor/try-lock/* vendor/uds_windows/* vendor/users/* vendor/valuable/* vendor/want/* vendor/winnow/* vendor/winreg/* vendor/wyz/* vendor/xdg-home/* vendor/xkbcommon/* vendor/zbus-4.4.0/* vendor/zbus/* vendor/zbus_macros-4.4.0/* vendor/zbus_macros/* vendor/zbus_names-3.0.0/* vendor/zbus_names/* vendor/zmij/* vendor/zvariant-4.2.0/* vendor/zvariant/* vendor/zvariant_derive-4.2.0/* vendor/zvariant_derive/* vendor/zvariant_utils-2.1.0/* vendor/zvariant_utils/*
+Files: vendor/aliasable/* vendor/aligned-vec/* vendor/android-build/* vendor/android-properties/* vendor/arg_enum_proc_macro/* vendor/ashpd-0.11.1/* vendor/ashpd-0.12.3/* vendor/async-dnssd/* vendor/av-scenechange/* vendor/bitvec/* vendor/block/* vendor/block2-0.5.1/* vendor/block2-0.6.2/* vendor/built/* vendor/bytes/* vendor/calloop-0.13.0/* vendor/calloop-0.14.4/* vendor/calloop-wayland-source-0.3.0/* vendor/calloop-wayland-source-0.4.1/* vendor/cfg_aliases/* vendor/clipboard_x11/* vendor/color_quant/* vendor/combine/* vendor/convert_case/* vendor/cookie-factory/* vendor/core_maths/* vendor/crunchy/* vendor/data-encoding/* vendor/dispatch/* vendor/dlib/* vendor/downcast/* vendor/endi/* vendor/equator/* vendor/equator-macro/* vendor/fax/* vendor/fax_derive/* vendor/float-cmp/* vendor/float_next_after/* vendor/fontconfig-parser/* vendor/fontdb/* vendor/fs_extra/* vendor/funty/* vendor/fuser/* vendor/generic-array/* vendor/h2/* vendor/harfrust/* vendor/hostname/* vendor/http-body/* vendor/http-body-util/* vendor/hyper/* vendor/hyper-util/* vendor/iced/* vendor/iced_core/* vendor/iced_debug/* vendor/iced_futures/* vendor/iced_graphics/* vendor/iced_program/* vendor/iced_renderer/* vendor/iced_runtime/* vendor/iced_tiny_skia/* vendor/iced_wgpu/* vendor/iced_widget/* vendor/iced_winit/* vendor/imagesize/* vendor/interpolate_name/* vendor/is-terminal/* vendor/libm/* vendor/libopus_sys/* vendor/libredox/* vendor/libspa/* vendor/libspa-sys/* vendor/lilt/* vendor/loop9/* vendor/lru/* vendor/malloc_buf/* vendor/matchers/* vendor/maybe-rayon/* vendor/memoffset/* vendor/mio/* vendor/new_debug_unreachable/* vendor/nix-0.27.1/* vendor/nix-0.29.0/* vendor/nom-7.1.3/* vendor/nom-8.0.0/* vendor/noop_proc_macro/* vendor/nu-ansi-term/* vendor/nvidia-video-codec-sdk/* vendor/objc/* vendor/objc-sys/* vendor/objc2-0.5.2/* vendor/objc2-0.6.3/* vendor/objc2-app-kit-0.2.2/* vendor/objc2-cloud-kit-0.2.2/* vendor/objc2-contacts/* vendor/objc2-core-data-0.2.2/* vendor/objc2-core-image-0.2.2/* vendor/objc2-core-location/* vendor/objc2-encode/* vendor/objc2-foundation-0.2.2/* vendor/objc2-foundation-0.3.2/* vendor/objc2-link-presentation/* vendor/objc2-metal/* vendor/objc2-quartz-core-0.2.2/* vendor/objc2-symbols/* vendor/objc2-ui-kit/* vendor/objc2-uniform-type-identifiers/* vendor/objc2-user-notifications/* vendor/oorandom/* vendor/orbclient/* vendor/ordered-float/* vendor/os_pipe/* vendor/pem/* vendor/pico-args/* vendor/pipewire/* vendor/pipewire-sys/* vendor/plotters/* vendor/plotters-backend/* vendor/plotters-svg/* vendor/quick-xml/* vendor/radium/* vendor/redox_syscall-0.4.1/* vendor/redox_syscall-0.5.18/* vendor/redox_syscall-0.7.1/* vendor/redox_users/* vendor/reis/* vendor/rfd/* vendor/rgb/* vendor/rustybuzz/* vendor/schannel/* vendor/sctk-adwaita/* vendor/sharded-slab/* vendor/simd-adler32/* vendor/simd_helpers/* vendor/slab/* vendor/smithay-client-toolkit-0.19.2/* vendor/smithay-client-toolkit-0.20.0/* vendor/smithay-clipboard/* vendor/spin/* vendor/strict-num/* vendor/strsim/* vendor/synstructure/* vendor/sysinfo/* vendor/tap/* vendor/termtree/* vendor/tiff/* vendor/tokio/* vendor/tokio-macros/* vendor/tokio-util/* vendor/tower/* vendor/tower-http/* vendor/tower-layer/* vendor/tower-service/* vendor/tracing/* vendor/tracing-appender/* vendor/tracing-attributes/* vendor/tracing-core/* vendor/tracing-log/* vendor/tracing-serde/* vendor/tracing-subscriber/* vendor/tree_magic_mini/* vendor/try-lock/* vendor/uds_windows/* vendor/urlencoding/* vendor/users/* vendor/valuable/* vendor/version-compare/* vendor/want/* vendor/wasmtimer/* vendor/wayland-backend/* vendor/wayland-client/* vendor/wayland-csd-frame/* vendor/wayland-cursor/* vendor/wayland-protocols-0.31.2/* vendor/wayland-protocols-0.32.10/* vendor/wayland-protocols-experimental/* vendor/wayland-protocols-misc-0.2.0/* vendor/wayland-protocols-misc-0.3.10/* vendor/wayland-protocols-plasma/* vendor/wayland-protocols-wlr/* vendor/wayland-scanner/* vendor/wayland-sys/* vendor/window_clipboard/* vendor/winnow/* vendor/winreg/* vendor/wyz/* vendor/x11-dl/* vendor/xcursor/* vendor/xdg-home/* vendor/xkbcommon-0.7.0/* vendor/xkbcommon-0.8.0/* vendor/xkbcommon-dl/* vendor/xml-rs/* vendor/xmlwriter/* vendor/y4m/* vendor/yansi-term/* vendor/zbus-4.4.0/* vendor/zbus-5.14.0/* vendor/zbus_macros-4.4.0/* vendor/zbus_macros-5.14.0/* vendor/zbus_names-3.0.0/* vendor/zbus_names-4.3.1/* vendor/zmij/* vendor/zvariant-4.2.0/* vendor/zvariant-5.10.0/* vendor/zvariant_derive-4.2.0/* vendor/zvariant_derive-5.10.0/* vendor/zvariant_utils-2.1.0/* vendor/zvariant_utils-3.3.0/*
 Copyright: 4lDO2 <4lDO2@protonmail.com>
            Aaron Trent <novacrazy@gmail.com>
            Alex Crichton <alex@alexcrichton.com>
            Alexander Payne
+           Allison Hancock <aahancoc@umich.edu>
+           AltF02 <contact@altf2.dev>
            Amanieu d'Antras <amanieu@gmail.com>
+           Ashley Wulber <ashley@system76.com>
            Azure IoT Edge Devs
            Bartłomiej Kamiński <fizyk20@gmail.com>
+           Bertram Truong <b@bertramtruong.com>
            Bilal Elmoussaoui <bil.elmoussaoui@gmail.com>
+           Bronson Brown-deVost <bronsonbdevost@gmail.com>
+           Caleb Maclennan <caleb@alerque.com>
            Carl Lerche <me@carllerche.com>
+           Chad Brokaw
            Christopher Berner <christopherberner@gmail.com>
+           Dan Gohman <dev@sunfishcode.online>
            Danny Guo <danny@dannyguo.com>
            David Barsky <dbarsky@amazon.com>
            David Barsky <me@davidbarsky.com>
            David Tolnay <dtolnay@gmail.com>
+           Denis Kurilenko <webdesus@gmail.com>
            Dirkjan Ochtman
            Ed Page
+           Eira Fransham <jackefransham@gmail.com>
+           Elinor Berger <elinor@safaradeg.net>
            Eliza Weisman <eliza@buoyant.io>
            Elliott Linder <elliott.darfink@gmail.com>
+           Erle Pereira <erle@erlepereira.com>
+           Evgeniy Reizner <razrfalcon@gmail.com>
+           Felix Köpge <fkoep@mailbox.org>
+           Francesca Frangipane <francesca@comfysoft.net>
            Geoffroy Couprie <geo.couprie@gmail.com>
            Gilad Naaman <gilad.naaman@gmail.com>
            Guillaume Desmottes <guillaume.desmottes@collabora.com>
            Guillaume Gomez <guillaume1.gomez@gmail.com>
+           Hao Hou <haohou302@gmail.com>
            Harald Hoyer <harald@redhat.com>
+           Héctor Ramón Jiménez <hector0193@gmail.com>
+           Héctor Ramón Jiménez <hector@hecrj.dev>
+           Ian Douglas Scott
            Igor Shaula <gentoo90@gmail.com>
+           Jack O'Connor
+           James Forster <james.forsterer@gmail.com>
            Jeremy Soller <jackpot51@gmail.com>
+           Jerome Froelich <jeromefroelic@hotmail.com>
            John Ericson <git@JohnEricson.me>
            Jonathan Creekmore <jonathan@thecreekmores.org>
+           Jonathan Reem <jonathan.reem@gmail.com>
            Jorge Aparicio <japaricious@gmail.com>
            Jose Narvaez <goyox86@gmail.com>
+           Josh Holmer
+           Josh Holmer <jholmer.in@gmail.com>
            Josh Triplett <josh@joshtriplett.org>
            Joshua Barretto <joshua.s.barretto@gmail.com>
+           Juan Aguilar Santillana <mhpoin@gmail.com>
            Julien Cretin <git@ia0.eu>
+           Kagami Hiiragi <kagami@genshiken.org>
+           Kevin Boos <kevinaboos@gmail.com>
+           Kirill Chibisov <contact@kchibisov.com>
+           Kornel <kornel@geekhood.net>
+           Kornel Lesiński <kornel@geekhood.net>
+           Laurenz Stampfl <laurenz.stampfl@gmail.com>
+           Luca Barbato <lu_zero@gentoo.org>
            Lucio Franco <luciofranco14@gmail.com>
+           Lukas Lueg <lukas.lueg@gmail.com>
+           Mads Marquart
+           Mads Marquart <mads@marquart.dk>
+           Maid Dog <maiddogsrl@gmail.com>
            Marc-André Lureau <marcandre.lureau@redhat.com>
+           Markus Westerlind <marwes91@gmail.com>
            Marvin Countryman <me@maar.vin>
            Mathijs van de Nes <git@mathijs.vd-nes.nl>
+           Matt Brubeck <mbrubeck@limpet.net>
+           Mike Dilger <mike@mikedilger.com>
+           Mikhail Lappo <mikhail.lappo@esrlabs.com>
+           Mingun
            Nika Layzell <nika@thelayzells.com>
            Pierre Chifflier <chifflier@wzdftpd.net>
+           Pierre Krieger <pierre.krieger1708@gmail.com>
+           Poly <marynczak.bartlomiej@gmail.com>
            Remi THEBAULT <remi.thebault@gmail.com>
+           Riey
+           Robert Bastian <me@robertbastian.dev
+           Robius Project Maintainers
            Rutrum <dave@rutrum.net>
            Ryan Scheel (Havvy) <ryan.havvy@gmail.com>
+           Samuele Esposito
            Sean McArthur <sean@seanmonstar.com>
+           Sebastian K <s3bk@protonmail.com>
+           Simon Heath <icefox@dreamquest.io>
            Stefan Bühler <stbuehler@web.de>
            Steffen Butzer <steffen.butzer@outlook.com>
            Steven Fackler <sfackler@gmail.com>
+           Steven Sheldon
            Taiki Endo
            The Nushell Project Developers
+           The image-rs Developers
            The nix-rust Project Developers
            Thomas de Zeeuw <thomasdezeeuw@gmail.com>
+           Tim Visee <3a4fb3964f@sinenomine.email>
            Tokio Contributors <team@tokio.rs>
            Tom Wagner <tom.a.wagner@protonmail.com
            Tower Maintainers <team@tower-rs.com>
            Trevor Gross <tg@trevorgross.com>
+           Viliam Vadocz
+           Vladimir Matveev <vmatveev@citrine.cc>
            Wesley Hershberger <mggmugginsmc@gmail.com>
+           WhizSid <whizsid@aol.com>
+           Yevhenii Reizner <razrfalcon@gmail.com>
            Zeeshan Ali Khan <zeenix@gmail.com>
            Zeeshan Ali Khan <zeeshanak@gnome.org>
            Zeki Sherif <zekshi@amazon.com>
+           Zicklag <zicklag@katharostech.com>
+           avitex <avitex@wfxlabs.com>
            contact@geoffroycouprie.com
+           cyypherus
+           daggerbot <daggerbot@gmail.com>
+           i509VCB <mail@i509.me>
            maxbachmann <oss@maxbachmann.de>
            myrrlyn <self@myrrlyn.dev>
            nemurubaka <cijiugechu@gmail.com>
            nwin <nwin@users.noreply.github.com>
            ogham@bsago.me
+           sarah <>
+           softprops <d.tangren@gmail.com>
            turbocooler <turbocooler@cocaine.ninja>
+           خالد حسني (Khaled Hosny) <khaled@aliftype.com>
 License: MIT
 
-Files: vendor/aho-corasick/* vendor/byteorder/* vendor/byteorder-lite/* vendor/memchr/*
+Files: vendor/aho-corasick/* vendor/byteorder/* vendor/byteorder-lite/* vendor/memchr/* vendor/same-file/* vendor/termcolor/* vendor/walkdir/* vendor/winapi-util/*
 Copyright: Andrew Gallant <jamslam@gmail.com>
            Jonathan Behrens
            bluss
@@ -332,6 +575,10 @@ License: Unicode-3.0
 Files: vendor/portpicker/*
 Copyright: Hannes Karppila <hannes.karppila@gmail.com>
 License: Unlicense
+
+Files: vendor/foldhash-0.1.5/* vendor/foldhash-0.2.0/* vendor/slotmap/*
+Copyright: Orson Peters <orsonpeters@gmail.com>
+License: Zlib
 
 License: 0BSD
  Permission to use, copy, modify, and/or distribute this software for any
@@ -412,6 +659,12 @@ License: BUSL-1.1
  .
                        1. You are a non-profit organization.
                        2. Your use is limited to a single server instance.
+                       3. Your use is of a Community Edition of the Licensed
+                          Work. A "Community Edition" is any binary
+                          distribution of the Licensed Work that is published
+                          by the Licensor and designated as "Community
+                          Edition" in the documentation accompanying the
+                          distribution.
  .
                        All other production use requires a commercial license
                        from Lamco Development. Visit https://lamco.ai for
@@ -527,6 +780,13 @@ License: BUSL-1.1
  .
  4. Not to modify this License in any other way.
 
+License: CC0-1.0
+ On Debian systems, the full text of the CC0-1.0 license
+ can be found in /usr/share/common-licenses/CC0-1.0.
+
+License: GPL-2.0-only
+ See the individual crate directories for the full license text.
+
 License: ISC
  Permission to use, copy, modify, and/or distribute this software for any
  purpose with or without fee is hereby granted, provided that the above
@@ -562,9 +822,30 @@ License: MIT
  FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
  DEALINGS IN THE SOFTWARE.
 
+License: MIT-0
+ MIT No Attribution
+ .
+ Permission is hereby granted, free of charge, to any person obtaining a
+ copy of this software and associated documentation files (the "Software"),
+ to deal in the Software without restriction, including without limitation
+ the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ and/or sell copies of the Software, and to permit persons to whom the
+ Software is furnished to do so.
+ .
+ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+ OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+ THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+ DEALINGS IN THE SOFTWARE.
+
 License: MPL-2.0
  On Debian systems, the full text of the MPL-2.0 license
  can be found in /usr/share/common-licenses/MPL-2.0.
+
+License: NCSA
+ See the individual crate directories for the full license text.
 
 License: OpenSSL
  OpenSSL License

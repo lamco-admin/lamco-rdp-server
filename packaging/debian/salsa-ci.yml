@@ -28,14 +28,12 @@ variables:
   # blhc (Build Log Hardening Check) fails: Rust/cargo doesn't expose gcc/ld
   # command lines, so blhc can't verify hardening flags. Standard for Rust packages.
   SALSA_CI_DISABLE_BLHC: 1
-  # Suppress lintian tags that are false positives for vendored Rust packages:
-  # - superfluous-file-pattern: per-crate d/copyright entries requested by reviewer
-  # - source-contains-prebuilt-windows-binary: test DLLs in vendored libloading
-  # - source-contains-prebuilt-wasm-binary: WASM objects in vendored wit-bindgen
-  # - source-contains-prebuilt-javascript-object: minified JS in vendored winit
-  # - inconsistent-appstream-metadata-license: CC0 metainfo vs BUSL-1.1 code (correct)
-  # - file-references-package-build-path: Rust embeds build paths in binaries
-  SALSA_CI_LINTIAN_SUPPRESS_TAGS: 'superfluous-file-pattern,source-contains-prebuilt-windows-binary,source-contains-prebuilt-wasm-binary,source-contains-prebuilt-javascript-object,inconsistent-appstream-metadata-license,file-references-package-build-path,bad-exception-format-in-dep5-copyright'
+  # Lintian overrides are in debian/source/lintian-overrides and
+  # debian/lamco-rdp-server.lintian-overrides (per Fabio Fantoni, 2026-02-23).
+  # CI suppressions kept only for tags not handled by overrides:
+  # - inconsistent-appstream-metadata-license: CC0 metainfo vs BUSL-1.1 code
+  #   (documented in d/copyright but lintian still flags it)
+  SALSA_CI_LINTIAN_SUPPRESS_TAGS: 'inconsistent-appstream-metadata-license'
 
 # Override GitLab runner job timeout (default 1h is too short for Rust builds)
 build:

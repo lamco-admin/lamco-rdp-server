@@ -15,8 +15,12 @@ Connect to your Linux desktop from any RDP client (Windows, macOS, Linux, iOS, A
 - **Hardware encoding** -- VA-API (Intel/AMD) and NVENC (NVIDIA) support
 - **Adaptive streaming** -- SIMD-optimized damage detection, 5-60 FPS based on activity
 - **Clipboard sync** -- bidirectional clipboard via Portal, Klipper, or wl-data-control (direction depends on deployment)
+- **Session health monitoring** -- real-time PipeWire/Portal/EIS health with D-Bus signals
+- **View-only mode** -- ScreenCast-only strategy for monitoring without input injection
+- **Graceful shutdown** -- SIGTERM/SIGINT handling with explicit PipeWire cleanup
+- **OpenH264 dynamic loading** -- patent-compliant runtime codec loading with dual ABI support
 - **GUI configuration** -- graphical settings tool built with iced
-- **355 tests passing** -- comprehensive test coverage across all modules
+- **378 tests passing** -- comprehensive test coverage across all modules
 
 ## Downloads
 
@@ -56,12 +60,13 @@ The source tarball on the Releases page includes vendored dependencies for offli
 | **Sway / River** (wlroots) | AVC444 | wlr-direct | wl-clipboard | Native only |
 | **Hyprland** (official portal) | AVC444 | wlr-direct | wl-clipboard | Native only |
 | **Hyprland** (hypr-remote community portal) | AVC444 | Portal | Portal | Flatpak or native |
+| **COSMIC** (System76) | AVC420 | -- | -- | Video-only (native or Flatpak) |
 
 **Notes:**
 - GNOME 40-44 (RHEL 9) lacks Portal clipboard because RemoteDesktop v1 predates the clipboard API.
-- KDE Portal clipboard has a known bug ([KDE#515465](https://bugs.kde.org/show_bug.cgi?id=515465)) on Plasma 6.3.90-6.5.5. Klipper D-Bus cooperation works on all KDE versions as a fallback.
+- KDE Portal clipboard has a known bug ([KDE#515465](https://bugs.kde.org/show_bug.cgi?id=515465)) on Plasma 6.3.90-6.5.5; fixed in 6.6+. Klipper D-Bus cooperation works on all KDE versions as a fallback.
 - wlroots compositors need native install for input and clipboard; Flatpak provides video-only on these desktops.
-- COSMIC and Niri support is blocked on upstream [Smithay libei](https://github.com/Smithay/smithay/pull/1388).
+- COSMIC provides video-only (no RemoteDesktop portal yet). Blocked on upstream [Smithay libei](https://github.com/Smithay/smithay/pull/1388).
 
 For the full compatibility matrix with portal versions, session persistence, and deployment recommendations, see the [product page](https://www.lamco.ai/products/lamco-rdp-server/).
 
@@ -97,6 +102,7 @@ cargo build --release --features "gui,wayland,libei"     # full-featured for wlr
 | `vaapi` | VA-API hardware encoding (Intel/AMD) |
 | `nvenc` | NVENC hardware encoding (NVIDIA) |
 | `wayland` | Native wlroots protocol support (wlr-direct) |
+| `wl-clipboard` | Clipboard via wl-data-control for wlroots compositors |
 | `libei` | Portal + EIS input for Flatpak on wlroots |
 | `pam-auth` | PAM authentication (native only, not in Flatpak) |
 
@@ -109,6 +115,8 @@ lamco-rdp-server/
     rdp/            Channel multiplexing (EGFX, clipboard, audio, input)
     egfx/           H.264 encoding pipeline (OpenH264, VA-API, NVENC)
     clipboard/      Clipboard orchestration (Portal, Klipper, wl-clipboard)
+    health/         Session health monitor and D-Bus signal relay
+    audio/          Audio capture and encoding (PCM, Opus)
     damage/         SIMD tile-based frame differencing
     session/        XDG Desktop Portal strategies and persistence
     gui/            Configuration GUI (iced)

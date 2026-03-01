@@ -55,7 +55,7 @@ pub use keyboard::VirtualKeyboard as WlrVirtualKeyboard;
 use keyboard::{KeyState, VirtualKeyboard};
 pub use pointer::VirtualPointer as WlrVirtualPointer;
 use pointer::{Axis, AxisSource, ButtonState, VirtualPointer};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 use wayland_client::{
     globals::{registry_queue_init, GlobalListContents},
     protocol::{wl_registry, wl_seat::WlSeat},
@@ -65,7 +65,7 @@ use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::zwp_virtual_keyboar
 use wayland_protocols_wlr::virtual_pointer::v1::client::zwlr_virtual_pointer_manager_v1::ZwlrVirtualPointerManagerV1;
 
 use crate::{
-    health::HealthReporter,
+    health::{HealthEvent, HealthReporter},
     session::strategy::{
         ClipboardComponents, PipeWireAccess, SessionHandle, SessionStrategy, SessionType,
         StreamInfo,
@@ -73,9 +73,21 @@ use crate::{
 };
 
 /// State for Wayland protocol dispatch
+///
+/// Fields exist to satisfy Dispatch trait bounds. The actual protocol objects
+/// are bound via `globals.bind()` in `create_wlr_devices()`, not read from state.
 struct WlrState {
+    #[expect(
+        dead_code,
+        reason = "required by Dispatch<ZwpVirtualKeyboardManagerV1> trait bound"
+    )]
     keyboard_manager: Option<ZwpVirtualKeyboardManagerV1>,
+    #[expect(
+        dead_code,
+        reason = "required by Dispatch<ZwlrVirtualPointerManagerV1> trait bound"
+    )]
     pointer_manager: Option<ZwlrVirtualPointerManagerV1>,
+    #[expect(dead_code, reason = "required by Dispatch<WlSeat> trait bound")]
     seat: Option<WlSeat>,
 }
 
@@ -118,7 +130,7 @@ impl WlrDirectStrategy {
         };
 
         match bind_protocols(&conn) {
-            Ok(_) => {
+            Ok(()) => {
                 debug!("[wlr_direct] All required protocols available");
                 true
             }
@@ -171,7 +183,7 @@ impl SessionStrategy for WlrDirectStrategy {
             event_queue: Mutex::new(event_queue),
             keyboard,
             pointer,
-            streams: vec![], // Populated by video capture strategy
+            streams: std::sync::RwLock::new(vec![]),
             health_reporter: std::sync::OnceLock::new(),
         };
 
@@ -202,7 +214,9 @@ pub struct WlrSessionHandleImpl {
     event_queue: Mutex<wayland_client::EventQueue<WlrState>>,
     keyboard: VirtualKeyboard,
     pointer: VirtualPointer,
-    streams: Vec<StreamInfo>,
+    /// Stream info populated after ScreenCast starts (wlr-direct creates input
+    /// devices before video streams are known).
+    streams: std::sync::RwLock<Vec<StreamInfo>>,
     health_reporter: std::sync::OnceLock<HealthReporter>,
 }
 
@@ -221,28 +235,28 @@ impl WlrSessionHandleImpl {
         }
 
         // Flush connection to send queued requests
-        self.connection
-            .flush()
-            .context("Failed to flush Wayland connection")?;
+        if let Err(e) = self.connection.flush() {
+            if let Some(reporter) = self.health_reporter.get() {
+                reporter.report(HealthEvent::InputFailed {
+                    reason: format!("wlr-direct flush failed: {e}"),
+                    permanent: true,
+                });
+            }
+            return Err(e).context("Failed to flush Wayland connection");
+        }
 
         Ok(())
     }
 
-    /// Find stream by node ID
+    /// Find stream dimensions by node ID.
     ///
-    /// For multi-monitor setups, maps the PipeWire stream ID to stream info
-    /// containing dimensions for coordinate transformation.
-    fn find_stream(&self, stream_id: u32) -> Result<&StreamInfo> {
-        self.streams
+    /// Returns (width, height) for coordinate transformation.
+    fn stream_extents(&self, stream_id: u32) -> Option<(u32, u32)> {
+        let streams = self.streams.read().unwrap();
+        streams
             .iter()
             .find(|s| s.node_id == stream_id)
-            .ok_or_else(|| {
-                anyhow!(
-                    "Stream {} not found. Available streams: {:?}",
-                    stream_id,
-                    self.streams.iter().map(|s| s.node_id).collect::<Vec<_>>()
-                )
-            })
+            .map(|s| (s.width, s.height))
     }
 }
 
@@ -263,7 +277,21 @@ impl SessionHandle for WlrSessionHandleImpl {
     }
 
     fn streams(&self) -> Vec<StreamInfo> {
-        self.streams.clone()
+        self.streams.read().unwrap().clone()
+    }
+
+    fn set_streams(&self, streams: Vec<StreamInfo>) {
+        debug!(
+            "[wlr_direct] Stream info updated: {} stream(s)",
+            streams.len()
+        );
+        for s in &streams {
+            debug!(
+                "[wlr_direct]   node_id={}, {}x{}",
+                s.node_id, s.width, s.height
+            );
+        }
+        *self.streams.write().unwrap() = streams;
     }
 
     fn session_type(&self) -> SessionType {
@@ -289,23 +317,20 @@ impl SessionHandle for WlrSessionHandleImpl {
         // In a full implementation, this would be populated by the video capture strategy
         // For now, use a sensible default or the first stream if available
 
-        let (x_extent, y_extent) = if self.streams.is_empty() {
-            // No video streams - use common default dimensions
-            // This works for single-monitor 1920x1080 setups
-            // Note: This warning will appear frequently - consider rate limiting in production
-            debug!(
-                "[wlr_direct] No stream info available (input-only mode). \
-                 Using default 1920x1080 extents."
-            );
-            (1920_u32, 1080_u32)
-        } else {
-            // Use stream dimensions
-            match self.find_stream(stream_id) {
-                Ok(stream) => (stream.width, stream.height),
-                Err(e) => {
-                    warn!("⚠️  wlr_direct: {}", e);
-                    // Fallback to first stream
-                    (self.streams[0].width, self.streams[0].height)
+        let (x_extent, y_extent) = match self.stream_extents(stream_id) {
+            Some(extents) => extents,
+            None => {
+                // No stream info yet or stream_id not found. Use first available
+                // stream, or fall back to default dimensions.
+                let streams = self.streams.read().unwrap();
+                if let Some(first) = streams.first() {
+                    (first.width, first.height)
+                } else {
+                    debug!(
+                        "[wlr_direct] No stream info available (input-only mode). \
+                         Using default 1920x1080 extents."
+                    );
+                    (1920_u32, 1080_u32)
                 }
             }
         };

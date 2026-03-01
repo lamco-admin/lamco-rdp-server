@@ -6,7 +6,7 @@
 use super::{
     rdp_capabilities::RdpCapability,
     service::{AdvertisedService, PerformanceHints, ServiceId, ServiceLevel},
-    wayland_features::{DamageMethod, DrmFormat, WaylandFeature},
+    wayland_features::{DamageMethod, DrmFormat, HdrTransfer, WaylandFeature},
 };
 use crate::compositor::{
     BufferType, CompositorCapabilities, CompositorType, CursorMode, Quirk, SourceType,
@@ -22,7 +22,7 @@ pub(super) fn translate_capabilities(caps: &CompositorCapabilities) -> Vec<Adver
         translate_multi_monitor(caps),
         translate_window_capture(caps),
     ];
-    services.push(AdvertisedService::unavailable(ServiceId::HdrColorSpace));
+    services.push(translate_hdr_color_space(caps));
     services.push(translate_clipboard(caps));
     services.push(translate_clipboard_manager(caps));
     services.push(translate_remote_input(caps));
@@ -241,14 +241,26 @@ fn translate_window_capture(caps: &CompositorCapabilities) -> AdvertisedService 
             has_toplevel_export: caps.compositor.is_wlroots_based(),
         };
 
-        // wlroots has better window capture via toplevel export
-        if caps.compositor.is_wlroots_based() {
-            AdvertisedService::guaranteed(ServiceId::WindowCapture, feature)
-        } else {
-            AdvertisedService::best_effort(ServiceId::WindowCapture, feature)
-        }
+        // Portal supports Window source type but server only requests Monitor today.
+        // BestEffort = compositor infrastructure exists, server path not yet implemented.
+        AdvertisedService::best_effort(ServiceId::WindowCapture, feature)
     } else {
         AdvertisedService::unavailable(ServiceId::WindowCapture)
+    }
+}
+
+fn translate_hdr_color_space(caps: &CompositorCapabilities) -> AdvertisedService {
+    if caps.has_color_management() {
+        // wp-color-management-v1 protocol detected (KDE 6.3+, experimental Sway)
+        // Server doesn't negotiate HDR with RDP clients yet, so BestEffort
+        let feature = WaylandFeature::HdrColorSpace {
+            transfer: HdrTransfer::Pq,
+            gamut: "bt2020".to_string(),
+        };
+        AdvertisedService::best_effort(ServiceId::HdrColorSpace, feature)
+            .with_note("Compositor supports HDR but server HDR path not yet implemented")
+    } else {
+        AdvertisedService::unavailable(ServiceId::HdrColorSpace)
     }
 }
 
@@ -714,15 +726,12 @@ fn translate_libei_input(caps: &CompositorCapabilities) -> AdvertisedService {
         touch: false, // Touch not yet implemented
     };
 
-    // libei is Guaranteed when:
-    // 1. Portal RemoteDesktop v2+ is available
-    // 2. Portal backend implements ConnectToEIS (can't detect without trying)
-    //
-    // Note: This assumes the portal backend supports ConnectToEIS.
-    // If the backend doesn't support it, session creation will fail gracefully.
-    AdvertisedService::guaranteed(ServiceId::LibeiInput, feature)
+    // BestEffort: Portal v2+ advertises ConnectToEIS but not all backends
+    // implement it. Actual availability is confirmed at strategy selection
+    // time via LibeiStrategy::is_available().
+    AdvertisedService::best_effort(ServiceId::LibeiInput, feature)
         .with_rdp_capability(RdpCapability::input_full())
-        .with_note("EIS protocol via Portal RemoteDesktop (Flatpak-compatible)")
+        .with_note("EIS protocol via Portal RemoteDesktop (availability confirmed at runtime)")
 }
 
 // ============================================================================

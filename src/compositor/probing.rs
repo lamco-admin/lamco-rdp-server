@@ -49,8 +49,27 @@ pub async fn probe_capabilities() -> Result<CompositorCapabilities> {
     };
 
     // Step 3: Enumerate Wayland globals (if possible)
-    let wayland_globals = enumerate_wayland_globals().unwrap_or_default();
-    debug!("Found {} Wayland globals", wayland_globals.len());
+    let mut wayland_globals = enumerate_wayland_globals().unwrap_or_default();
+    debug!(
+        "Found {} Wayland globals from enumeration",
+        wayland_globals.len()
+    );
+
+    // Step 3b: If enumeration returned nothing useful (e.g., SSH session without
+    // WAYLAND_DISPLAY, or Wayland socket inaccessible), inject known protocols
+    // based on compositor type. These are compiled into every build of the compositor
+    // and can be assumed present.
+    if wayland_globals.is_empty() && !crate::config::is_flatpak() {
+        let inferred = infer_globals_from_compositor(&compositor);
+        if !inferred.is_empty() {
+            debug!(
+                "Injecting {} inferred globals for {} (enumeration empty)",
+                inferred.len(),
+                compositor
+            );
+            wayland_globals = inferred;
+        }
+    }
 
     // Step 4: Create capability structure (includes profile generation and deployment detection)
     let mut capabilities = CompositorCapabilities::new(compositor, portal, wayland_globals);
@@ -429,63 +448,182 @@ pub fn detect_os_release() -> Option<OsRelease> {
     Some(release)
 }
 
-/// Enumerate Wayland globals via wlr-randr or similar tools
-///
-/// Note: This is a best-effort enumeration. Full Wayland global
-/// enumeration would require linking wayland-client and doing
-/// a registry roundtrip. For most use cases, the Portal-based
-/// detection is sufficient.
-fn enumerate_wayland_globals() -> Result<Vec<WaylandGlobal>> {
+/// Infer Wayland globals from compositor type when direct enumeration isn't possible.
+/// Each compositor has a known set of protocols compiled into every build.
+fn infer_globals_from_compositor(compositor: &CompositorType) -> Vec<WaylandGlobal> {
     let mut globals = Vec::new();
 
-    // Check for wlroots tool presence (indicates wlroots protocols).
-    // Skip in Flatpak: host binaries aren't accessible in the sandbox.
-    if !crate::config::is_flatpak() {
-        if Command::new("which")
-            .arg("wlr-randr")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-        {
-            globals.push(WaylandGlobal {
-                interface: "zwlr_screencopy_manager_v1".to_string(),
-                version: 3,
-                name: 0,
-            });
-        }
+    // Standard protocols present in any Wayland compositor
+    for (iface, ver) in [("wl_compositor", 5), ("wl_shm", 1), ("xdg_wm_base", 5)] {
+        globals.push(WaylandGlobal {
+            interface: iface.to_string(),
+            version: ver,
+            name: 0,
+        });
+    }
 
-        if Command::new("which")
-            .arg("slurp")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-        {
-            globals.push(WaylandGlobal {
-                interface: "zwlr_layer_shell_v1".to_string(),
-                version: 4,
-                name: 0,
-            });
+    let protocols: &[(&str, u32)] = match compositor {
+        CompositorType::Sway { .. } => &[
+            ("zwlr_screencopy_manager_v1", 3),
+            ("zwp_virtual_keyboard_manager_v1", 1),
+            ("zwlr_virtual_pointer_manager_v1", 1),
+            ("zwlr_data_control_manager_v1", 2),
+            ("zwlr_layer_shell_v1", 4),
+            ("wp_fractional_scale_manager_v1", 1),
+            ("ext_session_lock_manager_v1", 1),
+        ],
+        CompositorType::Hyprland { .. } => &[
+            ("zwlr_screencopy_manager_v1", 3),
+            ("zwp_virtual_keyboard_manager_v1", 1),
+            ("zwlr_virtual_pointer_manager_v1", 1),
+            ("zwlr_data_control_manager_v1", 2),
+            ("zwlr_layer_shell_v1", 4),
+            ("wp_fractional_scale_manager_v1", 1),
+            ("ext_session_lock_manager_v1", 1),
+            ("ext_foreign_toplevel_list_v1", 1),
+        ],
+        CompositorType::Wlroots { .. } => &[
+            ("zwlr_screencopy_manager_v1", 3),
+            ("zwp_virtual_keyboard_manager_v1", 1),
+            ("zwlr_virtual_pointer_manager_v1", 1),
+            ("zwlr_data_control_manager_v1", 2),
+            ("zwlr_layer_shell_v1", 4),
+        ],
+        CompositorType::Cosmic => &[
+            ("ext_session_lock_manager_v1", 1),
+            ("wp_fractional_scale_manager_v1", 1),
+        ],
+        // GNOME, KDE, Weston, Unknown: portal-driven, no wlroots protocols to inject
+        _ => &[],
+    };
+
+    for &(iface, ver) in protocols {
+        globals.push(WaylandGlobal {
+            interface: iface.to_string(),
+            version: ver,
+            name: 0,
+        });
+    }
+
+    globals
+}
+
+/// Enumerate Wayland globals by connecting to the compositor
+///
+/// With the `wayland` feature: connects to the Wayland display and does a
+/// registry roundtrip to discover all advertised globals (interfaces + versions).
+/// Without: falls back to binary-detection heuristics.
+#[cfg(feature = "wayland")]
+fn enumerate_wayland_globals() -> Result<Vec<WaylandGlobal>> {
+    // Flatpak sandbox can't reach the host Wayland socket directly;
+    // Portal-based detection handles that path instead.
+    if crate::config::is_flatpak() {
+        debug!("Flatpak: skipping direct Wayland global enumeration");
+        return Ok(Vec::new());
+    }
+
+    use wayland_client::{
+        globals::{registry_queue_init, GlobalListContents},
+        protocol::wl_registry,
+        Connection, Dispatch, QueueHandle,
+    };
+
+    // Minimal state -- we only need the registry roundtrip, no protocol binds
+    struct ProbeState;
+
+    impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for ProbeState {
+        fn event(
+            _state: &mut Self,
+            _proxy: &wl_registry::WlRegistry,
+            _event: wl_registry::Event,
+            _data: &GlobalListContents,
+            _conn: &Connection,
+            _qhandle: &QueueHandle<Self>,
+        ) {
+            // registry_queue_init collects globals for us
         }
     }
 
-    // Standard protocols we can assume exist in any Wayland compositor
-    globals.push(WaylandGlobal {
-        interface: "wl_compositor".to_string(),
-        version: 5,
-        name: 1,
-    });
-    globals.push(WaylandGlobal {
-        interface: "wl_shm".to_string(),
-        version: 1,
-        name: 2,
-    });
-    globals.push(WaylandGlobal {
-        interface: "xdg_wm_base".to_string(),
-        version: 5,
-        name: 3,
+    let conn = Connection::connect_to_env()
+        .map_err(|e| anyhow::anyhow!("Failed to connect to Wayland display: {e}"))?;
+
+    let (globals, _queue) = registry_queue_init::<ProbeState>(&conn)
+        .map_err(|e| anyhow::anyhow!("Failed Wayland registry roundtrip: {e}"))?;
+
+    let result = globals.contents().with_list(|list| {
+        list.iter()
+            .map(|g| WaylandGlobal {
+                interface: g.interface.clone(),
+                version: g.version,
+                name: g.name,
+            })
+            .collect::<Vec<_>>()
     });
 
-    Ok(globals)
+    debug!("Wayland registry: {} globals enumerated", result.len());
+    Ok(result)
+}
+
+#[cfg(not(feature = "wayland"))]
+fn enumerate_wayland_globals() -> Result<Vec<WaylandGlobal>> {
+    // Skip heuristics in Flatpak: host binaries and Wayland socket aren't accessible
+    if crate::config::is_flatpak() {
+        return Ok(Vec::new());
+    }
+
+    // Try wayland-info first: gives authoritative protocol list from the compositor
+    if let Some(globals) = try_wayland_info() {
+        return Ok(globals);
+    }
+
+    // Fall back to compositor-type inference (same as the wayland feature's fallback path)
+    let compositor = identify_compositor();
+    Ok(infer_globals_from_compositor(&compositor))
+}
+
+/// Try to get Wayland globals from `wayland-info` or `weston-info` CLI tools.
+/// These tools perform a real Wayland registry roundtrip, giving authoritative results.
+#[cfg(not(feature = "wayland"))]
+fn try_wayland_info() -> Option<Vec<WaylandGlobal>> {
+    let output = Command::new("wayland-info")
+        .output()
+        .or_else(|_| Command::new("weston-info").output())
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut globals = Vec::new();
+
+    // wayland-info output format: "interface: 'name', version: N, name: M"
+    for line in stdout.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix("interface: '") {
+            if let Some(iface_end) = rest.find('\'') {
+                let interface = &rest[..iface_end];
+                if let Some(ver_start) = rest.find("version: ") {
+                    let ver_str = &rest[ver_start + 9..];
+                    let ver_end = ver_str.find(',').unwrap_or(ver_str.len());
+                    if let Ok(version) = ver_str[..ver_end].trim().parse::<u32>() {
+                        globals.push(WaylandGlobal {
+                            interface: interface.to_string(),
+                            version,
+                            name: 0,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    if globals.is_empty() {
+        None
+    } else {
+        debug!("wayland-info: parsed {} globals", globals.len());
+        Some(globals)
+    }
 }
 
 #[cfg(test)]

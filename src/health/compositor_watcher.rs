@@ -22,8 +22,12 @@ fn compositor_bus_names(session_type: SessionType) -> Vec<&'static str> {
             // the compositor. Monitor the portal daemon itself.
             vec!["org.freedesktop.portal.Desktop"]
         }
-        SessionType::WlrDirect | SessionType::PortalGeneric => {
-            // Wayland-native strategies don't depend on D-Bus for runtime ops.
+        SessionType::WlrDirect => {
+            // wlr-direct uses Portal ScreenCast for video capture
+            vec!["org.freedesktop.portal.Desktop"]
+        }
+        SessionType::PortalGeneric => {
+            // Wayland-native strategy, no D-Bus runtime dependency
             vec![]
         }
     }

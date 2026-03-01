@@ -131,7 +131,7 @@ done
 %{_datadir}/icons/hicolor/*/apps/io.lamco.rdp-server.png
 
 %changelog
-* Mon Feb 24 2026 Greg Lamberson <greg@lamco.io> - 1.4.0-1
+* Tue Feb 24 2026 Greg Lamberson <greg@lamco.io> - 1.4.0-1
 - Clipboard provider trait rearchitecture with backend abstraction
   (Portal, Mutter D-Bus, wlr data-control providers)
 - Enhanced wlroots compositor support via xdg-desktop-portal-generic

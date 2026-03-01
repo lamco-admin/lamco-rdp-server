@@ -55,6 +55,9 @@ pub struct ServerState {
 
     /// Runtime statistics
     pub stats: RuntimeStats,
+
+    /// Active session strategy type (e.g., "Portal", "wlr-direct", "Mutter Direct API")
+    pub session_type: String,
 }
 
 impl Default for ServerState {
@@ -66,6 +69,7 @@ impl Default for ServerState {
             start_time: None,
             config_path: String::new(),
             stats: RuntimeStats::default(),
+            session_type: String::new(),
         }
     }
 }

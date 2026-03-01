@@ -86,13 +86,13 @@ impl MutterSessionHandleImpl {
             Ok(sc_session) => match sc_session.subscribe_closed().await {
                 Ok(stream) => {
                     let valid = Arc::clone(&self.session_valid);
-                    let reporter = self.health_reporter.get().cloned();
+                    let health_reporter = Arc::clone(&self.health_reporter);
                     tokio::spawn(async move {
                         futures_util::pin_mut!(stream);
                         stream.next().await;
                         error!("Mutter ScreenCast session Closed signal received");
                         valid.store(false, Ordering::Release);
-                        if let Some(r) = &reporter {
+                        if let Some(r) = health_reporter.get() {
                             r.report(HealthEvent::SessionClosed {
                                 reason: "Mutter ScreenCast Closed signal".into(),
                             });
@@ -111,13 +111,13 @@ impl MutterSessionHandleImpl {
             Ok(rd_session) => match rd_session.subscribe_closed().await {
                 Ok(stream) => {
                     let valid = Arc::clone(&self.session_valid);
-                    let reporter = self.health_reporter.get().cloned();
+                    let health_reporter = Arc::clone(&self.health_reporter);
                     tokio::spawn(async move {
                         futures_util::pin_mut!(stream);
                         stream.next().await;
                         error!("Mutter RemoteDesktop session Closed signal received");
                         valid.store(false, Ordering::Release);
-                        if let Some(r) = &reporter {
+                        if let Some(r) = health_reporter.get() {
                             r.report(HealthEvent::SessionClosed {
                                 reason: "Mutter RemoteDesktop Closed signal".into(),
                             });

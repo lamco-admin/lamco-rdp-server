@@ -19,18 +19,27 @@ use ashpd::desktop::{
 use async_trait::async_trait;
 use tracing::{info, warn};
 
-use crate::session::strategy::{
-    ClipboardComponents, PipeWireAccess, SessionHandle, SessionStrategy, SessionType, StreamInfo,
+use crate::{
+    health::HealthReporter,
+    session::strategy::{
+        ClipboardComponents, PipeWireAccess, SessionHandle, SessionStrategy, SessionType,
+        StreamInfo,
+    },
 };
 
 /// Session handle for ScreenCast-only (view-only) mode
 pub struct ScreenCastOnlySessionHandle {
     pipewire_fd: i32,
     streams: Vec<StreamInfo>,
+    health_reporter: Arc<std::sync::OnceLock<HealthReporter>>,
 }
 
 #[async_trait]
 impl SessionHandle for ScreenCastOnlySessionHandle {
+    fn set_health_reporter(&self, reporter: HealthReporter) {
+        let _ = self.health_reporter.set(reporter);
+    }
+
     fn pipewire_access(&self) -> PipeWireAccess {
         PipeWireAccess::FileDescriptor(self.pipewire_fd)
     }
@@ -70,7 +79,11 @@ impl SessionHandle for ScreenCastOnlySessionHandle {
 }
 
 /// ScreenCast-only strategy for view-only Flatpak sessions on wlroots
-pub struct ScreenCastOnlyStrategy;
+pub struct ScreenCastOnlyStrategy {
+    /// Cursor modes the portal actually supports (from capability detection).
+    /// Empty means unknown — defaults to Metadata for backward compat.
+    available_cursor_modes: Vec<crate::compositor::CursorMode>,
+}
 
 impl Default for ScreenCastOnlyStrategy {
     fn default() -> Self {
@@ -80,7 +93,38 @@ impl Default for ScreenCastOnlyStrategy {
 
 impl ScreenCastOnlyStrategy {
     pub fn new() -> Self {
-        Self
+        Self {
+            available_cursor_modes: Vec::new(),
+        }
+    }
+
+    pub fn with_cursor_modes(available_cursor_modes: Vec<crate::compositor::CursorMode>) -> Self {
+        Self {
+            available_cursor_modes,
+        }
+    }
+
+    /// Pick the best cursor mode from what the portal supports.
+    /// Preference: Metadata > Embedded > Hidden
+    fn best_cursor_mode(&self) -> CursorMode {
+        use crate::compositor::CursorMode as CompCursorMode;
+
+        if self.available_cursor_modes.is_empty() {
+            return CursorMode::Metadata;
+        }
+        if self
+            .available_cursor_modes
+            .contains(&CompCursorMode::Metadata)
+        {
+            CursorMode::Metadata
+        } else if self
+            .available_cursor_modes
+            .contains(&CompCursorMode::Embedded)
+        {
+            CursorMode::Embedded
+        } else {
+            CursorMode::Hidden
+        }
     }
 
     /// Check if ScreenCast portal is available (without requiring RemoteDesktop)
@@ -121,10 +165,13 @@ impl SessionStrategy for ScreenCastOnlyStrategy {
             .await
             .context("Failed to create ScreenCast session")?;
 
+        let cursor_mode = self.best_cursor_mode();
+        info!("ScreenCast cursor mode: {:?}", cursor_mode);
+
         screencast
             .select_sources(
                 &session,
-                CursorMode::Metadata,
+                cursor_mode,
                 SourceType::Monitor.into(),
                 false, // don't allow multiple sources
                 None,  // no restore token
@@ -185,6 +232,7 @@ impl SessionStrategy for ScreenCastOnlyStrategy {
         let handle = ScreenCastOnlySessionHandle {
             pipewire_fd: raw_fd,
             streams,
+            health_reporter: Arc::new(std::sync::OnceLock::new()),
         };
 
         Ok(Arc::new(handle))
@@ -205,6 +253,7 @@ mod tests {
         let handle = ScreenCastOnlySessionHandle {
             pipewire_fd: 0,
             streams: vec![],
+            health_reporter: Arc::new(std::sync::OnceLock::new()),
         };
         assert_eq!(handle.session_type(), SessionType::ScreenCastOnly);
     }
@@ -214,8 +263,48 @@ mod tests {
         let handle = ScreenCastOnlySessionHandle {
             pipewire_fd: 0,
             streams: vec![],
+            health_reporter: Arc::new(std::sync::OnceLock::new()),
         };
         assert!(handle.portal_clipboard().is_none());
+    }
+
+    #[test]
+    fn test_best_cursor_mode_prefers_metadata() {
+        use crate::compositor::CursorMode as CompCursorMode;
+
+        // All modes available: pick Metadata
+        let strategy = ScreenCastOnlyStrategy::with_cursor_modes(vec![
+            CompCursorMode::Hidden,
+            CompCursorMode::Embedded,
+            CompCursorMode::Metadata,
+        ]);
+        assert_eq!(strategy.best_cursor_mode(), CursorMode::Metadata);
+    }
+
+    #[test]
+    fn test_best_cursor_mode_falls_back_to_embedded() {
+        use crate::compositor::CursorMode as CompCursorMode;
+
+        // Hyprland/Sway: only Hidden + Embedded
+        let strategy = ScreenCastOnlyStrategy::with_cursor_modes(vec![
+            CompCursorMode::Hidden,
+            CompCursorMode::Embedded,
+        ]);
+        assert_eq!(strategy.best_cursor_mode(), CursorMode::Embedded);
+    }
+
+    #[test]
+    fn test_best_cursor_mode_hidden_only() {
+        use crate::compositor::CursorMode as CompCursorMode;
+
+        let strategy = ScreenCastOnlyStrategy::with_cursor_modes(vec![CompCursorMode::Hidden]);
+        assert_eq!(strategy.best_cursor_mode(), CursorMode::Hidden);
+    }
+
+    #[test]
+    fn test_best_cursor_mode_empty_defaults_metadata() {
+        let strategy = ScreenCastOnlyStrategy::new();
+        assert_eq!(strategy.best_cursor_mode(), CursorMode::Metadata);
     }
 
     #[tokio::test]
@@ -223,6 +312,7 @@ mod tests {
         let handle = ScreenCastOnlySessionHandle {
             pipewire_fd: 0,
             streams: vec![],
+            health_reporter: Arc::new(std::sync::OnceLock::new()),
         };
         assert!(handle.notify_keyboard_keycode(42, true).await.is_err());
         assert!(handle

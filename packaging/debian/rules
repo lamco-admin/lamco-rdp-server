@@ -18,6 +18,13 @@ override_dh_auto_install:
 	install -Dm755 target/release/lamco-rdp-server-gui debian/lamco-rdp-server/usr/bin/lamco-rdp-server-gui
 	install -Dm644 packaging/systemd/lamco-rdp-server.service debian/lamco-rdp-server/usr/lib/systemd/user/lamco-rdp-server.service
 	install -dm755 debian/lamco-rdp-server/etc/lamco-rdp-server
+	install -Dm644 data/io.lamco.rdp-server.desktop debian/lamco-rdp-server/usr/share/applications/io.lamco.rdp-server.desktop
+	install -Dm644 data/io.lamco.rdp-server.metainfo.xml debian/lamco-rdp-server/usr/share/metainfo/io.lamco.rdp-server.metainfo.xml
+	install -Dm644 data/icons/io.lamco.rdp-server.svg debian/lamco-rdp-server/usr/share/icons/hicolor/scalable/apps/io.lamco.rdp-server.svg
+	for size in 48 64 128 256; do \
+		install -Dm644 data/icons/io.lamco.rdp-server-$${size}.png \
+			debian/lamco-rdp-server/usr/share/icons/hicolor/$${size}x$${size}/apps/io.lamco.rdp-server.png; \
+	done
 
 override_dh_auto_test:
 	# Tests require running Wayland compositor
