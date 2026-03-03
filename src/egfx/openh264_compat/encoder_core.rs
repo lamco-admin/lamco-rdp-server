@@ -1,4 +1,4 @@
-#![expect(unsafe_code, reason = "FFI calls through OpenH264 vtable pointers")]
+#![allow(unsafe_code)]
 // Raw pointer casting is fundamental to C FFI: OpenH264's vtable functions
 // accept `*const c_void` / `*mut c_void` for type-erased struct parameters.
 #![expect(

@@ -55,10 +55,7 @@ use xdg_desktop_portal_generic::{
 
 use crate::{
     health::{HealthEvent, HealthReporter},
-    session::strategy::{
-        ClipboardComponents, PipeWireAccess, SessionHandle, SessionStrategy, SessionType,
-        StreamInfo,
-    },
+    session::strategy::{PipeWireAccess, SessionHandle, SessionStrategy, SessionType, StreamInfo},
 };
 
 /// Session strategy using embedded portal-generic backends.
@@ -327,14 +324,8 @@ impl SessionHandle for PortalGenericSessionWithStop {
         self.handle.notify_pointer_axis(dx, dy).await
     }
 
-    fn portal_clipboard(&self) -> Option<ClipboardComponents> {
-        self.handle.portal_clipboard()
-    }
-
-    fn clipboard_backend(
-        &self,
-    ) -> Option<Arc<Mutex<Box<dyn xdg_desktop_portal_generic::ClipboardBackend>>>> {
-        self.handle.clipboard_backend()
+    fn clipboard_source(&self) -> crate::session::strategy::ClipboardSource {
+        self.handle.clipboard_source()
     }
 }
 
@@ -460,15 +451,13 @@ impl SessionHandle for PortalGenericSessionHandle {
         Ok(())
     }
 
-    fn portal_clipboard(&self) -> Option<ClipboardComponents> {
-        // portal-generic uses Wayland data-control, not Portal D-Bus clipboard
-        None
-    }
-
-    fn clipboard_backend(
-        &self,
-    ) -> Option<Arc<Mutex<Box<dyn xdg_desktop_portal_generic::ClipboardBackend>>>> {
-        self.clipboard_backend.as_ref().map(Arc::clone)
+    fn clipboard_source(&self) -> crate::session::strategy::ClipboardSource {
+        match self.clipboard_backend.as_ref() {
+            Some(backend) => {
+                crate::session::strategy::ClipboardSource::DataControl(Arc::clone(backend))
+            }
+            None => crate::session::strategy::ClipboardSource::None,
+        }
     }
 }
 

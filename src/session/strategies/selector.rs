@@ -245,8 +245,16 @@ impl SessionStrategySelector {
             }
         }
 
+        // Check if Portal RemoteDesktop is available
+        // PortalTokenStrategy and basic Portal both require RemoteDesktop
+        use ashpd::desktop::remote_desktop::RemoteDesktop;
+        let has_remote_desktop = match RemoteDesktop::new().await {
+            Ok(rd) => rd.available_device_types().await.is_ok(),
+            Err(_) => false,
+        };
+
         // PRIORITY 4: Portal + Token (works on all DEs with portal v4+)
-        if self.service_registry.supports_session_persistence() {
+        if self.service_registry.supports_session_persistence() && has_remote_desktop {
             info!("✅ Selected: Portal + Token strategy");
             info!("   One-time permission dialog, then unattended operation");
 
@@ -257,12 +265,6 @@ impl SessionStrategySelector {
         }
 
         // FALLBACK: Portal without tokens (portal v3 or below)
-        // Check if Portal RemoteDesktop is available at all
-        use ashpd::desktop::remote_desktop::RemoteDesktop;
-        let has_remote_desktop = match RemoteDesktop::new().await {
-            Ok(rd) => rd.available_device_types().await.is_ok(),
-            Err(_) => false,
-        };
         if has_remote_desktop {
             warn!("⚠️  No session persistence available");
             warn!("   Portal version: {}", caps.portal.version);

@@ -1,7 +1,4 @@
-#![expect(
-    unsafe_code,
-    reason = "FFI struct defaults via mem::zeroed and raw pointer extraction"
-)]
+#![allow(unsafe_code)]
 // Field names match the OpenH264 C API exactly — renaming would break FFI layout.
 // Dead code allowed: complete API binding — constants/fields used on demand.
 #![allow(non_snake_case, non_camel_case_types, dead_code)]

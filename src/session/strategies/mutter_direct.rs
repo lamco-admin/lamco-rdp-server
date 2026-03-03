@@ -294,16 +294,13 @@ impl SessionHandle for MutterSessionHandleImpl {
             .context("Failed to inject pointer axis via Mutter D-Bus")
     }
 
-    fn portal_clipboard(&self) -> Option<crate::session::strategy::ClipboardComponents> {
-        // Mutter clipboard is handled natively, not via Portal.
-        None
-    }
-
-    fn mutter_clipboard(&self) -> Option<std::sync::Arc<crate::mutter::MutterClipboardManager>> {
-        self.mutter_handle
-            .clipboard
-            .as_ref()
-            .map(std::sync::Arc::clone)
+    fn clipboard_source(&self) -> crate::session::strategy::ClipboardSource {
+        match self.mutter_handle.clipboard.as_ref() {
+            Some(mgr) => {
+                crate::session::strategy::ClipboardSource::Mutter(std::sync::Arc::clone(mgr))
+            }
+            None => crate::session::strategy::ClipboardSource::None,
+        }
     }
 }
 

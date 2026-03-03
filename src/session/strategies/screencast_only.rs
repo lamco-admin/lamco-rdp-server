@@ -21,10 +21,7 @@ use tracing::{info, warn};
 
 use crate::{
     health::HealthReporter,
-    session::strategy::{
-        ClipboardComponents, PipeWireAccess, SessionHandle, SessionStrategy, SessionType,
-        StreamInfo,
-    },
+    session::strategy::{PipeWireAccess, SessionHandle, SessionStrategy, SessionType, StreamInfo},
 };
 
 /// Session handle for ScreenCast-only (view-only) mode
@@ -73,8 +70,8 @@ impl SessionHandle for ScreenCastOnlySessionHandle {
         Err(anyhow!("Input not available in view-only mode"))
     }
 
-    fn portal_clipboard(&self) -> Option<ClipboardComponents> {
-        None
+    fn clipboard_source(&self) -> crate::session::strategy::ClipboardSource {
+        crate::session::strategy::ClipboardSource::None
     }
 }
 
@@ -265,7 +262,10 @@ mod tests {
             streams: vec![],
             health_reporter: Arc::new(std::sync::OnceLock::new()),
         };
-        assert!(handle.portal_clipboard().is_none());
+        assert!(matches!(
+            handle.clipboard_source(),
+            crate::session::strategy::ClipboardSource::None
+        ));
     }
 
     #[test]

@@ -13,6 +13,7 @@ use rustls::{
     ServerConfig,
 };
 use tracing::{debug, info};
+use x509_cert::der::Decode as _;
 
 /// TLS configuration wrapper
 pub struct TlsConfig {
@@ -111,6 +112,27 @@ impl TlsConfig {
     /// Returns an Arc to the ServerConfig for use with tokio_rustls::TlsAcceptor
     pub fn server_config(&self) -> Arc<ServerConfig> {
         Arc::clone(&self.server_config)
+    }
+
+    /// Extract the DER-encoded subject public key from the leaf certificate.
+    ///
+    /// Required for CredSSP/NLA: the server's public key is used to encrypt
+    /// client credentials during the NTLM exchange.
+    pub fn public_key(&self) -> Result<Vec<u8>> {
+        let cert_der = self
+            .cert_chain
+            .first()
+            .context("No certificates in chain")?;
+
+        let cert = x509_cert::Certificate::from_der(cert_der)
+            .context("Failed to parse certificate DER")?;
+
+        cert.tbs_certificate
+            .subject_public_key_info
+            .subject_public_key
+            .as_bytes()
+            .map(ToOwned::to_owned)
+            .context("Subject public key BIT STRING is not byte-aligned")
     }
 
     /// Verify TLS configuration is valid

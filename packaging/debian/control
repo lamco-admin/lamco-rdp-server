@@ -5,20 +5,20 @@ Maintainer: Greg Lamberson <greg@lamco.io>
 Build-Depends:
  debhelper-compat (= 13),
  cargo (>= 1.88),
- rustc (>= 1.88),
- pkgconf,
  clang,
  cmake,
- nasm,
+ libdbus-1-dev,
+ libfuse3-dev,
+ libpam0g-dev,
  libpipewire-0.3-dev,
  libspa-0.2-dev,
+ libssl-dev,
+ libva-dev,
  libwayland-dev,
  libxkbcommon-dev,
- libdbus-1-dev,
- libssl-dev,
- libpam0g-dev,
- libfuse3-dev,
- libva-dev
+ nasm,
+ pkgconf,
+ rustc (>= 1.88),
 Standards-Version: 4.7.3
 Homepage: https://www.lamco.ai/products/lamco-rdp-server/
 Vcs-Git: https://salsa.debian.org/glamberson/lamco-rdp-server.git
@@ -27,12 +27,14 @@ Rules-Requires-Root: no
 
 Package: lamco-rdp-server
 Architecture: amd64
-Depends: ${shlibs:Depends}, ${misc:Depends},
+Depends:
  pipewire,
- xdg-desktop-portal
+ xdg-desktop-portal,
+ ${misc:Depends},
+ ${shlibs:Depends},
 Recommends:
+ intel-media-va-driver | mesa-va-drivers,
  libva2,
- intel-media-va-driver | mesa-va-drivers
 Description: Native Wayland RDP server for Linux desktop sharing
  lamco-rdp-server is a high-performance RDP server for Wayland-based
  Linux desktops. It supports multiple screen capture and input backends:

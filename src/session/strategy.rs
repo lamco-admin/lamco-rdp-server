@@ -56,6 +56,31 @@ impl ClipboardComponents {
     }
 }
 
+/// Describes how a strategy provides clipboard support.
+///
+/// Each strategy returns one of these variants from `clipboard_source()`,
+/// telling the server what clipboard backend is available without the server
+/// needing to know strategy internals.
+pub enum ClipboardSource {
+    /// Portal RemoteDesktop clipboard (PortalToken, libei+Portal).
+    /// The strategy already created a Portal session with clipboard support.
+    Portal(ClipboardComponents),
+
+    /// Mutter D-Bus clipboard (MutterDirect strategy).
+    /// Clipboard is handled natively via org.gnome.Mutter.RemoteDesktop.
+    Mutter(Arc<crate::mutter::MutterClipboardManager>),
+
+    /// Wayland data-control protocol (PortalGeneric strategy).
+    /// Clipboard is handled via ext-data-control-v1 or wlr-data-control-v1.
+    #[cfg(feature = "portal-generic")]
+    DataControl(Arc<std::sync::Mutex<Box<dyn xdg_desktop_portal_generic::ClipboardBackend>>>),
+
+    /// No clipboard support from this strategy.
+    /// Used by ScreenCastOnly (view-only), wlr-direct (input-only),
+    /// and libei when not sharing a Portal session.
+    None,
+}
+
 /// Common session handle trait
 ///
 /// Abstracts over different session implementations (Portal, Mutter, wlr)
@@ -95,26 +120,11 @@ pub trait SessionHandle: Send + Sync {
 
     // === Clipboard Support ===
 
-    /// Returns Some for Portal strategy (shares session), None for Mutter (no clipboard API).
-    /// When None, caller must create a separate Portal session for clipboard operations.
-    fn portal_clipboard(&self) -> Option<ClipboardComponents>;
-
-    /// Returns the Mutter clipboard manager if available (MutterDirect strategy only).
-    /// Used to create MutterClipboardProvider without exposing MutterClipboardManager broadly.
-    fn mutter_clipboard(&self) -> Option<std::sync::Arc<crate::mutter::MutterClipboardManager>> {
-        None
-    }
-
-    /// Returns the data-control clipboard backend if available (portal-generic strategy only).
-    /// Used to create DataControlClipboardProvider for wlroots compositors.
-    #[cfg(feature = "portal-generic")]
-    fn clipboard_backend(
-        &self,
-    ) -> Option<
-        std::sync::Arc<std::sync::Mutex<Box<dyn xdg_desktop_portal_generic::ClipboardBackend>>>,
-    > {
-        None
-    }
+    /// Describes how this strategy provides clipboard functionality.
+    ///
+    /// The server uses this to wire the correct clipboard provider without
+    /// needing to know strategy-specific details.
+    fn clipboard_source(&self) -> ClipboardSource;
 }
 
 /// PipeWire access method

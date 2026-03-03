@@ -2,7 +2,7 @@
 //!
 //! Handles spawning, monitoring, and controlling the lamco-rdp-server process
 //! from the GUI. Provides real-time log capture and status updates.
-#![expect(unsafe_code, reason = "libc signal check for process liveness")]
+#![allow(unsafe_code)]
 
 use std::{
     io::{BufRead, BufReader},

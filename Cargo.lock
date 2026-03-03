@@ -3810,7 +3810,7 @@ dependencies = [
 
 [[package]]
 name = "lamco-rdp-server"
-version = "1.4.0"
+version = "1.4.1"
 dependencies = [
  "aes-gcm 0.10.3",
  "anyhow",
@@ -3893,6 +3893,7 @@ dependencies = [
  "wayland-protocols-misc 0.2.0",
  "wayland-protocols-wlr",
  "wl-clipboard-rs",
+ "x509-cert",
  "xdg-desktop-portal-generic",
  "xkbcommon 0.7.0",
  "zbus 4.4.0",

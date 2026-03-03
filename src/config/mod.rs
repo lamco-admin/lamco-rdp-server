@@ -4,10 +4,7 @@
 //! - TOML files
 //! - Environment variables
 //! - CLI arguments
-#![expect(
-    unsafe_code,
-    reason = "libc::getuid() for default config path detection"
-)]
+#![allow(unsafe_code)]
 
 use std::{net::SocketAddr, path::PathBuf};
 
@@ -150,7 +147,12 @@ impl Config {
         let content =
             std::fs::read_to_string(path).context(format!("Failed to read config file: {path}"))?;
 
-        let config: Config = toml::from_str(&content).context("Failed to parse config file")?;
+        let mut config: Config = toml::from_str(&content).context("Failed to parse config file")?;
+
+        // Migrate legacy enable_nla field to security_mode
+        if config.security.enable_nla && config.security.security_mode == "auto" {
+            config.security.security_mode = "hybrid".to_string();
+        }
 
         config.validate()?;
         Ok(config)
@@ -170,6 +172,7 @@ impl Config {
                 cert_path: default_cert_path(),
                 key_path: default_key_path(),
                 enable_nla: false,
+                security_mode: "auto".to_string(),
                 auth_method: "none".to_string(),
                 require_tls_13: false,
             },
@@ -265,6 +268,14 @@ impl Config {
                 "Private key not found: {}",
                 self.security.key_path.display()
             );
+        }
+
+        match self.security.security_mode.as_str() {
+            "tls" | "hybrid" | "auto" => {}
+            _ => anyhow::bail!(
+                "Invalid security mode: {} (expected tls, hybrid, or auto)",
+                self.security.security_mode
+            ),
         }
 
         match self.video.cursor_mode.as_str() {

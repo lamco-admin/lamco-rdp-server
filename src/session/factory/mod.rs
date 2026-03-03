@@ -21,7 +21,7 @@
 //! ServiceRegistry (WHAT)           SessionFactory (HOW)
 //!   - Clipboard: Guaranteed    →   - SingleClipboardProxy quirk
 //!   - Auth: Unavailable        →   - PamBlockedBySandbox quirk
-//!   - Persistence: BestEffort  →   - GnomePersistenceRejected quirk
+//!   - Persistence: BestEffort  →   - PersistenceRejected quirk
 //! ```
 //!
 //! See: docs/analysis/SESSION-FACTORY-PLAN-20260128.md

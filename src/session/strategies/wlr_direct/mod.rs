@@ -66,10 +66,7 @@ use wayland_protocols_wlr::virtual_pointer::v1::client::zwlr_virtual_pointer_man
 
 use crate::{
     health::{HealthEvent, HealthReporter},
-    session::strategy::{
-        ClipboardComponents, PipeWireAccess, SessionHandle, SessionStrategy, SessionType,
-        StreamInfo,
-    },
+    session::strategy::{PipeWireAccess, SessionHandle, SessionStrategy, SessionType, StreamInfo},
 };
 
 /// State for Wayland protocol dispatch
@@ -226,7 +223,10 @@ impl WlrSessionHandleImpl {
     /// Dispatches any pending protocol events and flushes the connection.
     /// This is non-blocking and only processes events already in the queue.
     fn flush(&self) -> Result<()> {
-        let mut queue = self.event_queue.lock().unwrap();
+        let mut queue = self
+            .event_queue
+            .lock()
+            .map_err(|_| anyhow::anyhow!("wlr_direct event queue lock poisoned"))?;
 
         // Dispatch pending events (non-blocking)
         if let Err(e) = queue.dispatch_pending(&mut WlrState::new()) {
@@ -252,7 +252,10 @@ impl WlrSessionHandleImpl {
     ///
     /// Returns (width, height) for coordinate transformation.
     fn stream_extents(&self, stream_id: u32) -> Option<(u32, u32)> {
-        let streams = self.streams.read().unwrap();
+        let streams = self
+            .streams
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         streams
             .iter()
             .find(|s| s.node_id == stream_id)
@@ -277,7 +280,10 @@ impl SessionHandle for WlrSessionHandleImpl {
     }
 
     fn streams(&self) -> Vec<StreamInfo> {
-        self.streams.read().unwrap().clone()
+        self.streams
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     fn set_streams(&self, streams: Vec<StreamInfo>) {
@@ -291,7 +297,10 @@ impl SessionHandle for WlrSessionHandleImpl {
                 s.node_id, s.width, s.height
             );
         }
-        *self.streams.write().unwrap() = streams;
+        *self
+            .streams
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = streams;
     }
 
     fn session_type(&self) -> SessionType {
@@ -322,7 +331,10 @@ impl SessionHandle for WlrSessionHandleImpl {
             None => {
                 // No stream info yet or stream_id not found. Use first available
                 // stream, or fall back to default dimensions.
-                let streams = self.streams.read().unwrap();
+                let streams = self
+                    .streams
+                    .read()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 if let Some(first) = streams.first() {
                     (first.width, first.height)
                 } else {
@@ -382,10 +394,10 @@ impl SessionHandle for WlrSessionHandleImpl {
         Ok(())
     }
 
-    fn portal_clipboard(&self) -> Option<ClipboardComponents> {
-        // wlr-direct does not provide clipboard support
-        // Caller must use FUSE approach or create separate Portal session
-        None
+    fn clipboard_source(&self) -> crate::session::strategy::ClipboardSource {
+        // wlr-direct does not provide clipboard support.
+        // Caller must use FUSE approach or create separate Portal session.
+        crate::session::strategy::ClipboardSource::None
     }
 }
 
@@ -473,6 +485,10 @@ fn bind_protocols(conn: &Connection) -> Result<()> {
 /// Get current time in milliseconds since UNIX epoch
 ///
 /// Used for event timestamps in the Wayland protocol.
+#[expect(
+    clippy::unwrap_used,
+    reason = "SystemTime::now() is always after UNIX_EPOCH"
+)]
 fn current_time_millis() -> u32 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

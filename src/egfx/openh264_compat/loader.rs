@@ -1,7 +1,4 @@
-#![expect(
-    unsafe_code,
-    reason = "dlopen, dlsym, and raw FFI function pointer calls"
-)]
+#![allow(unsafe_code)]
 
 //! OpenH264 library loading with version detection.
 //!

@@ -58,11 +58,7 @@
 //! - Target: <100ms end-to-end latency
 //! - Target: 30-60 FPS video streaming
 //! - RemoteFX compression for efficient bandwidth usage
-
-#![expect(
-    unsafe_code,
-    reason = "OwnedFd::from_raw_fd() to take ownership of portal-provided PipeWire file descriptor"
-)]
+#![allow(unsafe_code)]
 
 mod display_handler;
 mod egfx_sender;
@@ -656,6 +652,7 @@ impl LamcoRdpServer {
             .context("Failed to load TLS certificates")?;
             let tls_acceptor =
                 ironrdp_server::tokio_rustls::TlsAcceptor::from(tls_config.server_config());
+            let tls_pub_key = tls_config.public_key().ok();
 
             let codecs = server_codecs_capabilities(&["remotefx"])
                 .map_err(|e| anyhow::anyhow!("Failed to create codec capabilities: {e}"))?;
@@ -777,9 +774,22 @@ impl LamcoRdpServer {
 
                 info!("wlr-direct input handler created (virtual keyboard + pointer)");
 
-                RdpServer::builder()
-                    .with_addr(listen_addr)
-                    .with_tls(tls_acceptor)
+                // Resolve security: hybrid if config says so and pub key available
+                let use_hybrid = config.security.security_mode == "hybrid";
+                let addr_builder = RdpServer::builder().with_addr(listen_addr);
+                let handler_builder = if use_hybrid {
+                    if let Some(pub_key) = tls_pub_key {
+                        info!("Configuring Hybrid security (NLA/CredSSP)");
+                        addr_builder.with_hybrid(tls_acceptor, pub_key)
+                    } else {
+                        warn!("Hybrid requested but public key extraction failed, using TLS");
+                        addr_builder.with_tls(tls_acceptor)
+                    }
+                } else {
+                    addr_builder.with_tls(tls_acceptor)
+                };
+
+                handler_builder
                     .with_input_handler(input_handler)
                     .with_display_handler((*display_handler).clone())
                     .with_bitmap_codecs(codecs)
@@ -789,9 +799,21 @@ impl LamcoRdpServer {
                     .build()
             } else {
                 // ScreenCast-only: view-only, no input
-                RdpServer::builder()
-                    .with_addr(listen_addr)
-                    .with_tls(tls_acceptor)
+                let use_hybrid = config.security.security_mode == "hybrid";
+                let addr_builder = RdpServer::builder().with_addr(listen_addr);
+                let handler_builder = if use_hybrid {
+                    if let Some(pub_key) = tls_pub_key {
+                        info!("Configuring Hybrid security (NLA/CredSSP)");
+                        addr_builder.with_hybrid(tls_acceptor, pub_key)
+                    } else {
+                        warn!("Hybrid requested but public key extraction failed, using TLS");
+                        addr_builder.with_tls(tls_acceptor)
+                    }
+                } else {
+                    addr_builder.with_tls(tls_acceptor)
+                };
+
+                handler_builder
                     .with_no_input()
                     .with_display_handler((*display_handler).clone())
                     .with_bitmap_codecs(codecs)
@@ -844,91 +866,98 @@ impl LamcoRdpServer {
                 .context("Failed to create Portal manager for input+clipboard")?,
         );
 
-        // Get clipboard components from session handle, or create fallback Portal session
+        // Wire clipboard based on what the strategy provides.
+        // Strategies that bundle their own clipboard (Portal, Mutter, DataControl) need
+        // no extra Portal session. Only strategies with ClipboardSource::None that still
+        // want Portal clipboard (e.g., libei) get a separate Portal session here.
+        use crate::session::strategy::ClipboardSource;
+
         let (
             portal_clipboard_manager,
             portal_clipboard_session,
             portal_session_valid,
             portal_input_handle,
-        ) = if let Some(clipboard_components) = session_handle.portal_clipboard() {
-            // Portal strategy: use session_handle directly (no duplicate sessions)
-            info!("Strategy provides clipboard components directly");
+        ) = match session_handle.clipboard_source() {
+            ClipboardSource::Portal(components) => {
+                // Strategy provides Portal session with clipboard already
+                info!("Strategy provides Portal clipboard directly");
+                let mgr = components.manager;
+                let session = components.session;
+                let valid = components.session_valid;
+                (mgr, Some(session), valid, session_handle)
+            }
+            ClipboardSource::Mutter(_) | ClipboardSource::None => {
+                // Mutter/DataControl/ScreenCast/wlr-direct: no Portal session for clipboard.
+                // Check if we need a separate Portal session for input+clipboard (libei case).
+                if session_handle.session_type() == SessionType::Libei
+                    || session_handle.session_type() == SessionType::WlrDirect
+                {
+                    // Strategies that don't provide their own clipboard but can use Portal
+                    info!("Strategy doesn't provide clipboard, creating separate Portal session");
 
-            let clipboard_mgr = clipboard_components.manager; // Option<Arc<...>>
-            let session = clipboard_components.session; // Always present
-            let session_valid = clipboard_components.session_valid;
-
-            (clipboard_mgr, session, session_valid, session_handle)
-        } else if session_handle.session_type() == SessionType::MutterDirect {
-            // Mutter strategy: input and clipboard handled natively via D-Bus/EIS
-            // No separate Portal session needed
-            info!("Mutter Direct: input+clipboard handled natively (zero dialogs)");
-
-            // Create a placeholder session for the multiplexer (won't be used for clipboard)
-            // The Mutter clipboard manager lives on the MutterSessionHandle and is wired separately
-            let session_id = format!("lamco-rdp-mutter-placeholder-{}", uuid::Uuid::new_v4());
-            let (portal_handle, _) = portal_manager
-                .create_session(session_id, None)
-                .await
-                .context("Failed to create placeholder Portal session")?;
-
-            let session = Arc::new(RwLock::new(portal_handle.session));
-
-            // Mutter provides its own input, so use session_handle directly
-            // Mutter manages session validity through its own D-Bus lifecycle
-            let session_valid = Arc::new(std::sync::atomic::AtomicBool::new(true));
-            (None, session, session_valid, session_handle)
-        } else {
-            // Other strategies (wlr-direct, libei): need separate Portal session for clipboard
-            info!("Strategy doesn't provide clipboard, creating separate Portal session");
-
-            let clipboard_mgr = if capabilities.portal.supports_clipboard {
-                match lamco_portal::ClipboardManager::new().await {
-                    Ok(mgr) => {
-                        info!("Portal clipboard manager created");
-                        Some(Arc::new(mgr))
-                    }
-                    Err(e) => {
-                        warn!("Failed to create clipboard manager: {}", e);
+                    let clipboard_mgr = if capabilities.portal.supports_clipboard {
+                        match lamco_portal::ClipboardManager::new().await {
+                            Ok(mgr) => {
+                                info!("Portal clipboard manager created");
+                                Some(Arc::new(mgr))
+                            }
+                            Err(e) => {
+                                warn!("Failed to create clipboard manager: {}", e);
+                                None
+                            }
+                        }
+                    } else {
+                        info!(
+                            "Skipping clipboard creation - Portal v{} doesn't support clipboard",
+                            capabilities.portal.version
+                        );
                         None
-                    }
+                    };
+
+                    let session_id = format!("lamco-rdp-input-clipboard-{}", uuid::Uuid::new_v4());
+                    let (portal_handle, _) = portal_manager
+                        .create_session(
+                            session_id,
+                            clipboard_mgr.as_ref().map(std::convert::AsRef::as_ref),
+                        )
+                        .await
+                        .context("Failed to create Portal session for input+clipboard")?;
+
+                    info!("Separate Portal session created for input+clipboard");
+
+                    let session = Arc::new(RwLock::new(portal_handle.session));
+
+                    let input_handle =
+                        crate::session::strategies::PortalSessionHandleImpl::from_portal_session(
+                            session.clone(),
+                            portal_manager.remote_desktop().clone(),
+                            clipboard_mgr.clone(),
+                        );
+
+                    let session_valid = input_handle.session_valid.clone();
+                    (
+                        clipboard_mgr,
+                        Some(session),
+                        session_valid,
+                        Arc::new(input_handle) as Arc<dyn crate::session::SessionHandle>,
+                    )
+                } else {
+                    // Self-sufficient: Mutter, PortalGeneric, ScreenCastOnly
+                    info!(
+                        "Strategy '{}' is self-sufficient, no Portal session needed",
+                        session_handle.session_type()
+                    );
+                    let session_valid = Arc::new(std::sync::atomic::AtomicBool::new(true));
+                    (None, None, session_valid, session_handle)
                 }
-            } else {
-                info!(
-                    "Skipping clipboard creation - Portal v{} doesn't support clipboard",
-                    capabilities.portal.version
-                );
-                None
-            };
-
-            let session_id = format!("lamco-rdp-input-clipboard-{}", uuid::Uuid::new_v4());
-            let (portal_handle, _) = portal_manager
-                .create_session(
-                    session_id,
-                    clipboard_mgr.as_ref().map(std::convert::AsRef::as_ref),
-                )
-                .await
-                .context("Failed to create Portal session for input+clipboard")?;
-
-            info!("Separate Portal session created for input+clipboard");
-
-            let session = Arc::new(RwLock::new(portal_handle.session));
-
-            let input_handle =
-                crate::session::strategies::PortalSessionHandleImpl::from_portal_session(
-                    session.clone(),
-                    portal_manager.remote_desktop().clone(),
-                    clipboard_mgr.clone(),
-                );
-
-            // Separate Portal session — validity tracked on the new PortalSessionHandleImpl
-            let session_valid = input_handle.session_valid.clone();
-            (
-                clipboard_mgr,
-                session,
-                session_valid,
-                Arc::new(input_handle) as Arc<dyn crate::session::SessionHandle>,
-            )
+            }
+            #[cfg(feature = "portal-generic")]
+            ClipboardSource::DataControl(_) => {
+                // portal-generic manages its own clipboard via data-control
+                info!("Strategy provides data-control clipboard, no Portal session needed");
+                let session_valid = Arc::new(std::sync::atomic::AtomicBool::new(true));
+                (None, None, session_valid, session_handle)
+            }
         };
 
         info!(
@@ -1057,24 +1086,11 @@ impl LamcoRdpServer {
             .set_input_handler(Arc::new(input_handler.clone()))
             .await;
 
-        // Input queue is handled by input_handler's batching task;
+        // Input is handled by input_handler's batching task;
         // multiplexer loop handles control/clipboard priorities
-        let portal_for_mux = portal_manager.remote_desktop().clone();
-        let keyboard_handler = input_handler.keyboard_handler.clone();
-        let mouse_handler = input_handler.mouse_handler.clone();
-        let coord_transformer = input_handler.coordinate_transformer.clone();
-        // On Portal v1, portal_clipboard_session may be placeholder - but multiplexer only uses it if clipboard_mgr exists
-        let session_for_mux = Arc::clone(&portal_clipboard_session);
-
         tokio::spawn(multiplexer_loop::run_multiplexer_drain_loop(
             control_rx,
             clipboard_rx,
-            portal_for_mux,
-            keyboard_handler,
-            mouse_handler,
-            coord_transformer,
-            session_for_mux,
-            primary_stream_id,
         ));
         info!("🚀 Full multiplexer drain loop started (control + clipboard priorities)");
 
@@ -1088,6 +1104,7 @@ impl LamcoRdpServer {
 
         let tls_acceptor =
             ironrdp_server::tokio_rustls::TlsAcceptor::from(tls_config.server_config());
+        let tls_pub_key = tls_config.public_key().ok();
 
         let codecs = server_codecs_capabilities(&["remotefx"])
             .map_err(|e| anyhow::anyhow!("Failed to create codec capabilities: {e}"))?;
@@ -1133,51 +1150,51 @@ impl LamcoRdpServer {
                 is_flatpak(),
             );
 
-            // Create and set clipboard provider based on strategy + session type
+            // Create and set clipboard provider based on ClipboardSource + IntegrationMode
             let uses_data_control = matches!(
                 clipboard_strategy,
                 crate::clipboard::ClipboardIntegrationMode::WaylandDataControlMode { .. }
             );
 
-            match session_handle_for_clipboard.session_type() {
-                SessionType::MutterDirect if !uses_data_control => {
-                    // Mutter: use MutterClipboardProvider if clipboard manager is available
-                    if let Some(mutter_clipboard) = session_handle_for_clipboard.mutter_clipboard()
+            match session_handle_for_clipboard.clipboard_source() {
+                ClipboardSource::Portal(_) => {
+                    // Portal strategy: use the portal_clipboard_manager wired above
+                    if let (Some(ref clipboard_mgr_arc), Some(ref session)) =
+                        (&portal_clipboard_manager, &portal_clipboard_session)
                     {
-                        match crate::clipboard::providers::MutterClipboardProvider::new(
-                            mutter_clipboard,
-                        )
-                        .await
-                        {
-                            Ok(provider) => {
+                        if uses_data_control {
+                            // ClipboardIntegrationMode overrides to data-control
+                            #[cfg(feature = "wl-clipboard")]
+                            {
+                                let provider =
+                                    crate::clipboard::providers::WlClipboardProvider::new();
                                 clipboard_mgr
                                     .set_clipboard_provider(Arc::new(provider))
                                     .await;
-                                info!("Clipboard provider: Mutter (D-Bus)");
+                                info!(
+                                    "Clipboard provider: wl-clipboard-rs (data-control override)"
+                                );
                             }
-                            Err(e) => {
-                                warn!("Failed to create Mutter clipboard provider: {e}");
+                            #[cfg(not(feature = "wl-clipboard"))]
+                            {
+                                let provider =
+                                    crate::clipboard::providers::PortalClipboardProvider::new(
+                                        Arc::clone(clipboard_mgr_arc),
+                                        Arc::clone(session),
+                                        Arc::clone(&portal_session_valid),
+                                        config.clipboard.rate_limit_ms,
+                                    )
+                                    .await;
+                                clipboard_mgr
+                                    .set_clipboard_provider(Arc::new(provider))
+                                    .await;
+                                info!("Clipboard provider: Portal (no wl-clipboard feature)");
                             }
-                        }
-                    }
-                }
-                #[cfg(feature = "portal-generic")]
-                SessionType::PortalGeneric if uses_data_control => {
-                    // portal-generic with data-control strategy: use DataControlClipboardProvider
-                    if let Some(backend) = session_handle_for_clipboard.clipboard_backend() {
-                        let provider =
-                            crate::clipboard::providers::DataControlClipboardProvider::new(backend);
-                        clipboard_mgr
-                            .set_clipboard_provider(Arc::new(provider))
-                            .await;
-                        info!("Clipboard provider: data-control (portal-generic backend)");
-                    } else {
-                        warn!("portal-generic: No clipboard backend available, falling back to Portal");
-                        if let Some(ref clipboard_mgr_arc) = portal_clipboard_manager {
+                        } else {
                             let provider =
                                 crate::clipboard::providers::PortalClipboardProvider::new(
                                     Arc::clone(clipboard_mgr_arc),
-                                    Arc::clone(&portal_clipboard_session),
+                                    Arc::clone(session),
                                     Arc::clone(&portal_session_valid),
                                     config.clipboard.rate_limit_ms,
                                 )
@@ -1185,12 +1202,40 @@ impl LamcoRdpServer {
                             clipboard_mgr
                                 .set_clipboard_provider(Arc::new(provider))
                                 .await;
-                            info!("Clipboard provider: Portal (fallback)");
+                            info!("Clipboard provider: Portal");
                         }
                     }
                 }
-                _ if uses_data_control => {
-                    // Non-portal-generic session + data-control strategy: try standalone wl-clipboard-rs
+                ClipboardSource::Mutter(ref mutter_mgr) if !uses_data_control => {
+                    match crate::clipboard::providers::MutterClipboardProvider::new(Arc::clone(
+                        mutter_mgr,
+                    ))
+                    .await
+                    {
+                        Ok(provider) => {
+                            clipboard_mgr
+                                .set_clipboard_provider(Arc::new(provider))
+                                .await;
+                            info!("Clipboard provider: Mutter (D-Bus)");
+                        }
+                        Err(e) => {
+                            warn!("Failed to create Mutter clipboard provider: {e}");
+                        }
+                    }
+                }
+                #[cfg(feature = "portal-generic")]
+                ClipboardSource::DataControl(ref backend) => {
+                    let provider = crate::clipboard::providers::DataControlClipboardProvider::new(
+                        Arc::clone(backend),
+                    );
+                    clipboard_mgr
+                        .set_clipboard_provider(Arc::new(provider))
+                        .await;
+                    info!("Clipboard provider: data-control (portal-generic backend)");
+                }
+                ClipboardSource::None | ClipboardSource::Mutter(_) if uses_data_control => {
+                    // data-control mode selected but strategy doesn't provide a backend
+                    // (e.g., wlr-direct, libei, Mutter with data-control override)
                     #[cfg(feature = "wl-clipboard")]
                     let provider_set = {
                         let provider = crate::clipboard::providers::WlClipboardProvider::new();
@@ -1205,13 +1250,16 @@ impl LamcoRdpServer {
                     let provider_set = false;
 
                     if !provider_set {
-                        warn!("WaylandDataControlMode selected but no data-control provider available");
-                        warn!("Falling back to Portal clipboard provider");
-                        if let Some(ref clipboard_mgr_arc) = portal_clipboard_manager {
+                        warn!(
+                            "WaylandDataControlMode selected but no data-control provider available"
+                        );
+                        if let (Some(ref clipboard_mgr_arc), Some(ref session)) =
+                            (&portal_clipboard_manager, &portal_clipboard_session)
+                        {
                             let provider =
                                 crate::clipboard::providers::PortalClipboardProvider::new(
                                     Arc::clone(clipboard_mgr_arc),
-                                    Arc::clone(&portal_clipboard_session),
+                                    Arc::clone(session),
                                     Arc::clone(&portal_session_valid),
                                     config.clipboard.rate_limit_ms,
                                 )
@@ -1223,27 +1271,16 @@ impl LamcoRdpServer {
                         }
                     }
                 }
-                #[cfg(feature = "portal-generic")]
-                SessionType::PortalGeneric => {
-                    // portal-generic without data-control strategy: still use DataControlClipboardProvider
-                    // since portal-generic bundles clipboard with its session
-                    if let Some(backend) = session_handle_for_clipboard.clipboard_backend() {
-                        let provider =
-                            crate::clipboard::providers::DataControlClipboardProvider::new(backend);
-                        clipboard_mgr
-                            .set_clipboard_provider(Arc::new(provider))
-                            .await;
-                        info!("Clipboard provider: data-control (Wayland)");
-                    } else {
-                        warn!("portal-generic: No clipboard backend available");
-                    }
-                }
-                _ => {
-                    // Portal strategy: wrap the Portal clipboard manager in a provider
-                    if let Some(ref clipboard_mgr_arc) = portal_clipboard_manager {
+                ClipboardSource::None | ClipboardSource::Mutter(_) => {
+                    // No clipboard from strategy and no data-control mode.
+                    // Try Portal if available (libei/wlr-direct with separate Portal session),
+                    // otherwise view-only has no clipboard.
+                    if let (Some(ref clipboard_mgr_arc), Some(ref session)) =
+                        (&portal_clipboard_manager, &portal_clipboard_session)
+                    {
                         let provider = crate::clipboard::providers::PortalClipboardProvider::new(
                             Arc::clone(clipboard_mgr_arc),
-                            Arc::clone(&portal_clipboard_session),
+                            Arc::clone(session),
                             Arc::clone(&portal_session_valid),
                             config.clipboard.rate_limit_ms,
                         )
@@ -1251,7 +1288,7 @@ impl LamcoRdpServer {
                         clipboard_mgr
                             .set_clipboard_provider(Arc::new(provider))
                             .await;
-                        info!("Clipboard provider: Portal");
+                        info!("Clipboard provider: Portal (separate session)");
                     }
                 }
             }
@@ -1267,11 +1304,13 @@ impl LamcoRdpServer {
                     warn!("Data-control clipboard health check failed: {e}");
                     if *fallback_to_portal {
                         warn!("Falling back to Portal clipboard provider");
-                        if let Some(ref clipboard_mgr_arc) = portal_clipboard_manager {
+                        if let (Some(ref clipboard_mgr_arc), Some(ref session)) =
+                            (&portal_clipboard_manager, &portal_clipboard_session)
+                        {
                             let provider =
                                 crate::clipboard::providers::PortalClipboardProvider::new(
                                     Arc::clone(clipboard_mgr_arc),
-                                    Arc::clone(&portal_clipboard_session),
+                                    Arc::clone(session),
                                     Arc::clone(&portal_session_valid),
                                     config.clipboard.rate_limit_ms,
                                 )
@@ -1362,9 +1401,21 @@ impl LamcoRdpServer {
             .parse()
             .context("Invalid listen address")?;
 
-        let rdp_server = RdpServer::builder()
-            .with_addr(listen_addr)
-            .with_tls(tls_acceptor)
+        let use_hybrid = config.security.security_mode == "hybrid";
+        let addr_builder = RdpServer::builder().with_addr(listen_addr);
+        let handler_builder = if use_hybrid {
+            if let Some(pub_key) = tls_pub_key {
+                info!("Configuring Hybrid security (NLA/CredSSP)");
+                addr_builder.with_hybrid(tls_acceptor, pub_key)
+            } else {
+                warn!("Hybrid requested but public key extraction failed, using TLS");
+                addr_builder.with_tls(tls_acceptor)
+            }
+        } else {
+            addr_builder.with_tls(tls_acceptor)
+        };
+
+        let rdp_server = handler_builder
             .with_input_handler(input_handler)
             .with_display_handler((*display_handler).clone())
             .with_bitmap_codecs(codecs)
@@ -1391,7 +1442,7 @@ impl LamcoRdpServer {
             display_handler,
             service_registry,
             clipboard_manager: Some(clipboard_manager),
-            portal_session: Some(portal_clipboard_session),
+            portal_session: portal_clipboard_session,
             shutdown_broadcast,
             event_tx,
             event_rx: Some(event_rx),
@@ -1403,11 +1454,17 @@ impl LamcoRdpServer {
 
     /// Run the server, blocking until shutdown.
     pub async fn run(mut self) -> Result<()> {
+        let security_label = match self.config.security.security_mode.as_str() {
+            "hybrid" => "Hybrid (NLA/CredSSP)",
+            "auto" => "Auto",
+            _ => "TLS",
+        };
+
         info!("╔════════════════════════════════════════════════════════════╗");
         info!("║          Server Starting                                   ║");
         info!("╚════════════════════════════════════════════════════════════╝");
         info!("  Listen Address: {}", self.config.server.listen_addr);
-        info!("  TLS: Enabled (rustls 0.23)");
+        info!("  Security: {} (rustls 0.23)", security_label);
         info!("  Codec: RemoteFX");
         info!("  Max Connections: {}", self.config.server.max_connections);
         info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
@@ -1440,20 +1497,39 @@ impl LamcoRdpServer {
                 configured_auth.as_str()
             };
 
-        // Even with auth_method="none", IronRDP needs credentials
-        // to complete the protocol handshake
-        let credentials = if effective_auth_method == "none" {
+        // IronRDP needs credentials for the protocol handshake.
+        // For Hybrid/NLA mode, CredSSP requires valid credentials to complete
+        // the NTLM challenge-response exchange. These must be set via
+        // ServerEvent::SetCredentials before a client connects.
+        let use_hybrid =
+            resolve_security_mode(&self.config.security.security_mode, effective_auth_method);
+
+        let has_credentials = effective_auth_method == "none";
+        let credentials = if has_credentials {
             Some(Credentials {
                 username: String::new(),
                 password: String::new(),
                 domain: None,
             })
         } else {
-            // For future authentication support (PAM integration)
+            // PAM mode: credentials need to be set externally via
+            // ServerEvent::SetCredentials for CredSSP to work.
+            // The server will accept connections without pre-set
+            // credentials in TLS mode (no CredSSP needed).
             None
         };
 
         self.rdp_server.set_credentials(credentials);
+
+        if use_hybrid {
+            info!("Security mode: Hybrid (NLA/CredSSP)");
+            if !has_credentials {
+                warn!("Hybrid mode active but no credentials configured");
+                warn!("Set credentials via D-Bus or GUI before clients connect");
+            }
+        } else {
+            info!("Security mode: TLS");
+        }
 
         if effective_auth_method != configured_auth {
             info!(
@@ -1767,6 +1843,18 @@ impl Drop for LamcoRdpServer {
             warn!("No tokio runtime available for cleanup - resources may leak!");
             warn!("Portal session not closed - will leak in Portal daemon");
         }
+    }
+}
+
+/// Resolve the effective security mode from config.
+///
+/// "auto" resolves to "hybrid" when credentials are available (auth != "none"),
+/// "tls" otherwise. Explicit "hybrid" or "tls" pass through.
+fn resolve_security_mode(security_mode: &str, effective_auth_method: &str) -> bool {
+    match security_mode {
+        "hybrid" => true,
+        "auto" => effective_auth_method != "none",
+        _ => false, // "tls" or unknown
     }
 }
 

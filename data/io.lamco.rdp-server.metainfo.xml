@@ -100,6 +100,12 @@
   </supports>
 
   <releases>
+    <release version="1.4.1" date="2026-03-03">
+      <url type="details">https://github.com/lamco-admin/lamco-rdp-server/releases/tag/v1.4.1</url>
+      <description>
+        <p>Source alignment release. Ensures all distribution channels reference identical source code.</p>
+      </description>
+    </release>
     <release version="1.4.0" date="2026-02-24">
       <url type="details">https://github.com/lamco-admin/lamco-rdp-server/releases/tag/v1.4.0</url>
       <description>

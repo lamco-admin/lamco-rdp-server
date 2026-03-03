@@ -38,6 +38,18 @@ pub enum CompositorType {
     /// Cosmic (System76 compositor)
     Cosmic,
 
+    /// Niri (Smithay-based scrollable-tiling compositor)
+    Niri {
+        /// Niri version
+        version: Option<String>,
+    },
+
+    /// Generic Smithay-based compositor (jay, xfwl4, etc.)
+    Smithay {
+        /// Name of the compositor
+        name: String,
+    },
+
     /// Generic wlroots-based compositor
     Wlroots {
         /// Name of the compositor
@@ -61,6 +73,8 @@ impl CompositorType {
             Self::Hyprland { .. } => "Hyprland",
             Self::Weston => "Weston",
             Self::Cosmic => "Cosmic",
+            Self::Niri { .. } => "Niri",
+            Self::Smithay { name } => name,
             Self::Wlroots { name } => name,
             Self::Unknown { .. } => "Unknown",
         }
@@ -77,10 +91,11 @@ impl CompositorType {
     /// Get version string if available
     pub fn version(&self) -> Option<&str> {
         match self {
-            Self::Gnome { version } => version.as_deref(),
-            Self::Kde { version } => version.as_deref(),
-            Self::Sway { version } => version.as_deref(),
-            Self::Hyprland { version } => version.as_deref(),
+            Self::Gnome { version }
+            | Self::Kde { version }
+            | Self::Sway { version }
+            | Self::Hyprland { version }
+            | Self::Niri { version } => version.as_deref(),
             _ => None,
         }
     }

@@ -29,6 +29,8 @@
 //! - **Isolation:** Graphics congestion cannot affect other subsystems
 //! - **Statistics:** Track drops and coalescing for monitoring
 
+use std::sync::Arc;
+
 use ironrdp_server::DisplayUpdate;
 use tokio::sync::mpsc;
 use tracing::{debug, info, trace, warn};
@@ -52,7 +54,7 @@ pub(super) struct GraphicsDrainStats {
 /// into a single latest frame, then converts to IronRDP format and sends.
 pub(super) fn start_graphics_drain_task(
     mut graphics_rx: mpsc::Receiver<GraphicsFrame>,
-    update_sender: mpsc::Sender<DisplayUpdate>,
+    update_sender: Arc<tokio::sync::Mutex<mpsc::Sender<DisplayUpdate>>>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         info!("🎬 Graphics drain task started (Phase 1 multiplexer)");
@@ -99,7 +101,7 @@ pub(super) fn start_graphics_drain_task(
             // Send already-converted IronBitmapUpdate directly (no double conversion!)
             let update = DisplayUpdate::Bitmap(latest_frame.iron_bitmap);
 
-            if let Err(e) = update_sender.send(update).await {
+            if let Err(e) = update_sender.lock().await.send(update).await {
                 warn!("Failed to send display update: {}", e);
                 return;
             }

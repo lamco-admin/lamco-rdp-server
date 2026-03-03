@@ -64,10 +64,7 @@ use tracing::{debug, error, info, warn};
 use crate::{
     health::{HealthEvent, HealthReporter},
     session::{
-        strategy::{
-            ClipboardComponents, PipeWireAccess, SessionHandle, SessionStrategy, SessionType,
-            StreamInfo,
-        },
+        strategy::{PipeWireAccess, SessionHandle, SessionStrategy, SessionType, StreamInfo},
         Tokens,
     },
 };
@@ -662,11 +659,10 @@ impl SessionHandle for LibeiSessionHandleImpl {
         Ok(())
     }
 
-    fn portal_clipboard(&self) -> Option<ClipboardComponents> {
-        // libei can share the Portal session for clipboard
-        // The session is managed separately from input devices
-        // For now, return None - clipboard would be via separate Portal session
-        None
+    fn clipboard_source(&self) -> crate::session::strategy::ClipboardSource {
+        // libei uses EIS for input only; clipboard comes from a separate
+        // Portal session created by the server.
+        crate::session::strategy::ClipboardSource::None
     }
 }
 

@@ -39,17 +39,16 @@ pub enum InitQuirk {
     /// Affected: All deployments using ashpd (Drop impl spawns async Close)
     AsyncSessionCleanup,
 
-    /// GNOME Portal rejects persistence for RemoteDesktop sessions.
+    /// Portal backend rejects persistence for RemoteDesktop sessions.
     ///
-    /// GNOME's xdg-desktop-portal-gnome returns:
+    /// Both GNOME and KDE portal backends return:
     /// "org.freedesktop.portal.Error.InvalidArgument: Remote desktop sessions cannot persist"
     ///
-    /// When this quirk is present, the factory should:
-    /// 1. Try with persistence first (might work on future versions)
-    /// 2. On InvalidArgument, retry with PersistMode::DoNot
+    /// When this quirk is present, the factory skips the persistence attempt entirely
+    /// to avoid a failed session that can interfere with clipboard initialization.
     ///
-    /// Affected: GNOME compositor
-    GnomePersistenceRejected,
+    /// Affected: GNOME (all versions), KDE (Plasma 6.x)
+    PersistenceRejected,
 
     /// Clipboard manager must be created BEFORE first create_session() call.
     ///
@@ -127,7 +126,7 @@ impl InitQuirk {
         match self {
             Self::SingleClipboardProxy => "Single Clipboard Proxy",
             Self::AsyncSessionCleanup => "Async Session Cleanup",
-            Self::GnomePersistenceRejected => "GNOME Persistence Rejected",
+            Self::PersistenceRejected => "Persistence Rejected",
             Self::ClipboardBeforeSession => "Clipboard Before Session",
             Self::MutterEisAvailable => "Mutter EIS Available",
             Self::MutterClipboardAvailable => "Mutter Clipboard Available",
@@ -142,7 +141,7 @@ impl InitQuirk {
         match self {
             Self::SingleClipboardProxy => "Don't create multiple Clipboard D-Bus proxies",
             Self::AsyncSessionCleanup => "Session Close() is asynchronous",
-            Self::GnomePersistenceRejected => "GNOME rejects RemoteDesktop persistence",
+            Self::PersistenceRejected => "Portal rejects RemoteDesktop persistence (GNOME, KDE)",
             Self::ClipboardBeforeSession => "Create clipboard before session creation",
             Self::MutterEisAvailable => "EIS input available (GNOME 46+)",
             Self::MutterClipboardAvailable => "Native clipboard via Mutter",
@@ -194,8 +193,11 @@ impl InitQuirkRegistry {
 
         // === Compositor-based quirks ===
 
-        if matches!(compositor, CompositorType::Gnome { .. }) {
-            quirks.push(InitQuirk::GnomePersistenceRejected);
+        if matches!(
+            compositor,
+            CompositorType::Gnome { .. } | CompositorType::Kde { .. }
+        ) {
+            quirks.push(InitQuirk::PersistenceRejected);
         }
 
         if matches!(compositor, CompositorType::Kde { .. }) {
@@ -294,7 +296,7 @@ impl InitQuirkRegistry {
                     q,
                     InitQuirk::SingleClipboardProxy
                         | InitQuirk::AsyncSessionCleanup
-                        | InitQuirk::GnomePersistenceRejected
+                        | InitQuirk::PersistenceRejected
                 )
             })
             .collect()
@@ -351,7 +353,7 @@ mod tests {
         );
 
         assert!(quirks.contains(&InitQuirk::SingleClipboardProxy));
-        assert!(quirks.contains(&InitQuirk::GnomePersistenceRejected));
+        assert!(quirks.contains(&InitQuirk::PersistenceRejected));
         assert!(quirks.contains(&InitQuirk::ClipboardBeforeSession));
         assert!(quirks.contains(&InitQuirk::PamBlockedBySandbox));
     }
@@ -368,8 +370,23 @@ mod tests {
 
         // Native doesn't have SingleClipboardProxy
         assert!(!quirks.contains(&InitQuirk::SingleClipboardProxy));
-        // But still has GNOME persistence quirk
-        assert!(quirks.contains(&InitQuirk::GnomePersistenceRejected));
+        // But still has persistence quirk
+        assert!(quirks.contains(&InitQuirk::PersistenceRejected));
+    }
+
+    #[test]
+    fn test_native_kde_quirks() {
+        let quirks = InitQuirkRegistry::quirks_for(
+            DeploymentContext::Native,
+            &CompositorType::Kde {
+                version: Some("6.5".to_string()),
+            },
+            SessionStrategyType::PortalToken,
+        );
+
+        // KDE also rejects persistence
+        assert!(quirks.contains(&InitQuirk::PersistenceRejected));
+        assert!(quirks.contains(&InitQuirk::ClipboardBeforeSession));
     }
 
     #[test]
@@ -382,8 +399,8 @@ mod tests {
             SessionStrategyType::PortalToken,
         );
 
-        // wlroots doesn't have GNOME quirks
-        assert!(!quirks.contains(&InitQuirk::GnomePersistenceRejected));
+        // wlroots doesn't have persistence quirk (no RemoteDesktop portal)
+        assert!(!quirks.contains(&InitQuirk::PersistenceRejected));
         // But still has portal quirks
         assert!(quirks.contains(&InitQuirk::ClipboardBeforeSession));
     }

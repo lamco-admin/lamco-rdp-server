@@ -61,8 +61,10 @@ pub enum Message {
     CertGenCancel,
     /// Certificate generation completed
     CertGenCompleted(Result<(), String>),
-    /// Enable NLA toggled
+    /// Enable NLA toggled (legacy, kept for backward compat)
     SecurityEnableNlaToggled(bool),
+    /// Security mode changed ("tls", "hybrid", "auto")
+    SecurityModeChanged(String),
     /// Auth method changed
     SecurityAuthMethodChanged(String),
     /// Require TLS 1.3 toggled

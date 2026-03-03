@@ -20,10 +20,7 @@
 //!
 //! FUSE callbacks are synchronous (called from kernel), but RDP is async.
 //! We use channels to bridge: FUSE blocks on oneshot, async task fetches data.
-#![expect(
-    unsafe_code,
-    reason = "FUSE callbacks, unsafe Send/Sync impls, libc uid/gid"
-)]
+#![allow(unsafe_code)]
 
 use std::{
     collections::HashMap,

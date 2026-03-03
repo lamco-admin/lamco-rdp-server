@@ -131,6 +131,17 @@ pub fn identify_compositor() -> CompositorType {
                 version: detect_hyprland_version(),
             };
         }
+        if desktop_lower.contains("niri") {
+            return CompositorType::Niri {
+                version: detect_niri_version(),
+            };
+        }
+        // Smithay-based compositors (jay, xfwl4)
+        if desktop_lower.contains("jay") {
+            return CompositorType::Smithay {
+                name: "jay".to_string(),
+            };
+        }
         if desktop_lower.contains("cosmic") {
             return CompositorType::Cosmic;
         }
@@ -206,8 +217,21 @@ pub fn identify_compositor() -> CompositorType {
             return CompositorType::Weston;
         }
 
+        // Check niri before cosmic-comp: cosmic-greeter runs cosmic-comp
+        // as its display manager compositor even when the user session is niri
+        if is_process_running("niri") {
+            return CompositorType::Niri {
+                version: detect_niri_version(),
+            };
+        }
+
         if is_process_running("cosmic-comp") {
             return CompositorType::Cosmic;
+        }
+
+        // Check for Smithay-based compositors (jay, xfwl4, etc.)
+        if let Some(name) = detect_smithay_compositor() {
+            return CompositorType::Smithay { name };
         }
 
         // Check for any wlroots-based compositor
@@ -312,6 +336,26 @@ fn detect_hyprland_version() -> Option<String> {
         })
 }
 
+/// Detect Niri version
+fn detect_niri_version() -> Option<String> {
+    Command::new("niri")
+        .arg("--version")
+        .output()
+        .ok()
+        .and_then(|output| {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                // Output is like "niri 25.11 (b35bcae)" — extract the version number
+                stdout
+                    .split_whitespace()
+                    .find(|s| s.chars().next().is_some_and(|c| c.is_ascii_digit()))
+                    .map(std::string::ToString::to_string)
+            } else {
+                None
+            }
+        })
+}
+
 /// Check if a process is running
 fn is_process_running(name: &str) -> bool {
     Command::new("pgrep")
@@ -320,6 +364,21 @@ fn is_process_running(name: &str) -> bool {
         .output()
         .map(|output| output.status.success())
         .unwrap_or(false)
+}
+
+/// Detect Smithay-based compositor from running processes (jay, xfwl4, etc.)
+/// Niri and COSMIC are Smithay-based but have their own variants for
+/// compositor-specific profiles and quirks.
+fn detect_smithay_compositor() -> Option<String> {
+    const SMITHAY_COMPOSITORS: &[&str] = &["jay", "xfwl4", "smallvil"];
+
+    for compositor in SMITHAY_COMPOSITORS {
+        if is_process_running(compositor) {
+            return Some((*compositor).to_string());
+        }
+    }
+
+    None
 }
 
 /// Detect wlroots-based compositor from running processes
@@ -488,6 +547,15 @@ fn infer_globals_from_compositor(compositor: &CompositorType) -> Vec<WaylandGlob
             ("zwlr_virtual_pointer_manager_v1", 1),
             ("zwlr_data_control_manager_v1", 2),
             ("zwlr_layer_shell_v1", 4),
+        ],
+        CompositorType::Niri { .. } | CompositorType::Smithay { .. } => &[
+            ("zwlr_screencopy_manager_v1", 3),
+            ("zwp_virtual_keyboard_manager_v1", 1),
+            ("zwlr_virtual_pointer_manager_v1", 1),
+            ("ext_data_control_manager_v1", 1),
+            ("zwlr_layer_shell_v1", 4),
+            ("wp_fractional_scale_manager_v1", 1),
+            ("ext_session_lock_manager_v1", 1),
         ],
         CompositorType::Cosmic => &[
             ("ext_session_lock_manager_v1", 1),

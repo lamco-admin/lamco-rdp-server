@@ -278,7 +278,16 @@ impl ConfigGuiApp {
                 Task::none()
             }
             Message::SecurityEnableNlaToggled(val) => {
+                // Legacy handler: map to security_mode for backward compat
                 self.state.config.security.enable_nla = val;
+                if val {
+                    self.state.config.security.security_mode = "hybrid".to_string();
+                }
+                self.state.mark_dirty();
+                Task::none()
+            }
+            Message::SecurityModeChanged(mode) => {
+                self.state.config.security.security_mode = mode;
                 self.state.mark_dirty();
                 Task::none()
             }

@@ -2,10 +2,7 @@
 //!
 //! Detects the deployment context (Flatpak, systemd, native, etc.) and
 //! determines the best available method for storing session tokens securely.
-#![expect(
-    unsafe_code,
-    reason = "libc::getuid() for deployment context detection"
-)]
+#![allow(unsafe_code)]
 
 use std::{path::Path, process::Command};
 

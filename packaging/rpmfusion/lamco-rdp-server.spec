@@ -6,10 +6,16 @@
 #
 
 Name:           lamco-rdp-server
-Version:        1.4.0
+Version:        1.4.1
 Release:        1%{?dist}
 Summary:        Wayland RDP server for Linux desktop sharing with GUI
 
+# Why RPM Fusion nonfree: BUSL-1.1 is not an OSI-approved open source license.
+# It grants full redistribution and modification rights but includes a
+# production-use restriction until the change date (Dec 31, 2028), after which
+# it converts to Apache 2.0. Source is publicly available and fully
+# redistributable. This qualifies for RPM Fusion nonfree per the repository
+# definition: "redistributable software that is not Open Source Software."
 License:        0BSD AND Apache-2.0 AND Apache-2.0 WITH LLVM-exception AND BSD-1-Clause AND BSD-2-Clause AND BSD-3-Clause AND BSL-1.0 AND BUSL-1.1 AND CC0-1.0 AND GPL-2.0-only AND ISC AND LGPL-2.1-or-later AND MIT AND MIT-0 AND MPL-2.0 AND NCSA AND OpenSSL AND Unicode-3.0 AND Unlicense AND Zlib
 URL:            https://www.lamco.ai/products/lamco-rdp-server/
 Source0:        https://github.com/lamco-admin/lamco-rdp-server/releases/download/v%{version}/%{name}-%{version}.tar.xz
@@ -1090,6 +1096,20 @@ appstream-util validate-relax --nonet %{buildroot}%{_metainfodir}/io.lamco.rdp-s
 %{_datadir}/icons/hicolor/*/apps/io.lamco.rdp-server.png
 
 %changelog
+* Tue Mar 03 2026 Greg Lamberson <greg@lamco.io> - 1.4.1-1
+- Source alignment release: all channels reference identical source
+- Carry forward cargo-rpm-macros integration from 1.4.0-3
+
+* Tue Mar 03 2026 Greg Lamberson <greg@lamco.io> - 1.4.0-3
+- Add RPM Fusion nonfree rationale comment before License field
+
+* Mon Mar 02 2026 Greg Lamberson <greg@lamco.io> - 1.4.0-2
+- Generate License tag via cargo_license_summary macro
+- Auto-generate bundled crate Provides from cargo_vendor_manifest (897 crates)
+- Auto-generate LICENSE.dependencies via cargo_license macro
+- Remove manual bundled crate Provides entries
+- Add BuildRequires: cargo-rpm-macros >= 24
+
 * Tue Feb 24 2026 Greg Lamberson <greg@lamco.io> - 1.4.0-1
 - Clipboard provider trait rearchitecture with backend abstraction
   (Portal, Mutter D-Bus, wlr data-control providers)

@@ -622,11 +622,8 @@ fn translate_wlr_screencopy(caps: &CompositorCapabilities) -> AdvertisedService 
             .with_note("wlr-screencopy blocked by Flatpak sandbox");
     }
 
-    if !caps.compositor.is_wlroots_based() {
-        return AdvertisedService::unavailable(ServiceId::WlrScreencopy)
-            .with_note("Only available on wlroots-based compositors");
-    }
-
+    // Check protocol presence directly — Smithay-based compositors (niri, jay)
+    // also expose wlroots-compatible protocols
     if let Some(version) = caps.get_protocol_version("zwlr_screencopy_manager_v1") {
         let feature = WaylandFeature::WlrScreencopy {
             version,
@@ -651,11 +648,8 @@ fn translate_wlr_direct_input(caps: &CompositorCapabilities) -> AdvertisedServic
             .with_note("wlr-direct input blocked by Flatpak sandbox");
     }
 
-    if !caps.compositor.is_wlroots_based() {
-        return AdvertisedService::unavailable(ServiceId::WlrDirectInput)
-            .with_note("Only available on wlroots-based compositors");
-    }
-
+    // Check protocol presence directly — Smithay-based compositors (niri, jay)
+    // also expose wlroots-compatible protocols
     // zwp_virtual_keyboard_v1 is standard; zwlr_virtual_pointer_v1 is wlroots-specific (0.12+)
     let has_keyboard = caps.has_protocol("zwp_virtual_keyboard_manager_v1", 1);
     let has_pointer = caps.has_protocol("zwlr_virtual_pointer_manager_v1", 1);

@@ -27,8 +27,8 @@ use crate::clipboard::{
 pub struct DataControlClipboardProvider {
     /// The underlying clipboard backend from portal-generic
     backend: Arc<Mutex<Box<dyn ClipboardBackend>>>,
-    /// Channel for sending events to the orchestrator
-    event_tx: mpsc::UnboundedSender<ClipboardProviderEvent>,
+    /// Kept alive so the receiver channel doesn't close if the callback clone is dropped
+    _event_tx: mpsc::UnboundedSender<ClipboardProviderEvent>,
     /// Receiver end (taken by subscribe())
     event_rx: std::sync::Mutex<Option<mpsc::UnboundedReceiver<ClipboardProviderEvent>>>,
     /// Shutdown signal
@@ -43,7 +43,9 @@ impl DataControlClipboardProvider {
         // Hook the selection-changed callback to emit events
         let tx_clone = event_tx.clone();
         {
-            let mut guard = backend.lock().expect("backend lock not poisoned");
+            let mut guard = backend
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             guard.on_selection_changed(Box::new(move |mime_types| {
                 // Data-control signals are always authoritative: the compositor only fires
                 // the selection event when a DIFFERENT client takes ownership
@@ -58,7 +60,7 @@ impl DataControlClipboardProvider {
 
         Self {
             backend,
-            event_tx,
+            _event_tx: event_tx,
             event_rx: std::sync::Mutex::new(Some(event_rx)),
             shutdown: Arc::new(AtomicBool::new(false)),
         }
@@ -151,6 +153,10 @@ impl ClipboardProvider for DataControlClipboardProvider {
         .map_err(|e| ClipboardError::PortalError(format!("complete_transfer task panicked: {e}")))?
     }
 
+    #[expect(
+        clippy::expect_used,
+        reason = "subscribe() is a one-shot initialization call"
+    )]
     fn subscribe(&self) -> mpsc::UnboundedReceiver<ClipboardProviderEvent> {
         self.event_rx
             .lock()

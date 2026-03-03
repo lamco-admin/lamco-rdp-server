@@ -141,12 +141,11 @@ fn validate_security_config(
         }
     }
 
-    // Note: NLA disabled is the default (required for no-auth mode and Flatpak)
-    // Only warn if PAM auth is enabled but NLA is disabled
-    if config.security.auth_method == "pam" && !config.security.enable_nla {
+    // Warn if hybrid mode is set but auth is "none" (no credentials for CredSSP)
+    if config.security.security_mode == "hybrid" && config.security.auth_method == "none" {
         warnings.push(ValidationWarning {
-            field: "security.enable_nla".to_string(),
-            message: "PAM authentication enabled but NLA is disabled. Consider enabling NLA for better security.".to_string(),
+            field: "security.security_mode".to_string(),
+            message: "Hybrid (NLA) requires authentication. Set auth_method to 'pam' or configure credentials.".to_string(),
         });
     }
 

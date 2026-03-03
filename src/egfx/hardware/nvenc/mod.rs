@@ -38,10 +38,7 @@
 //! - P1-P3: Fast/low-latency
 //! - P4: Balanced (default)
 //! - P5-P7: Quality/slow
-#![expect(
-    unsafe_code,
-    reason = "NVENC GPU API requires unsafe FFI and unsafe Send impl"
-)]
+#![allow(unsafe_code)]
 
 use cudarc::driver::CudaContext;
 use nvidia_video_codec_sdk::{

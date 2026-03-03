@@ -261,7 +261,10 @@ pub struct LamcoDisplayHandler {
     bitmap_converter: Arc<Mutex<BitmapConverter>>,
 
     /// Display update sender (for creating update streams to IronRDP)
-    update_sender: mpsc::Sender<DisplayUpdate>,
+    /// Arc-wrapped so the pipeline task and IronRDP's clone share the same sender.
+    /// On reconnection, updates() swaps this to a new channel — both sides must
+    /// see the swap, or the pipeline sends to a dead channel.
+    update_sender: Arc<tokio::sync::Mutex<mpsc::Sender<DisplayUpdate>>>,
 
     /// Display update receiver (wrapped for cloning)
     update_receiver: Arc<Mutex<Option<mpsc::Receiver<DisplayUpdate>>>>,
@@ -390,6 +393,7 @@ impl LamcoDisplayHandler {
         )));
 
         let (update_sender, update_receiver) = mpsc::channel(64);
+        let update_sender = Arc::new(tokio::sync::Mutex::new(update_sender));
         let update_receiver = Arc::new(Mutex::new(Some(update_receiver)));
 
         let gfx_server_handle = gfx_server_handle.unwrap_or_else(|| Arc::new(RwLock::new(None)));
@@ -502,7 +506,7 @@ impl LamcoDisplayHandler {
     /// display updates. Creates a fresh sender/receiver pair.
     pub async fn reset_update_channel(&mut self) {
         let (new_sender, new_receiver) = mpsc::channel(64);
-        self.update_sender = new_sender;
+        *self.update_sender.lock().await = new_sender;
         *self.update_receiver.lock().await = Some(new_receiver);
         debug!("Display update channel reset for new client");
     }
@@ -613,16 +617,18 @@ impl LamcoDisplayHandler {
         debug!("Updated display size to {}x{}", width, height);
 
         let update = DisplayUpdate::Resize(DesktopSize { width, height });
-        if let Err(e) = self.update_sender.send(update).await {
+        if let Err(e) = self.update_sender.lock().await.send(update).await {
             warn!("Failed to send resize update: {}", e);
         }
     }
 
-    /// Get a clone of the update sender for graphics drain task
+    /// Get a shared reference to the update sender for graphics drain task
     ///
     /// This is used by the Phase 1 multiplexer to get access to the IronRDP update channel.
-    pub fn get_update_sender(&self) -> mpsc::Sender<DisplayUpdate> {
-        self.update_sender.clone()
+    /// Returns an Arc so the drain task and the handler share the same sender — when the
+    /// channel is recreated on reconnection, both sides see the new sender.
+    pub fn get_update_sender(&self) -> Arc<tokio::sync::Mutex<mpsc::Sender<DisplayUpdate>>> {
+        Arc::clone(&self.update_sender)
     }
 
     /// Shutdown PipeWire thread explicitly
@@ -748,6 +754,27 @@ impl LamcoDisplayHandler {
             // Without this, reconnecting clients see black screen until mouse moves
             // because damage detection reports 0% change on first frame (no previous data)
             let mut force_first_frame = false;
+
+            // Last-frame cache: holds the most recent PipeWire frame for replay on
+            // EGFX initialization. Portal ScreenCast is damage-driven — PipeWire only
+            // delivers frames when screen content changes. On a static desktop, the
+            // initial burst of frames arrives before any RDP client connects (drained
+            // at the client_active gate). By the time EGFX negotiation completes, there
+            // are no new frames to encode and the client sees nothing.
+            //
+            // This cache ensures every client gets at least one H.264 frame (the current
+            // desktop state) immediately after EGFX becomes ready, regardless of whether
+            // PipeWire has pending frames.
+            //
+            // Cost: one Arc<Vec<u8>> reference (~8MB at 1080p BGRA). VideoFrame.data is
+            // Arc-wrapped, so clone is a refcount bump — no pixel data is copied.
+            //
+            // FUTURE: When SessionStrategy gains a request_current_frame() method (planned
+            // for the QEMU D-Bus strategy), per-strategy frame requests can provide fresher
+            // frames than this cache for strategies that support it (e.g., QEMU screendump,
+            // wlr-screencopy with DRIVER mode). The cache becomes the universal fallback.
+            // See: shared/strategy/FRAME-DELIVERY-DECISION.md
+            let mut cached_frame: Option<crate::pipewire::VideoFrame> = None;
 
             // === DAMAGE DETECTION (Config-controlled) ===
             // Detects changed screen regions to skip unchanged frames (90%+ bandwidth reduction for static content)
@@ -964,6 +991,10 @@ impl LamcoDisplayHandler {
 
                 let frame = match frame {
                     Some(f) => {
+                        // Always cache the latest frame for replay on EGFX init.
+                        // Clone is cheap: VideoFrame.data is Arc<Vec<u8>>.
+                        cached_frame = Some(f.clone());
+
                         // Drain PipeWire frames even when no client is connected,
                         // but skip all encoding and sending to avoid wasted work
                         if !handler
@@ -976,9 +1007,37 @@ impl LamcoDisplayHandler {
                         f
                     }
                     None => {
-                        // No frame available, sleep briefly and retry
-                        tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;
-                        continue;
+                        // No fresh frame from PipeWire. Check if we should replay
+                        // the cached frame for EGFX initialization.
+                        //
+                        // Portal ScreenCast is damage-driven: on a static desktop,
+                        // try_recv_frame() returns None indefinitely. Without this
+                        // replay, EGFX-ready clients never receive their first H.264
+                        // frame and show a black screen until something moves.
+                        let client_waiting = handler
+                            .client_active
+                            .load(std::sync::atomic::Ordering::Relaxed);
+                        let needs_init = handler
+                            .egfx_needs_init
+                            .load(std::sync::atomic::Ordering::Relaxed);
+
+                        if client_waiting && needs_init && handler.is_egfx_ready().await {
+                            if let Some(ref cached) = cached_frame {
+                                info!(
+                                    "📦 Replaying cached frame for EGFX init ({}x{}, frame {})",
+                                    cached.width, cached.height, cached.frame_id
+                                );
+                                cached.clone()
+                            } else {
+                                // No cached frame yet (server just started, PipeWire
+                                // hasn't delivered any frames). Wait for first frame.
+                                tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;
+                                continue;
+                            }
+                        } else {
+                            tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;
+                            continue;
+                        }
                     }
                 };
 
@@ -1600,10 +1659,11 @@ impl LamcoDisplayHandler {
                         }
                     }
                 } else {
+                    let sender = handler.update_sender.lock().await;
                     for iron_bitmap in iron_updates {
                         let update = DisplayUpdate::Bitmap(iron_bitmap);
 
-                        if let Err(e) = handler.update_sender.send(update).await {
+                        if let Err(e) = sender.send(update).await {
                             error!("Failed to send display update: {}", e);
                             return;
                         }
@@ -1698,7 +1758,7 @@ impl RdpServerDisplay for LamcoDisplayHandler {
         if receiver_option.is_none() {
             debug!("Display updates channel exhausted, creating new channel for reconnection");
             let (new_sender, new_receiver) = mpsc::channel(64);
-            self.update_sender = new_sender;
+            *self.update_sender.lock().await = new_sender;
             *receiver_option = Some(new_receiver);
 
             // CRITICAL: Reset ALL EGFX state for new client
@@ -1863,7 +1923,7 @@ impl Clone for LamcoDisplayHandler {
             size: Arc::clone(&self.size),
             pipewire_thread: Arc::clone(&self.pipewire_thread),
             bitmap_converter: Arc::clone(&self.bitmap_converter),
-            update_sender: self.update_sender.clone(),
+            update_sender: Arc::clone(&self.update_sender),
             update_receiver: Arc::clone(&self.update_receiver),
             graphics_tx: self.graphics_tx.clone(),
             stream_info: self.stream_info.clone(),

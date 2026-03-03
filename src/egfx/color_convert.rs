@@ -17,7 +17,7 @@
 //! # MS-RDPEGFX Reference
 //!
 //! Color conversion follows the formulas in MS-RDPEGFX Section 3.3.8.3.
-#![expect(unsafe_code, reason = "AVX2 and NEON SIMD intrinsics")]
+#![allow(unsafe_code)]
 
 /// Color matrix standard for RGB to YUV conversion
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -175,27 +175,21 @@ pub fn bgra_to_yuv444(
     let use_simd = true;
 
     if use_simd && !matrix.is_limited_range() {
-        // Dispatch to best available SIMD implementation for full range
-        #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+        // Runtime feature detection for x86_64 AVX2
+        #[cfg(target_arch = "x86_64")]
         {
-            bgra_to_yuv444_avx2(bgra, &mut frame, matrix);
-            return frame;
+            if is_x86_feature_detected!("avx2") {
+                // SAFETY: runtime check confirmed AVX2 is available
+                unsafe { bgra_to_yuv444_avx2_impl(bgra, &mut frame, matrix) };
+                return frame;
+            }
         }
 
+        // Compile-time NEON detection for AArch64
         #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
         {
             bgra_to_yuv444_neon(bgra, &mut frame, matrix);
             return frame;
-        }
-
-        // Runtime feature detection for x86_64
-        #[cfg(target_arch = "x86_64")]
-        {
-            if is_x86_feature_detected!("avx2") {
-                // SAFETY: We verified AVX2 is available
-                unsafe { bgra_to_yuv444_avx2_impl(bgra, &mut frame, matrix) };
-                return frame;
-            }
         }
     }
 

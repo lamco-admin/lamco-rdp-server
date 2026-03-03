@@ -102,12 +102,26 @@ pub fn view_security_tab(state: &AppState) -> Element<'_, Message> {
         space().height(4.0),
         key_path_widget,
         space().height(20.0),
-        // Enable NLA
-        widgets::toggle_pending_with_note(
-            "Enable Network Level Authentication (NLA)",
-            state.config.security.enable_nla,
-            Message::SecurityEnableNlaToggled,
-            "IronRDP lacks CredSSP/NLA support",
+        // Security Mode
+        widgets::labeled_row_with_help(
+            "Security Mode:",
+            150.0,
+            pick_list(
+                vec!["Auto", "TLS", "Hybrid (NLA)"],
+                Some(match state.config.security.security_mode.as_str() {
+                    "hybrid" => "Hybrid (NLA)",
+                    "tls" => "TLS",
+                    _ => "Auto",
+                }),
+                |s: &str| Message::SecurityModeChanged(match s {
+                    "Hybrid (NLA)" => "hybrid".to_string(),
+                    "TLS" => "tls".to_string(),
+                    _ => "auto".to_string(),
+                }),
+            )
+            .width(Length::Fixed(150.0))
+            .into(),
+            "Auto: Hybrid when credentials available, TLS otherwise. Hybrid provides NLA/CredSSP.",
         ),
         space().height(16.0),
         // Authentication Method

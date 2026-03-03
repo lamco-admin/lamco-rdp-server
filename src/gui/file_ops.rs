@@ -259,10 +259,10 @@ pub fn diff_configs(a: &Config, b: &Config) -> Vec<String> {
             a.security.key_path, b.security.key_path
         ));
     }
-    if a.security.enable_nla != b.security.enable_nla {
+    if a.security.security_mode != b.security.security_mode {
         differences.push(format!(
-            "security.enable_nla: {} -> {}",
-            a.security.enable_nla, b.security.enable_nla
+            "security.security_mode: '{}' -> '{}'",
+            a.security.security_mode, b.security.security_mode
         ));
     }
     if a.security.auth_method != b.security.auth_method {

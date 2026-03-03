@@ -14,7 +14,7 @@
 //! The factory handles:
 //! - Deployment-specific initialization quirks (Flatpak, native, etc.)
 //! - Clipboard manager lifecycle (SingleClipboardProxy quirk)
-//! - Retry logic after persistence rejection (GnomePersistenceRejected quirk)
+//! - Retry logic after persistence rejection (PersistenceRejected quirk)
 //! - Token loading/saving
 //!
 //! See: docs/analysis/SESSION-FACTORY-PLAN-20260128.md
@@ -299,19 +299,21 @@ impl SessionHandle for PortalSessionHandleImpl {
             .map_err(|e| self.handle_input_error(e, "pointer axis"))
     }
 
-    fn portal_clipboard(&self) -> Option<crate::session::strategy::ClipboardComponents> {
+    fn clipboard_source(&self) -> crate::session::strategy::ClipboardSource {
         // Don't hand out clipboard components if the session has been invalidated
         // (e.g., compositor destroyed it after PipeWire stream pause)
         if !self.session_valid.load(Ordering::Acquire) {
             warn!("Portal session invalid — clipboard components unavailable");
-            return None;
+            return crate::session::strategy::ClipboardSource::None;
         }
 
-        Some(crate::session::strategy::ClipboardComponents {
-            manager: self.clipboard_manager.clone(),
-            session: Arc::clone(&self.session),
-            session_valid: Arc::clone(&self.session_valid),
-        })
+        crate::session::strategy::ClipboardSource::Portal(
+            crate::session::strategy::ClipboardComponents {
+                manager: self.clipboard_manager.clone(),
+                session: Arc::clone(&self.session),
+                session_valid: Arc::clone(&self.session_valid),
+            },
+        )
     }
 }
 

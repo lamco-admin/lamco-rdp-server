@@ -73,7 +73,7 @@ impl PortalSessionFactory {
     }
 
     fn expects_persistence_rejection(&self) -> bool {
-        self.quirks.contains(&InitQuirk::GnomePersistenceRejected)
+        self.quirks.contains(&InitQuirk::PersistenceRejected)
     }
 
     /// Attempt to create a session with the given configuration
@@ -258,8 +258,8 @@ impl SessionFactory for PortalSessionFactory {
         // This avoids a portal daemon state bug where first failed session
         // prevents second session's clipboard.request() from working
         // See: docs/CLIPBOARD-FINAL-ANALYSIS.md
-        if self.quirks.contains(&InitQuirk::GnomePersistenceRejected) {
-            info!("Skipping persistence attempt (GNOME always rejects it)");
+        if self.quirks.contains(&InitQuirk::PersistenceRejected) {
+            info!("Skipping persistence attempt (portal backend rejects it)");
             trace!("Going directly to session without persistence");
             let (portal_handle, new_token, active_manager, clipboard_mgr) =
                 self.attempt_session(false).await?;
@@ -322,7 +322,7 @@ impl SessionFactory for PortalSessionFactory {
                 }
 
                 info!(
-                    quirk = "GnomePersistenceRejected",
+                    quirk = "PersistenceRejected",
                     "Retrying without persistence"
                 );
 

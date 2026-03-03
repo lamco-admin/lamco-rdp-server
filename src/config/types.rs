@@ -35,14 +35,27 @@ pub struct SecurityConfig {
     /// Path to TLS private key file
     pub key_path: PathBuf,
 
-    /// Enable Network Level Authentication
+    /// Legacy field: kept for backward compatibility with old configs.
+    /// Migrated to security_mode on load (enable_nla=true -> security_mode="hybrid").
+    #[serde(default)]
     pub enable_nla: bool,
+
+    /// Security mode: "tls", "hybrid", "auto"
+    /// - "tls": TLS-only (standard SSL security)
+    /// - "hybrid": NLA/CredSSP (Network Level Authentication)
+    /// - "auto": hybrid when credentials are configured, tls otherwise
+    #[serde(default = "default_security_mode")]
+    pub security_mode: String,
 
     /// Authentication method ("pam", "none")
     pub auth_method: String,
 
     /// Require TLS 1.3 or higher
     pub require_tls_13: bool,
+}
+
+fn default_security_mode() -> String {
+    "auto".to_string()
 }
 
 /// Video encoding configuration

@@ -743,6 +743,10 @@ impl ClipboardProvider for WlClipboardProvider {
         .map_err(|e| ClipboardError::PortalError(format!("complete_transfer task panicked: {e}")))?
     }
 
+    #[expect(
+        clippy::expect_used,
+        reason = "subscribe() is a one-shot initialization call"
+    )]
     fn subscribe(&self) -> mpsc::UnboundedReceiver<ClipboardProviderEvent> {
         self.event_rx
             .lock()

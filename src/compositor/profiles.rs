@@ -179,6 +179,8 @@ impl CompositorProfile {
             CompositorType::Hyprland { version } => Self::hyprland_profile(version.as_deref()),
             CompositorType::Weston => Self::weston_profile(),
             CompositorType::Cosmic => Self::cosmic_profile(),
+            CompositorType::Niri { version } => Self::niri_profile(version.as_deref()),
+            CompositorType::Smithay { name } => Self::smithay_profile(name),
             CompositorType::Wlroots { name } => Self::wlroots_profile(name),
             CompositorType::Unknown { session_info } => {
                 Self::unknown_profile(session_info.as_deref())
@@ -371,6 +373,61 @@ impl CompositorProfile {
             supports_damage_hints: true,
             supports_explicit_sync: true,
             quirks: vec![], // Cosmic is modern and well-behaved
+            recommended_fps_cap: 60,
+            portal_timeout_ms: 15000,
+        }
+    }
+
+    /// Niri compositor profile (Smithay-based with wlroots-compatible protocols)
+    ///
+    /// Niri is built on Smithay but exposes wlroots-compatible protocols
+    /// (zwlr_screencopy, zwlr_virtual_pointer, zwp_virtual_keyboard,
+    /// ext_data_control). It uses portal-gnome as its portal backend,
+    /// providing full RemoteDesktop + ScreenCast support.
+    fn niri_profile(version: Option<&str>) -> Self {
+        Self {
+            compositor: CompositorType::Niri {
+                version: version.map(String::from),
+            },
+            wayland_protocols: vec![
+                "wl_compositor".to_string(),
+                "xdg_wm_base".to_string(),
+                "zwlr_screencopy_manager_v1".to_string(),
+                "ext_data_control_manager_v1".to_string(),
+            ],
+            portal_backend: Some("gnome".to_string()),
+            recommended_capture: CaptureBackend::Portal,
+            recommended_buffer_type: BufferType::DmaBuf,
+            supports_damage_hints: true,
+            supports_explicit_sync: true,
+            quirks: vec![],
+            recommended_fps_cap: 60,
+            portal_timeout_ms: 15000,
+        }
+    }
+
+    /// Generic Smithay-based compositor profile (jay, xfwl4, etc.)
+    ///
+    /// Smithay compositors typically expose wlroots-compatible protocols
+    /// (zwlr_screencopy, zwlr_virtual_pointer, ext_data_control) and
+    /// use portal-gnome or portal-gtk as portal backends.
+    fn smithay_profile(name: &str) -> Self {
+        Self {
+            compositor: CompositorType::Smithay {
+                name: name.to_string(),
+            },
+            wayland_protocols: vec![
+                "wl_compositor".to_string(),
+                "xdg_wm_base".to_string(),
+                "zwlr_screencopy_manager_v1".to_string(),
+                "ext_data_control_manager_v1".to_string(),
+            ],
+            portal_backend: Some("gtk".to_string()),
+            recommended_capture: CaptureBackend::Portal,
+            recommended_buffer_type: BufferType::DmaBuf,
+            supports_damage_hints: true,
+            supports_explicit_sync: true,
+            quirks: vec![],
             recommended_fps_cap: 60,
             portal_timeout_ms: 15000,
         }

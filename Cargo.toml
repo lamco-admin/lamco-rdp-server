@@ -1,6 +1,6 @@
 [package]
 name = "lamco-rdp-server"
-version = "1.4.0"
+version = "1.4.1"
 edition = "2021"
 rust-version = "1.88"
 authors = ["Greg Lamberson <greg@lamco.io>"]
@@ -87,6 +87,7 @@ thiserror = "2"
 # -----------------------------------------------------------------------------
 bytes = "1.5"
 rustls-pemfile = "2.2"
+x509-cert = "0.2.5"
 
 # -----------------------------------------------------------------------------
 # RDP protocol (IronRDP upstream)
@@ -95,7 +96,7 @@ rustls-pemfile = "2.2"
 # See: https://github.com/Devolutions/IronRDP
 # -----------------------------------------------------------------------------
 ironrdp = { git = "https://github.com/Devolutions/IronRDP", branch = "master", default-features = false, features = ["server"] }
-ironrdp-server = { git = "https://github.com/Devolutions/IronRDP", branch = "master", features = ["egfx"] }
+ironrdp-server = { git = "https://github.com/Devolutions/IronRDP", branch = "master", features = ["egfx", "helper"] }
 ironrdp-tokio = { git = "https://github.com/Devolutions/IronRDP", branch = "master", features = ["reqwest"] }
 ironrdp-pdu = { git = "https://github.com/Devolutions/IronRDP", branch = "master" }
 ironrdp-displaycontrol = { git = "https://github.com/Devolutions/IronRDP", branch = "master" }
