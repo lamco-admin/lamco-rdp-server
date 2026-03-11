@@ -1,0 +1,23 @@
+# PAM configuration for lamco-rdp-server
+#
+# This file should be installed to /etc/pam.d/lamco-rdp-server
+#
+# It uses the standard system authentication stack, which typically
+# includes password verification, account status checks, and session
+# setup (environment, limits, etc.)
+#
+# On Debian/Ubuntu: @include common-auth, common-account, common-session
+# On Fedora/RHEL: uses system-auth and password-auth stacks
+# On Arch: uses system-auth
+
+# --- Authentication ---
+# Verify the user's password against /etc/shadow (or LDAP, etc.)
+@include common-auth
+
+# --- Account management ---
+# Check account validity (expiry, allowed hours, etc.)
+@include common-account
+
+# --- Session management ---
+# Set up user environment (ulimits, home dir, etc.)
+@include common-session

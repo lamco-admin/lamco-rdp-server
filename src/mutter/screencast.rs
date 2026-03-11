@@ -8,8 +8,8 @@ use std::collections::HashMap;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use zbus::{
-    zvariant::{OwnedObjectPath, OwnedValue, Value},
     Connection,
+    zvariant::{OwnedObjectPath, OwnedValue, Value},
 };
 
 /// Main ScreenCast interface proxy
@@ -25,7 +25,7 @@ pub struct MutterScreenCast<'a> {
 
 impl MutterScreenCast<'_> {
     pub async fn new(connection: &Connection) -> Result<Self> {
-        let proxy = zbus::ProxyBuilder::new(connection)
+        let proxy = zbus::proxy::Builder::new(connection)
             .interface("org.gnome.Mutter.ScreenCast")?
             .path("/org/gnome/Mutter/ScreenCast")?
             .destination("org.gnome.Mutter.ScreenCast")?
@@ -84,7 +84,7 @@ pub struct MutterScreenCastSession<'a> {
 impl MutterScreenCastSession<'_> {
     /// Create a session proxy for an existing session
     pub async fn new(connection: &Connection, session_path: OwnedObjectPath) -> Result<Self> {
-        let proxy = zbus::ProxyBuilder::new(connection)
+        let proxy = zbus::proxy::Builder::new(connection)
             .interface("org.gnome.Mutter.ScreenCast.Session")?
             .path(session_path)?
             .destination("org.gnome.Mutter.ScreenCast")?
@@ -177,7 +177,7 @@ impl MutterScreenCastSession<'_> {
     /// Subscribe to the Closed signal for unexpected session termination
     pub async fn subscribe_closed(
         &self,
-    ) -> Result<impl futures_util::Stream<Item = zbus::Message>> {
+    ) -> Result<impl futures_util::Stream<Item = zbus::Message> + use<>> {
         self.proxy
             .receive_signal("Closed")
             .await
@@ -197,7 +197,7 @@ pub struct MutterScreenCastStream<'a> {
 impl MutterScreenCastStream<'_> {
     /// Create a stream proxy for an existing stream
     pub async fn new(connection: &Connection, stream_path: OwnedObjectPath) -> Result<Self> {
-        let proxy = zbus::ProxyBuilder::new(connection)
+        let proxy = zbus::proxy::Builder::new(connection)
             .interface("org.gnome.Mutter.ScreenCast.Stream")?
             .path(stream_path)?
             .destination("org.gnome.Mutter.ScreenCast")?
@@ -214,7 +214,7 @@ impl MutterScreenCastStream<'_> {
     /// not as a property. We must subscribe before the signal is emitted.
     pub async fn subscribe_for_node_id(
         &self,
-    ) -> Result<impl futures_util::Stream<Item = zbus::Message>> {
+    ) -> Result<impl futures_util::Stream<Item = zbus::Message> + use<>> {
         self.proxy
             .receive_signal("PipeWireStreamAdded")
             .await

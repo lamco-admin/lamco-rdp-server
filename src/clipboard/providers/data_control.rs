@@ -5,8 +5,8 @@
 //! `tokio::task::spawn_blocking`.
 
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
 };
 
 use async_trait::async_trait;
@@ -127,6 +127,29 @@ impl ClipboardProvider for DataControlClipboardProvider {
         })
         .await
         .map_err(|e| ClipboardError::PortalError(format!("read_data task panicked: {e}")))?
+    }
+
+    async fn provide_data(&self, mime_type: &str, data: Vec<u8>) -> Result<()> {
+        let backend = Arc::clone(&self.backend);
+        let mime_owned = mime_type.to_string();
+
+        tokio::task::spawn_blocking(move || {
+            let mut guard = backend
+                .lock()
+                .map_err(|e| ClipboardError::PortalError(format!("Backend lock poisoned: {e}")))?;
+
+            guard.update_source_data(&mime_owned, data).map_err(|e| {
+                ClipboardError::PortalError(format!("update_source_data failed: {e}"))
+            })?;
+
+            Ok(())
+        })
+        .await
+        .map_err(|e| ClipboardError::PortalError(format!("provide_data task panicked: {e}")))?
+    }
+
+    fn requires_upfront_data(&self) -> bool {
+        true
     }
 
     async fn complete_transfer(

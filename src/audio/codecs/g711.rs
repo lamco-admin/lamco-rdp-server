@@ -92,11 +92,7 @@ impl MulawEncoder {
         let mut sample = ((mantissa << 3) + MULAW_BIAS) << exponent;
         sample -= MULAW_BIAS;
 
-        if sign != 0 {
-            -sample
-        } else {
-            sample
-        }
+        if sign != 0 { -sample } else { sample }
     }
 }
 

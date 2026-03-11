@@ -3,8 +3,8 @@
 //! Basic server settings: listen address, max connections, timeouts, portals.
 
 use iced::{
-    widget::{column, row, text},
     Alignment, Element,
+    widget::{column, row, text},
 };
 
 use crate::gui::{message::Message, state::AppState, widgets, widgets::space};

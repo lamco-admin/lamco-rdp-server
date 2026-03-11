@@ -9,8 +9,8 @@
 //! - Video pipeline: Advanced -> Video Pipeline
 
 use iced::{
-    widget::{column, pick_list, row, slider, text},
     Alignment, Element, Length,
+    widget::{column, pick_list, row, slider, text},
 };
 
 use crate::gui::{message::Message, state::AppState, widgets, widgets::space};

@@ -5,7 +5,7 @@
 
 use std::{path::PathBuf, process::Command};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use tracing::{debug, info};
 
 /// TPM 2.0 credential store using systemd-creds

@@ -26,6 +26,18 @@ pub struct ServerConfig {
     pub view_only: bool,
 }
 
+impl Default for ServerConfig {
+    fn default() -> Self {
+        Self {
+            listen_addr: "0.0.0.0:3389".to_string(),
+            max_connections: 10,
+            session_timeout: 0,
+            use_portals: true,
+            view_only: false,
+        }
+    }
+}
+
 /// Security and authentication configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SecurityConfig {
@@ -58,6 +70,19 @@ fn default_security_mode() -> String {
     "auto".to_string()
 }
 
+impl Default for SecurityConfig {
+    fn default() -> Self {
+        Self {
+            cert_path: super::default_cert_path(),
+            key_path: super::default_key_path(),
+            enable_nla: false,
+            security_mode: "auto".to_string(),
+            auth_method: "none".to_string(),
+            require_tls_13: false,
+        }
+    }
+}
+
 /// Video encoding configuration
 ///
 /// Note: Encoder selection and bitrate are configured in their respective sections:
@@ -73,17 +98,143 @@ pub struct VideoConfig {
     pub cursor_mode: String,
 }
 
+impl Default for VideoConfig {
+    fn default() -> Self {
+        Self {
+            target_fps: 30,
+            cursor_mode: "metadata".to_string(),
+        }
+    }
+}
+
+/// Capture protocol configuration
+///
+/// Controls which Wayland capture protocol is used by the portal-generic strategy.
+/// These settings are only relevant when the portal-generic strategy is active
+/// (i.e., direct Wayland compositor access, not Portal-based capture).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CaptureProtocolConfig {
+    /// Capture protocol preference: "auto", "ext", "wlr"
+    /// - "auto": Auto-detect best available (ext preferred, wlr fallback)
+    /// - "ext": Prefer ext-image-copy-capture-v1 (staging standard)
+    /// - "wlr": Prefer wlr-screencopy-unstable-v1 (wlroots)
+    #[serde(default = "default_protocol_auto")]
+    pub protocol: String,
+
+    /// Allow fallback to alternative capture protocol if preferred is unavailable
+    #[serde(default = "default_true")]
+    pub allow_fallback: bool,
+
+    /// Ext-capture handshake timeout in milliseconds
+    /// How long to wait for the compositor to deliver constraint events after
+    /// requesting an ext-image-copy-capture session. If the compositor advertises
+    /// the protocol but doesn't respond, the capture will time out.
+    /// Set to 0 to disable the timeout.
+    #[serde(default = "default_handshake_timeout")]
+    pub handshake_timeout_ms: u64,
+}
+
+fn default_protocol_auto() -> String {
+    "auto".to_string()
+}
+
+fn default_handshake_timeout() -> u64 {
+    5000
+}
+
+impl Default for CaptureProtocolConfig {
+    fn default() -> Self {
+        Self {
+            protocol: "auto".to_string(),
+            allow_fallback: true,
+            handshake_timeout_ms: 5000,
+        }
+    }
+}
+
 /// Input handling configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InputConfig {
-    /// Use libei for input injection
-    pub use_libei: bool,
+    /// Input injection protocol: "auto", "libei", "wlr"
+    ///
+    /// - `"auto"` (default): detect from compositor type.
+    ///   GNOME/KDE → libei (EIS via Portal RemoteDesktop).
+    ///   wlroots/Smithay → wlr (virtual-keyboard + virtual-pointer).
+    /// - `"libei"`: force EIS protocol (GNOME-native, needs Portal RemoteDesktop).
+    /// - `"wlr"`: force wlr-virtual-pointer + zwp-virtual-keyboard.
+    #[serde(default = "default_input_protocol")]
+    pub input_protocol: String,
+
+    /// Legacy field — mapped to input_protocol on deserialization.
+    /// `true` → `"libei"`, `false` → `"wlr"`.
+    /// Ignored when `input_protocol` is explicitly set.
+    #[serde(default, skip_serializing)]
+    use_libei: Option<bool>,
 
     /// Keyboard layout ("auto" or XKB layout name)
     pub keyboard_layout: String,
 
     /// Enable touch input support
     pub enable_touch: bool,
+}
+
+fn default_input_protocol() -> String {
+    "auto".to_string()
+}
+
+impl InputConfig {
+    /// Resolve the effective input protocol, applying legacy migration.
+    ///
+    /// If `input_protocol` is the default "auto" but `use_libei` was
+    /// explicitly set in an older config file, honour the legacy value.
+    pub fn effective_protocol(&self) -> &str {
+        if self.input_protocol != "auto" {
+            return &self.input_protocol;
+        }
+        // Legacy migration: explicit use_libei overrides auto
+        match self.use_libei {
+            Some(true) => "libei",
+            Some(false) => "wlr",
+            None => "auto",
+        }
+    }
+
+    /// Whether the resolved protocol prefers libei/EIS.
+    ///
+    /// When `"auto"`, this is compositor-dependent — callers should
+    /// use `resolve_for_compositor()` instead.
+    pub fn prefers_libei(&self) -> bool {
+        self.effective_protocol() == "libei"
+    }
+
+    /// Resolve protocol for a specific compositor type.
+    ///
+    /// Returns `true` for libei, `false` for wlr-virtual-input.
+    pub fn resolve_for_compositor(&self, compositor: &crate::compositor::CompositorType) -> bool {
+        match self.effective_protocol() {
+            "libei" => true,
+            "wlr" => false,
+            // "auto" — compositor-dependent
+            _ => {
+                use crate::compositor::CompositorType;
+                matches!(
+                    compositor,
+                    CompositorType::Gnome { .. } | CompositorType::Kde { .. }
+                )
+            }
+        }
+    }
+}
+
+impl Default for InputConfig {
+    fn default() -> Self {
+        Self {
+            input_protocol: "auto".to_string(),
+            use_libei: None,
+            keyboard_layout: "auto".to_string(),
+            enable_touch: false,
+        }
+    }
 }
 
 /// Clipboard configuration
@@ -102,6 +253,19 @@ pub struct ClipboardConfig {
 
     /// Allowed MIME types (empty = all types allowed)
     pub allowed_types: Vec<String>,
+
+    /// Clipboard protocol preference: "auto", "ext", "wlr"
+    /// - "auto": Auto-detect best available (ext preferred, wlr fallback)
+    /// - "ext": Prefer ext-data-control-v1 (staging standard)
+    /// - "wlr": Prefer wlr-data-control-v1 (wlroots)
+    ///
+    /// Only relevant for portal-generic strategy (direct Wayland access).
+    #[serde(default = "default_protocol_auto")]
+    pub protocol: String,
+
+    /// Allow fallback to alternative clipboard protocol if preferred is unavailable
+    #[serde(default = "default_true")]
+    pub allow_fallback: bool,
 
     /// [EXPERIMENTAL] Include x-kde-syncselection hint for Klipper
     ///
@@ -136,6 +300,21 @@ pub struct ClipboardConfig {
     pub strategy_override: Option<String>,
 }
 
+impl Default for ClipboardConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_size: 10_485_760, // 10 MB
+            rate_limit_ms: 200,
+            allowed_types: vec![],
+            protocol: "auto".to_string(),
+            allow_fallback: true,
+            kde_syncselection_hint: false,
+            strategy_override: None,
+        }
+    }
+}
+
 fn default_rate_limit_ms() -> u64 {
     200
 }
@@ -148,6 +327,15 @@ pub struct MultiMonitorConfig {
 
     /// Maximum number of monitors to support
     pub max_monitors: usize,
+}
+
+impl Default for MultiMonitorConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_monitors: 4,
+        }
+    }
 }
 
 /// Performance tuning configuration
@@ -172,6 +360,19 @@ pub struct PerformanceConfig {
     /// Latency governor configuration (Premium feature)
     #[serde(default)]
     pub latency: LatencyConfig,
+}
+
+impl Default for PerformanceConfig {
+    fn default() -> Self {
+        Self {
+            encoder_threads: 0,
+            network_threads: 0,
+            buffer_pool_size: 16,
+            zero_copy: true,
+            adaptive_fps: AdaptiveFpsConfig::default(),
+            latency: LatencyConfig::default(),
+        }
+    }
 }
 
 /// Adaptive FPS configuration
@@ -465,6 +666,16 @@ pub struct LoggingConfig {
 
     /// Enable metrics collection
     pub metrics: bool,
+}
+
+impl Default for LoggingConfig {
+    fn default() -> Self {
+        Self {
+            level: "info".to_string(),
+            log_dir: None,
+            metrics: true,
+        }
+    }
 }
 
 /// Video pipeline configuration
@@ -1140,5 +1351,84 @@ impl Default for GuiStateConfig {
             log_filter_level: "info".to_string(),
             close_stops_server: true,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::compositor::CompositorType;
+
+    #[test]
+    fn input_protocol_auto_selects_libei_for_gnome() {
+        let config = InputConfig::default();
+        let gnome = CompositorType::Gnome {
+            version: Some("46.0".to_string()),
+        };
+        assert!(config.resolve_for_compositor(&gnome));
+    }
+
+    #[test]
+    fn input_protocol_auto_selects_wlr_for_wlroots() {
+        let config = InputConfig::default();
+        let sway = CompositorType::Sway {
+            version: Some("1.10".to_string()),
+        };
+        let labwc = CompositorType::Wlroots {
+            name: "labwc".to_string(),
+        };
+        let niri = CompositorType::Niri {
+            version: Some("0.1.9".to_string()),
+        };
+        assert!(!config.resolve_for_compositor(&sway));
+        assert!(!config.resolve_for_compositor(&labwc));
+        assert!(!config.resolve_for_compositor(&niri));
+    }
+
+    #[test]
+    fn input_protocol_auto_selects_libei_for_kde() {
+        let config = InputConfig::default();
+        let kde = CompositorType::Kde {
+            version: Some("6.6".to_string()),
+        };
+        assert!(config.resolve_for_compositor(&kde));
+    }
+
+    #[test]
+    fn input_protocol_explicit_overrides_auto() {
+        let mut config = InputConfig::default();
+
+        config.input_protocol = "wlr".to_string();
+        let gnome = CompositorType::Gnome { version: None };
+        assert!(!config.resolve_for_compositor(&gnome));
+
+        config.input_protocol = "libei".to_string();
+        let sway = CompositorType::Sway { version: None };
+        assert!(config.resolve_for_compositor(&sway));
+    }
+
+    #[test]
+    fn legacy_use_libei_migration() {
+        // Legacy config with use_libei: true should map to libei
+        let config = InputConfig {
+            input_protocol: "auto".to_string(),
+            use_libei: Some(true),
+            keyboard_layout: "auto".to_string(),
+            enable_touch: false,
+        };
+        assert_eq!(config.effective_protocol(), "libei");
+
+        // Legacy config with use_libei: false should map to wlr
+        let config = InputConfig {
+            input_protocol: "auto".to_string(),
+            use_libei: Some(false),
+            keyboard_layout: "auto".to_string(),
+            enable_touch: false,
+        };
+        assert_eq!(config.effective_protocol(), "wlr");
+
+        // New config without legacy field stays auto
+        let config = InputConfig::default();
+        assert_eq!(config.effective_protocol(), "auto");
     }
 }

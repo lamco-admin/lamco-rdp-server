@@ -1,4 +1,4 @@
-#![allow(unsafe_code)]
+#![expect(unsafe_code, reason = "C FFI vtable dispatch for OpenH264 encoder API")]
 // Raw pointer casting is fundamental to C FFI: OpenH264's vtable functions
 // accept `*const c_void` / `*mut c_void` for type-erased struct parameters.
 #![expect(
@@ -24,11 +24,11 @@ use tracing::{debug, info, warn};
 
 use super::{
     ffi_types::{
-        abi7, abi8, EParameterSetStrategy, EUsageType, EncodedFrameData, ISVCEncoder,
-        ISVCEncoderVtbl, SSpatialLayerConfig, CONSTANT_ID, DEBLOCKING_IDC_0, ECOMPLEXITY_MODE,
-        ENCODER_OPTION_DATAFORMAT, ENCODER_OPTION_SVC_ENCODE_PARAM_EXT, ENCODER_OPTION_TRACE_LEVEL,
-        LOW_COMPLEXITY, RC_MODES, RC_QUALITY_MODE, SCREEN_CONTENT_REAL_TIME, SM_SINGLE_SLICE,
-        VIDEO_FORMAT_I420, WELS_LOG_QUIET, WELS_LOG_WARNING,
+        CONSTANT_ID, DEBLOCKING_IDC_0, ECOMPLEXITY_MODE, ENCODER_OPTION_DATAFORMAT,
+        ENCODER_OPTION_SVC_ENCODE_PARAM_EXT, ENCODER_OPTION_TRACE_LEVEL, EParameterSetStrategy,
+        EUsageType, EncodedFrameData, ISVCEncoder, ISVCEncoderVtbl, LOW_COMPLEXITY, RC_MODES,
+        RC_QUALITY_MODE, SCREEN_CONTENT_REAL_TIME, SM_SINGLE_SLICE, SSpatialLayerConfig,
+        VIDEO_FORMAT_I420, WELS_LOG_QUIET, WELS_LOG_WARNING, abi7, abi8,
     },
     loader::{AbiGeneration, OpenH264Api},
 };
@@ -347,10 +347,10 @@ impl VersionedEncoder {
 
     /// Force the next encoded frame to be an IDR keyframe.
     pub(crate) fn force_intra_frame(&mut self) {
-        if let Ok(vtbl) = self.vtable() {
-            if let Some(force_fn) = vtbl.ForceIntraFrame {
-                unsafe { force_fn(self.encoder_ptr, true) };
-            }
+        if let Ok(vtbl) = self.vtable()
+            && let Some(force_fn) = vtbl.ForceIntraFrame
+        {
+            unsafe { force_fn(self.encoder_ptr, true) };
         }
     }
 
@@ -652,10 +652,10 @@ impl Drop for VersionedEncoder {
     fn drop(&mut self) {
         if !self.encoder_ptr.is_null() {
             // Uninitialize first, then destroy
-            if let Ok(vtbl) = self.vtable() {
-                if let Some(uninit) = vtbl.Uninitialize {
-                    unsafe { uninit(self.encoder_ptr) };
-                }
+            if let Ok(vtbl) = self.vtable()
+                && let Some(uninit) = vtbl.Uninitialize
+            {
+                unsafe { uninit(self.encoder_ptr) };
             }
             unsafe { self.api.destroy_encoder_instance(self.encoder_ptr) };
         }

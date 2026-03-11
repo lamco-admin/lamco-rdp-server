@@ -21,6 +21,8 @@ Description=Lamco RDP Server (System)
 Documentation=https://github.com/lamco-admin/lamco-rdp-server
 After=graphical.target
 Wants=graphical.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=dbus
@@ -36,8 +38,6 @@ ExecStart=/usr/bin/lamco-rdp-server --dbus-service --system
 # Restart on failure
 Restart=on-failure
 RestartSec=10
-StartLimitIntervalSec=300
-StartLimitBurst=5
 
 # Environment
 Environment=RUST_LOG=info
@@ -63,7 +63,6 @@ ProtectKernelModules=yes
 ProtectKernelLogs=yes
 ProtectControlGroups=yes
 ProtectClock=yes
-ProtectHostname=yes
 LockPersonality=yes
 MemoryDenyWriteExecute=yes
 RestrictRealtime=yes
@@ -75,13 +74,10 @@ RestrictNamespaces=yes
 # Network: only TCP (RDP listening) and Unix (D-Bus, Wayland)
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 
-# Drop all capabilities - RDP server doesn't need any
-CapabilityBoundingSet=
-AmbientCapabilities=
-
-# Syscall filtering
+# Syscall filtering: allow system-service baseline plus mount/umount for FUSE clipboard
 SystemCallFilter=@system-service
 SystemCallFilter=~@privileged @resources
+SystemCallFilter=mount umount2
 SystemCallArchitectures=native
 
 [Install]

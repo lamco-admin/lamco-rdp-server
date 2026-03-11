@@ -591,9 +591,9 @@ fn enumerate_wayland_globals() -> Result<Vec<WaylandGlobal>> {
     }
 
     use wayland_client::{
-        globals::{registry_queue_init, GlobalListContents},
-        protocol::wl_registry,
         Connection, Dispatch, QueueHandle,
+        globals::{GlobalListContents, registry_queue_init},
+        protocol::wl_registry,
     };
 
     // Minimal state -- we only need the registry roundtrip, no protocol binds

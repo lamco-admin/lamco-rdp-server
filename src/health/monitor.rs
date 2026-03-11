@@ -4,8 +4,8 @@
 //! `SessionHealthState`, broadcast via `tokio::sync::watch`.
 
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc,
+    atomic::{AtomicBool, Ordering},
 };
 
 use tokio::sync::{mpsc, watch};
@@ -126,6 +126,29 @@ impl SessionHealthMonitor {
                         state.video = SubsystemHealth::Failed("PipeWire stream error".into());
                     }
                 },
+
+                HealthEvent::VideoFrameStalled { stall_duration_ms } => {
+                    warn!("Video frames stalled for {}ms", stall_duration_ms);
+                    state.video =
+                        SubsystemHealth::Degraded(format!("no frames for {stall_duration_ms}ms"));
+                }
+
+                HealthEvent::VideoFrameNeverStarted { elapsed_ms } => {
+                    error!(
+                        "No video frames received since session start ({}ms elapsed)",
+                        elapsed_ms
+                    );
+                    state.video = SubsystemHealth::Failed(format!(
+                        "capture never delivered frames ({elapsed_ms}ms)"
+                    ));
+                }
+
+                HealthEvent::VideoFrameResumed => {
+                    if !state.video.is_healthy() {
+                        info!("Video frames resumed after stall");
+                        state.video = SubsystemHealth::Healthy;
+                    }
+                }
 
                 HealthEvent::InputFailed {
                     ref reason,
@@ -300,6 +323,39 @@ mod tests {
         tokio::task::yield_now().await;
 
         assert_eq!(subscriber.current().overall, OverallHealth::Healthy);
+
+        let _ = shutdown_tx.send(());
+        let _ = monitor_handle.await;
+    }
+
+    #[tokio::test]
+    async fn test_monitor_video_stall_and_resume() {
+        let (shutdown_tx, _) = tokio::sync::broadcast::channel(1);
+        let shutdown_rx = shutdown_tx.subscribe();
+        let (monitor, reporter, subscriber) = SessionHealthMonitor::new(shutdown_rx);
+
+        let monitor_handle = tokio::spawn(monitor.run());
+
+        // Report stall
+        reporter.report(HealthEvent::VideoFrameStalled {
+            stall_duration_ms: 5000,
+        });
+        tokio::task::yield_now().await;
+        tokio::task::yield_now().await;
+
+        let state = subscriber.current();
+        assert_eq!(state.overall, OverallHealth::Degraded);
+        assert!(!state.video.is_healthy());
+        // Stall is degraded, not failed — session stays valid
+        assert!(subscriber.is_session_valid());
+
+        // Report resume
+        reporter.report(HealthEvent::VideoFrameResumed);
+        tokio::task::yield_now().await;
+        tokio::task::yield_now().await;
+
+        assert_eq!(subscriber.current().overall, OverallHealth::Healthy);
+        assert!(subscriber.current().video.is_healthy());
 
         let _ = shutdown_tx.send(());
         let _ = monitor_handle.await;

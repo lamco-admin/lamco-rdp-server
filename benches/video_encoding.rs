@@ -3,7 +3,7 @@
 //! Measures AVC444 H.264 encoding performance at various resolutions.
 //! Requires the `h264` feature to be enabled.
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 #[cfg(feature = "h264")]
 use lamco_rdp_server::egfx::{Avc444Encoder, EncoderConfig};
 
@@ -69,7 +69,10 @@ fn bench_encode_single_frame(c: &mut Criterion) {
         let bgra_data = generate_bgra_frame(width as usize, height as usize, 0);
         let pixels = (width * height) as u64;
 
-        group.throughput(Throughput::Elements(pixels));
+        group.throughput(Throughput::ElementsAndBytes {
+            elements: pixels,
+            bytes: pixels * 4,
+        });
 
         group.bench_with_input(BenchmarkId::new("keyframe", name), &bgra_data, |b, data| {
             let config = EncoderConfig {
@@ -110,7 +113,10 @@ fn bench_encode_p_frames(c: &mut Criterion) {
     for (width, height, name) in resolutions {
         let pixels = (width * height) as u64;
 
-        group.throughput(Throughput::Elements(pixels));
+        group.throughput(Throughput::ElementsAndBytes {
+            elements: pixels,
+            bytes: pixels * 4,
+        });
 
         group.bench_function(BenchmarkId::new("p_frame", name), |b| {
             let config = EncoderConfig {
@@ -164,7 +170,10 @@ fn bench_encode_sequence(c: &mut Criterion) {
 
         let total_pixels = (width * height * 30) as u64;
 
-        group.throughput(Throughput::Elements(total_pixels));
+        group.throughput(Throughput::ElementsAndBytes {
+            elements: total_pixels,
+            bytes: total_pixels * 4,
+        });
 
         group.bench_with_input(
             BenchmarkId::new("30_frames", name),

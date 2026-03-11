@@ -31,19 +31,19 @@ use std::{
 };
 
 use lamco_clipboard_core::{
+    ClipboardFormat, FormatConverter, LoopDetectionConfig, TransferConfig, TransferEngine,
     sanitize::{
         parse_file_uris, sanitize_filename_for_linux, sanitize_text_for_linux,
         sanitize_text_for_windows,
     },
-    ClipboardFormat, FormatConverter, LoopDetectionConfig, TransferConfig, TransferEngine,
 };
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{RwLock, mpsc};
 use tracing::{debug, error, info, trace, warn};
 
 use crate::clipboard::{
+    FormatConverterExt,
     error::{ClipboardError, Result},
     sync::SyncManager,
-    FormatConverterExt,
 };
 
 /// Shared clipboard provider reference (used by multiple handlers)
@@ -115,6 +115,10 @@ impl Default for ClipboardOrchestratorConfig {
         }
     }
 }
+
+/// Sentinel serial for eager-fetch requests (data-control upfront provision).
+/// Real compositor serials are sequential small numbers, so u32::MAX won't collide.
+const EAGER_FETCH_SERIAL: u32 = u32::MAX;
 
 /// Response callback for sending data back to RDP
 pub type RdpResponseCallback = Arc<dyn Fn(Vec<u8>) + Send + Sync>;
@@ -456,32 +460,32 @@ fn lookup_format_id_for_mime(formats: &[ClipboardFormat], mime_type: &str) -> Op
     // For all other MIME types, use normal lookup
     for format in formats {
         // First check if this format's ID maps to the requested MIME type
-        if let Some(mapped_mime) = super::lib_rdp_format_to_mime(format.id) {
-            if mapped_mime == mime_type {
-                return Some(format.id);
-            }
+        if let Some(mapped_mime) = super::lib_rdp_format_to_mime(format.id)
+            && mapped_mime == mime_type
+        {
+            return Some(format.id);
         }
 
         // For registered formats, check by name
-        if let Some(ref name) = format.name {
-            if let Some(mapped_mime) = format_name_to_mime(name) {
-                // Direct match
-                if mapped_mime == mime_type {
-                    debug!(
-                        "Found format ID {} for MIME {} via format name {:?}",
-                        format.id, mime_type, name
-                    );
-                    return Some(format.id);
-                }
-                // For file formats: x-special/gnome-copied-files and text/uri-list are equivalent
-                // GNOME Nautilus requests gnome-copied-files, but RDP file formats map to uri-list
-                if mapped_mime == "text/uri-list" && mime_type == "x-special/gnome-copied-files" {
-                    debug!(
-                        "Found format ID {} for MIME {} via equivalent file format {:?}",
-                        format.id, mime_type, name
-                    );
-                    return Some(format.id);
-                }
+        if let Some(ref name) = format.name
+            && let Some(mapped_mime) = format_name_to_mime(name)
+        {
+            // Direct match
+            if mapped_mime == mime_type {
+                debug!(
+                    "Found format ID {} for MIME {} via format name {:?}",
+                    format.id, mime_type, name
+                );
+                return Some(format.id);
+            }
+            // For file formats: x-special/gnome-copied-files and text/uri-list are equivalent
+            // GNOME Nautilus requests gnome-copied-files, but RDP file formats map to uri-list
+            if mapped_mime == "text/uri-list" && mime_type == "x-special/gnome-copied-files" {
+                debug!(
+                    "Found format ID {} for MIME {} via equivalent file format {:?}",
+                    format.id, mime_type, name
+                );
+                return Some(format.id);
             }
         }
     }
@@ -531,16 +535,12 @@ impl ClipboardOrchestrator {
 
         let (event_tx, event_rx) = mpsc::channel(100);
 
-        // Use XDG_DOWNLOAD_DIR for proper Flatpak sandbox compatibility
-        let download_dir = std::env::var("XDG_DOWNLOAD_DIR")
-            .ok()
-            .map(PathBuf::from)
-            .or_else(|| {
-                std::env::var("HOME")
-                    .ok()
-                    .map(|h| PathBuf::from(h).join("Downloads"))
-            })
-            .unwrap_or_else(|| PathBuf::from("/tmp"));
+        // Stage received files into ~/Downloads (standard user location).
+        // The systemd service unit must include ReadWritePaths=%h/Downloads.
+        let download_dir = std::env::var("HOME").ok().map_or_else(
+            || PathBuf::from("/tmp"),
+            |h| PathBuf::from(h).join("Downloads"),
+        );
 
         let file_transfer_state = Arc::new(RwLock::new(FileTransferState::new(download_dir)));
 
@@ -706,7 +706,7 @@ impl ClipboardOrchestrator {
                             );
                         }
 
-                        if let Some(ref sender) = *server_event_sender.read().await {
+                        match *server_event_sender.read().await { Some(ref sender) => {
                             use ironrdp_cliprdr::backend::ClipboardMessage;
 
                             let ironrdp_formats: Vec<ironrdp_cliprdr::pdu::ClipboardFormat> =
@@ -746,9 +746,9 @@ impl ClipboardOrchestrator {
                             } else {
                                 warn!("Cooperation: Failed to send FormatList (channel closed)");
                             }
-                        } else {
+                        } _ => {
                             debug!("Cooperation: No server event sender (not ready yet)");
-                        }
+                        }}
                     }
 
                     crate::clipboard::CooperationEvent::CooperationFailed { reason, retry } => {
@@ -823,12 +823,12 @@ impl ClipboardOrchestrator {
         clip_data_id: Option<u32>,
     ) -> Option<Vec<PathBuf>> {
         let fuse = self.fuse_manager.read().await;
-        if let Some(ref manager) = *fuse {
-            if manager.is_mounted() {
-                let paths = manager.set_files(descriptors, clip_data_id);
-                debug!("Created {} virtual files in FUSE", paths.len());
-                return Some(paths);
-            }
+        if let Some(ref manager) = *fuse
+            && manager.is_mounted()
+        {
+            let paths = manager.set_files(descriptors, clip_data_id);
+            debug!("Created {} virtual files in FUSE", paths.len());
+            return Some(paths);
         }
         None
     }
@@ -1028,24 +1028,27 @@ impl ClipboardOrchestrator {
     pub async fn deliver_fuse_response(&self, stream_id: u32, data: Vec<u8>, is_error: bool) {
         use crate::clipboard::fuse::FileContentsResponse;
 
-        if let Some(response_tx) = self.pending_fuse_responses.write().await.remove(&stream_id) {
-            let response = if is_error {
-                FileContentsResponse::Error("RDP error".to_string())
-            } else {
-                FileContentsResponse::Data(data)
-            };
+        match self.pending_fuse_responses.write().await.remove(&stream_id) {
+            Some(response_tx) => {
+                let response = if is_error {
+                    FileContentsResponse::Error("RDP error".to_string())
+                } else {
+                    FileContentsResponse::Data(data)
+                };
 
-            if response_tx.send(response).is_err() {
-                warn!("FUSE response channel closed for stream_id={}", stream_id);
-            } else {
-                trace!("Delivered FUSE response for stream_id={}", stream_id);
+                if response_tx.send(response).is_err() {
+                    warn!("FUSE response channel closed for stream_id={}", stream_id);
+                } else {
+                    trace!("Delivered FUSE response for stream_id={}", stream_id);
+                }
             }
-        } else {
-            // This may be a response for the old staging-based transfer, not FUSE
-            trace!(
-                "No pending FUSE request for stream_id={} (may be staging transfer)",
-                stream_id
-            );
+            _ => {
+                // This may be a response for the old staging-based transfer, not FUSE
+                trace!(
+                    "No pending FUSE request for stream_id={} (may be staging transfer)",
+                    stream_id
+                );
+            }
         }
     }
 
@@ -1104,20 +1107,18 @@ impl ClipboardOrchestrator {
                             // Session-invalid errors are fatal — report immediately
                             let is_session_invalid = err_msg.contains("session invalid")
                                 || err_msg.contains("Session invalid");
-                            if is_session_invalid || consecutive_errors >= 3 {
-                                if let Some(ref reporter) = health_reporter {
+                            if (is_session_invalid || consecutive_errors >= 3)
+                                && let Some(ref reporter) = health_reporter {
                                     reporter.report(crate::health::HealthEvent::ClipboardFailed {
                                         reason: format!("{consecutive_errors} consecutive errors: {e}"),
                                     });
                                 }
-                            }
                         } else if consecutive_errors > 0 {
                             // Recovered after errors
-                            if consecutive_errors >= 3 {
-                                if let Some(ref reporter) = health_reporter {
+                            if consecutive_errors >= 3
+                                && let Some(ref reporter) = health_reporter {
                                     reporter.report(crate::health::HealthEvent::ClipboardRecovered);
                                 }
-                            }
                             consecutive_errors = 0;
                         }
                     }
@@ -1158,7 +1159,9 @@ impl ClipboardOrchestrator {
     ) -> Result<()> {
         match event {
             ClipboardEvent::RdpReady => {
-                debug!("RDP clipboard channel ready - checking for pending Linux clipboard to announce");
+                debug!(
+                    "RDP clipboard channel ready - checking for pending Linux clipboard to announce"
+                );
                 // When RDP becomes ready, re-announce any cached Linux clipboard formats
                 // This handles the case where Linux clipboard changed before RDP connected
                 let advertised = local_advertised_formats.read().await;
@@ -1214,6 +1217,8 @@ impl ClipboardOrchestrator {
                     _config,
                     klipper_info,
                     cooperation_coordinator,
+                    server_event_sender,
+                    pending_portal_requests,
                 )
                 .await
             }
@@ -1336,6 +1341,8 @@ impl ClipboardOrchestrator {
         cooperation_coordinator: &Arc<
             RwLock<Option<crate::clipboard::KlipperCooperationCoordinator>>,
         >,
+        server_event_sender: &ServerEventSender,
+        pending_portal_requests: &PendingPortalRequests,
     ) -> Result<()> {
         debug!("RDP format list received: {:?}", formats);
 
@@ -1373,6 +1380,11 @@ impl ClipboardOrchestrator {
         let mut mime_types = converter.rdp_to_mime_types(&formats)?;
 
         debug!("Converted to MIME types: {:?}", mime_types);
+
+        if mime_types.is_empty() {
+            debug!("Empty format list from RDP client (handshake only, no clipboard content)");
+            return Ok(());
+        }
 
         if config.kde_syncselection_hint {
             let klipper_detected = {
@@ -1415,13 +1427,54 @@ impl ClipboardOrchestrator {
         // Announce via clipboard provider
         let provider_opt = clipboard_provider.read().await;
         if let Some(ref provider) = *provider_opt {
-            provider.announce_formats(mime_types).await.map_err(|e| {
-                ClipboardError::PortalError(format!("Provider announce_formats failed: {e}"))
-            })?;
+            provider
+                .announce_formats(mime_types.clone())
+                .await
+                .map_err(|e| {
+                    ClipboardError::PortalError(format!("Provider announce_formats failed: {e}"))
+                })?;
             debug!(
                 "RDP clipboard formats announced via {} provider",
                 provider.name()
             );
+
+            // Data-control path: Wayland `send` is synchronous, so data must be in memory
+            // before the compositor requests it. Eagerly fetch text from the RDP client now.
+            if provider.requires_upfront_data() {
+                let has_text = mime_types.iter().any(|m| m.starts_with("text/plain"));
+                let has_cf_unicodetext = formats.iter().any(|f| f.id == 13);
+
+                if has_text && has_cf_unicodetext {
+                    info!("Data-control provider: eagerly fetching CF_UNICODETEXT from RDP client");
+
+                    // Queue a sentinel entry so handle_rdp_data_response knows this is eager fetch
+                    pending_portal_requests.write().await.push_back((
+                        EAGER_FETCH_SERIAL,
+                        "text/plain".to_string(),
+                        std::time::Instant::now(),
+                    ));
+
+                    let sender_opt = server_event_sender.read().await.clone();
+                    if let Some(sender) = sender_opt {
+                        use ironrdp_cliprdr::{backend::ClipboardMessage, pdu::ClipboardFormatId};
+
+                        if let Err(e) = sender.send(ironrdp_server::ServerEvent::Clipboard(
+                            ClipboardMessage::SendInitiatePaste(ClipboardFormatId(13)),
+                        )) {
+                            warn!("Failed to send eager fetch for CF_UNICODETEXT: {:?}", e);
+                            // Remove the sentinel we just pushed
+                            let mut pending = pending_portal_requests.write().await;
+                            pending.retain(|(s, _, _)| *s != EAGER_FETCH_SERIAL);
+                        }
+                    } else {
+                        warn!("ServerEvent sender not available for eager fetch");
+                        pending_portal_requests
+                            .write()
+                            .await
+                            .retain(|(s, _, _)| *s != EAGER_FETCH_SERIAL);
+                    }
+                }
+            }
         } else {
             debug!("No clipboard provider available (normal during startup)");
         }
@@ -1510,16 +1563,18 @@ impl ClipboardOrchestrator {
             .and_then(|f| f.name.clone());
         drop(advertised);
 
-        if let Some(ref name) = format_name {
-            if name == "FileGroupDescriptorW" {
-                debug!("Windows requests FileGroupDescriptorW - sending file list from Linux clipboard");
-                return Self::handle_file_descriptor_request(
-                    clipboard_provider,
-                    server_event_sender,
-                    file_transfer_state,
-                )
-                .await;
-            }
+        if let Some(ref name) = format_name
+            && name == "FileGroupDescriptorW"
+        {
+            debug!(
+                "Windows requests FileGroupDescriptorW - sending file list from Linux clipboard"
+            );
+            return Self::handle_file_descriptor_request(
+                clipboard_provider,
+                server_event_sender,
+                file_transfer_state,
+            )
+            .await;
         }
 
         let mime_type = match converter.format_id_to_mime(format_id) {
@@ -1640,15 +1695,18 @@ impl ClipboardOrchestrator {
             let response = FormatDataResponse::new_data(rdp_data);
             let owned_response = response.into_owned();
 
-            if let Err(e) = sender.send(ironrdp_server::ServerEvent::Clipboard(
+            match sender.send(ironrdp_server::ServerEvent::Clipboard(
                 ClipboardMessage::SendFormatData(owned_response),
             )) {
-                error!("Failed to send FormatDataResponse via ServerEvent: {:?}", e);
-            } else {
-                info!(
-                    "Sent {} bytes to RDP client for format {} (Linux → Windows)",
-                    data_len, format_id
-                );
+                Err(e) => {
+                    error!("Failed to send FormatDataResponse via ServerEvent: {:?}", e);
+                }
+                _ => {
+                    info!(
+                        "Sent {} bytes to RDP client for format {} (Linux → Windows)",
+                        data_len, format_id
+                    );
+                }
             }
         } else {
             warn!("ServerEvent sender not available - cannot send clipboard data to RDP");
@@ -1766,12 +1824,15 @@ impl ClipboardOrchestrator {
             let response = FormatDataResponse::new_data(descriptor_data);
             let owned_response = response.into_owned();
 
-            if let Err(e) = sender.send(ironrdp_server::ServerEvent::Clipboard(
+            match sender.send(ironrdp_server::ServerEvent::Clipboard(
                 ClipboardMessage::SendFormatData(owned_response),
             )) {
-                error!("Failed to send FileGroupDescriptorW response: {:?}", e);
-            } else {
-                debug!(" Sent FileGroupDescriptorW to Windows (Linux → Windows file transfer)");
+                Err(e) => {
+                    error!("Failed to send FileGroupDescriptorW response: {:?}", e);
+                }
+                _ => {
+                    debug!(" Sent FileGroupDescriptorW to Windows (Linux → Windows file transfer)");
+                }
             }
         }
 
@@ -1788,12 +1849,15 @@ impl ClipboardOrchestrator {
             let response = FormatDataResponse::new_error();
             let owned_response = response.into_owned();
 
-            if let Err(e) = sender.send(ironrdp_server::ServerEvent::Clipboard(
+            match sender.send(ironrdp_server::ServerEvent::Clipboard(
                 ClipboardMessage::SendFormatData(owned_response),
             )) {
-                error!("Failed to send error FormatDataResponse: {:?}", e);
-            } else {
-                debug!("Sent error FormatDataResponse to RDP client");
+                Err(e) => {
+                    error!("Failed to send error FormatDataResponse: {:?}", e);
+                }
+                _ => {
+                    debug!("Sent error FormatDataResponse to RDP client");
+                }
             }
         }
     }
@@ -1855,6 +1919,52 @@ impl ClipboardOrchestrator {
             data.len()
         );
 
+        // Eager fetch for data-control: provide data upfront instead of completing a transfer
+        if serial == EAGER_FETCH_SERIAL {
+            let provider = provider_opt.as_ref().expect("provider checked above");
+
+            // Convert UTF-16LE from CF_UNICODETEXT to UTF-8
+            if data.len() >= 2 {
+                let utf16_data: Vec<u16> = data
+                    .chunks_exact(2)
+                    .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+                    .take_while(|&c| c != 0)
+                    .collect();
+
+                let text = String::from_utf16_lossy(&utf16_data);
+                let sanitized = sanitize_text_for_linux(&text);
+                let utf8_bytes = sanitized.as_bytes().to_vec();
+
+                info!(
+                    "Eager fetch: {} UTF-16 chars → {} UTF-8 bytes for data-control source",
+                    utf16_data.len(),
+                    utf8_bytes.len()
+                );
+
+                // Provide under both bare and charset-qualified MIME types so the
+                // compositor finds data regardless of which key it requests via `send`
+                if let Err(e) = provider
+                    .provide_data("text/plain", utf8_bytes.clone())
+                    .await
+                {
+                    warn!("Failed to provide eager-fetched text to data-control: {e}");
+                }
+                if let Err(e) = provider
+                    .provide_data("text/plain;charset=utf-8", utf8_bytes)
+                    .await
+                {
+                    warn!("Failed to provide eager-fetched text (charset): {e}");
+                }
+            } else {
+                debug!(
+                    "Eager fetch: data too small ({} bytes), skipping",
+                    data.len()
+                );
+            }
+
+            return Ok(());
+        }
+
         // Special handling for file transfer formats
         if requested_mime == "text/uri-list" || requested_mime == "x-special/gnome-copied-files" {
             info!(
@@ -1885,7 +1995,8 @@ impl ClipboardOrchestrator {
                         if !state.incoming_files.is_empty() {
                             info!(
                                 "Skipping duplicate file transfer request ({}) - transfer already in progress with {} file(s)",
-                                requested_mime, state.incoming_files.len()
+                                requested_mime,
+                                state.incoming_files.len()
                             );
                             drop(state);
 
@@ -2021,8 +2132,15 @@ impl ClipboardOrchestrator {
                             let total_size = desc.size.unwrap_or(0);
 
                             if &filename != original_name {
-                                info!("Requesting file {}/{}: '{}' -> '{}' (sanitized, {} bytes, stream_id={})",
-                                    idx + 1, descriptors.len(), original_name, filename, total_size, stream_id);
+                                info!(
+                                    "Requesting file {}/{}: '{}' -> '{}' (sanitized, {} bytes, stream_id={})",
+                                    idx + 1,
+                                    descriptors.len(),
+                                    original_name,
+                                    filename,
+                                    total_size,
+                                    stream_id
+                                );
                             } else {
                                 info!(
                                     "Requesting file {}/{}: '{}' ({} bytes, stream_id={})",
@@ -2073,7 +2191,7 @@ impl ClipboardOrchestrator {
                                 64 * 1024 * 1024
                             };
 
-                            if let Err(e) = sender.send(ironrdp_server::ServerEvent::Clipboard(
+                            match sender.send(ironrdp_server::ServerEvent::Clipboard(
                                 ClipboardMessage::SendFileContentsRequest(FileContentsRequest {
                                     stream_id,
                                     index: idx as u32,
@@ -2083,13 +2201,18 @@ impl ClipboardOrchestrator {
                                     data_id: Some(clip_data_id),
                                 }),
                             )) {
-                                error!(
-                                    "Failed to send FileContentsRequest for '{}': {:?}",
-                                    filename, e
-                                );
-                            } else {
-                                info!("Sent FileContentsRequest for '{}' (stream={}, {} bytes, clip_data_id={})",
-                                    filename, stream_id, request_size, clip_data_id);
+                                Err(e) => {
+                                    error!(
+                                        "Failed to send FileContentsRequest for '{}': {:?}",
+                                        filename, e
+                                    );
+                                }
+                                _ => {
+                                    info!(
+                                        "Sent FileContentsRequest for '{}' (stream={}, {} bytes, clip_data_id={})",
+                                        filename, stream_id, request_size, clip_data_id
+                                    );
+                                }
                             }
                         }
 
@@ -2323,22 +2446,25 @@ impl ClipboardOrchestrator {
         let entries: Vec<(u32, String)> = pending.iter().map(|(s, m, _)| (*s, m.clone())).collect();
         drop(pending);
 
-        if let Some(ref provider) = *clipboard_provider.read().await {
-            for (serial, mime_type) in &entries {
-                debug!(
-                    "Notifying {} provider of transfer failure (serial {})",
-                    provider.name(),
-                    serial
-                );
-                if let Err(e) = provider
-                    .complete_transfer(*serial, mime_type, vec![], false)
-                    .await
-                {
-                    warn!("Failed to notify provider of transfer failure: {:#}", e);
+        match *clipboard_provider.read().await {
+            Some(ref provider) => {
+                for (serial, mime_type) in &entries {
+                    debug!(
+                        "Notifying {} provider of transfer failure (serial {})",
+                        provider.name(),
+                        serial
+                    );
+                    if let Err(e) = provider
+                        .complete_transfer(*serial, mime_type, vec![], false)
+                        .await
+                    {
+                        warn!("Failed to notify provider of transfer failure: {:#}", e);
+                    }
                 }
             }
-        } else {
-            warn!("No clipboard provider available to notify of transfer failure");
+            _ => {
+                warn!("No clipboard provider available to notify of transfer failure");
+            }
         }
 
         pending_portal_requests.write().await.clear();
@@ -2474,8 +2600,8 @@ impl ClipboardOrchestrator {
                 );
                 debug!("│ MIME types: {:?}", reannounce_mimes);
 
-                if let Some(ref provider) = *clipboard_provider.read().await {
-                    match provider.announce_formats(reannounce_mimes).await {
+                match *clipboard_provider.read().await {
+                    Some(ref provider) => match provider.announce_formats(reannounce_mimes).await {
                         Ok(()) => {
                             info!(
                                 "│ SetSelection succeeded via {} provider - ownership reclaimed",
@@ -2486,9 +2612,10 @@ impl ClipboardOrchestrator {
                         Err(e) => {
                             error!("│ Provider announce_formats failed: {:#}", e);
                         }
+                    },
+                    _ => {
+                        warn!("│ No clipboard provider available for reannounce");
                     }
-                } else {
-                    warn!("│ No clipboard provider available for reannounce");
                 }
 
                 info!("└────────────────────────────────────────────────────────────");
@@ -2560,7 +2687,9 @@ impl ClipboardOrchestrator {
             match send_result {
                 Ok(()) => {
                     debug!(" ServerEvent::Clipboard sent successfully to IronRDP event loop");
-                    info!("   Event loop should now call cliprdr.initiate_copy() → encode FormatList PDU → send to client");
+                    info!(
+                        "   Event loop should now call cliprdr.initiate_copy() → encode FormatList PDU → send to client"
+                    );
                 }
                 Err(e) => {
                     error!("Failed to send ServerEvent::Clipboard: {:?}", e);
@@ -2870,7 +2999,7 @@ impl ClipboardOrchestrator {
                 );
 
                 // Only encode characters problematic in URIs, NOT dots/dashes/underscores
-                use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
+                use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
                 const FILE_URI_ENCODE: &AsciiSet = &CONTROLS
                     .add(b' ')
                     .add(b'"')
@@ -2908,30 +3037,33 @@ impl ClipboardOrchestrator {
                 if let Some(serial) = portal_serial {
                     let uri_bytes = uri_list.into_bytes();
 
-                    if let Some(ref provider) = *clipboard_provider.read().await {
-                        match provider
-                            .complete_transfer(
-                                serial,
-                                "x-special/gnome-copied-files",
-                                uri_bytes,
-                                true,
-                            )
-                            .await
-                        {
-                            Ok(()) => {
-                                info!(
-                                    "Delivered {} file URI(s) via {} provider (serial={})",
-                                    completed_files.len(),
-                                    provider.name(),
-                                    serial
-                                );
-                            }
-                            Err(e) => {
-                                error!("Failed to deliver URIs via provider: {:?}", e);
+                    match *clipboard_provider.read().await {
+                        Some(ref provider) => {
+                            match provider
+                                .complete_transfer(
+                                    serial,
+                                    "x-special/gnome-copied-files",
+                                    uri_bytes,
+                                    true,
+                                )
+                                .await
+                            {
+                                Ok(()) => {
+                                    info!(
+                                        "Delivered {} file URI(s) via {} provider (serial={})",
+                                        completed_files.len(),
+                                        provider.name(),
+                                        serial
+                                    );
+                                }
+                                Err(e) => {
+                                    error!("Failed to deliver URIs via provider: {:?}", e);
+                                }
                             }
                         }
-                    } else {
-                        warn!("No clipboard provider available to deliver file URIs");
+                        _ => {
+                            warn!("No clipboard provider available to deliver file URIs");
+                        }
                     }
                 }
 
@@ -3009,10 +3141,10 @@ impl ClipboardOrchestrator {
             info!("Clipboard provider shut down");
         }
 
-        if let Some(ref tx) = self.shutdown_tx {
-            if let Err(e) = tx.send(()).await {
-                warn!("Failed to send shutdown signal to event processor: {}", e);
-            }
+        if let Some(ref tx) = self.shutdown_tx
+            && let Err(e) = tx.send(()).await
+        {
+            warn!("Failed to send shutdown signal to event processor: {}", e);
         }
 
         let _ = self.shutdown_broadcast.send(());

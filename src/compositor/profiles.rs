@@ -75,6 +75,20 @@ pub enum Quirk {
     /// - Any system with Portal < version 2
     ClipboardUnavailable,
 
+    /// ext-image-copy-capture advertised but handshake never completes
+    ///
+    /// This quirk is set when the compositor advertises the ext-image-copy-capture
+    /// protocol via Wayland globals but does not send the required constraint events
+    /// (buffer_size, shm_format, done) after session creation. This causes a
+    /// permanent zero-frame stall.
+    ///
+    /// When this quirk is present, capture protocol selection marks
+    /// ext-image-copy-capture as broken and prefers wlr-screencopy.
+    ///
+    /// Known affected compositors:
+    /// - Hyprland 0.54+ (advertises ext-capture, doesn't send constraints)
+    ExtCaptureIncomplete,
+
     /// Portal clipboard operations crash xdg-desktop-portal-kde
     ///
     /// This quirk is set for KDE Plasma when Klipper is active. The portal's
@@ -111,6 +125,9 @@ impl Quirk {
             Self::ColorSpaceQuirk => "Color space may be incorrect",
             Self::ForceAvc420 => "AVC444 disabled, AVC420 only (older driver stack)",
             Self::ClipboardUnavailable => "Clipboard sync not available (Portal v1)",
+            Self::ExtCaptureIncomplete => {
+                "ext-capture handshake incomplete (prefer wlr-screencopy)"
+            }
             Self::KdePortalClipboardUnstable => {
                 "Portal clipboard crashes on KDE (Klipper cooperation pending)"
             }
@@ -205,19 +222,19 @@ impl CompositorProfile {
         let mut quirks = vec![Quirk::RequiresWaylandSession, Quirk::RestartCaptureOnResize];
 
         // RHEL 9 specific quirks
-        if let Some(ref os) = os_release {
-            if os.is_rhel9() {
-                // Portal v1 on RHEL 9/GNOME 40 doesn't support clipboard
-                quirks.push(Quirk::ClipboardUnavailable);
-                // AVC444 produces protocol errors or blurry text on RHEL 9 / GNOME 40.
-                // Root cause under investigation. Force AVC420-only encoding.
-                quirks.push(Quirk::ForceAvc420);
+        if let Some(ref os) = os_release
+            && os.is_rhel9()
+        {
+            // Portal v1 on RHEL 9/GNOME 40 doesn't support clipboard
+            quirks.push(Quirk::ClipboardUnavailable);
+            // AVC444 produces protocol errors or blurry text on RHEL 9 / GNOME 40.
+            // Root cause under investigation. Force AVC420-only encoding.
+            quirks.push(Quirk::ForceAvc420);
 
-                tracing::info!(
-                    "RHEL 9 detected ({}) - applying platform quirks: clipboard unavailable, force AVC420",
-                    os.version_id
-                );
-            }
+            tracing::info!(
+                "RHEL 9 detected ({}) - applying platform quirks: clipboard unavailable, force AVC420",
+                os.version_id
+            );
         }
 
         Self {
@@ -318,6 +335,35 @@ impl CompositorProfile {
 
     /// Hyprland profile
     fn hyprland_profile(version: Option<&str>) -> Self {
+        // Hyprland 0.54+ advertises ext-image-copy-capture but doesn't send
+        // constraint events, causing permanent zero-frame stall. The protocol
+        // works fine on earlier versions (where it isn't advertised at all)
+        // and may be fixed in future versions.
+        let has_broken_ext_capture = version
+            .and_then(|v| {
+                let parts: Vec<&str> = v.split('.').collect();
+                if parts.len() >= 2 {
+                    let minor = parts[1].parse::<u32>().ok()?;
+                    Some(minor >= 54)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(true); // Conservative: assume broken if version unknown
+
+        let mut quirks = vec![
+            Quirk::NeedsExplicitCursorComposite,
+            Quirk::InconsistentFrameTiming,
+        ];
+
+        if has_broken_ext_capture {
+            quirks.push(Quirk::ExtCaptureIncomplete);
+            tracing::info!(
+                "Hyprland {} - ext-capture handshake incomplete, will prefer wlr-screencopy",
+                version.unwrap_or("unknown")
+            );
+        }
+
         Self {
             compositor: CompositorType::Hyprland {
                 version: version.map(String::from),
@@ -333,10 +379,7 @@ impl CompositorProfile {
             recommended_buffer_type: BufferType::DmaBuf,
             supports_damage_hints: true,
             supports_explicit_sync: true,
-            quirks: vec![
-                Quirk::NeedsExplicitCursorComposite,
-                Quirk::InconsistentFrameTiming, // Can be choppy with animations
-            ],
+            quirks,
             recommended_fps_cap: 60,
             portal_timeout_ms: 15000,
         }
@@ -522,5 +565,25 @@ mod tests {
         };
         let profile = CompositorProfile::for_compositor(&gnome);
         assert_eq!(profile.portal_backend, Some("gnome".to_string()));
+    }
+
+    #[test]
+    fn test_hyprland_054_has_ext_capture_quirk() {
+        let profile = CompositorProfile::hyprland_profile(Some("0.54.1"));
+        assert!(profile.has_quirk(&Quirk::ExtCaptureIncomplete));
+        assert_eq!(profile.recommended_capture, CaptureBackend::WlrScreencopy);
+    }
+
+    #[test]
+    fn test_hyprland_053_no_ext_capture_quirk() {
+        let profile = CompositorProfile::hyprland_profile(Some("0.53.3"));
+        assert!(!profile.has_quirk(&Quirk::ExtCaptureIncomplete));
+    }
+
+    #[test]
+    fn test_hyprland_unknown_version_conservative() {
+        let profile = CompositorProfile::hyprland_profile(None);
+        // Unknown version should be conservative and assume broken
+        assert!(profile.has_quirk(&Quirk::ExtCaptureIncomplete));
     }
 }

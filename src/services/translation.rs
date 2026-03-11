@@ -466,7 +466,7 @@ fn translate_session_persistence(caps: &CompositorCapabilities) -> AdvertisedSer
         (false, _, _) => ServiceLevel::Unavailable,
     };
 
-    let service = match level {
+    match level {
         ServiceLevel::Guaranteed => {
             AdvertisedService::guaranteed(ServiceId::SessionPersistence, feature)
         }
@@ -486,14 +486,12 @@ fn translate_session_persistence(caps: &CompositorCapabilities) -> AdvertisedSer
             };
             AdvertisedService::degraded(ServiceId::SessionPersistence, feature, &note)
         }
-        ServiceLevel::Unavailable => {
-            return AdvertisedService::unavailable(ServiceId::SessionPersistence).with_note(
-                &format!("Portal v{} does not support restore tokens", portal.version),
-            );
-        }
-    };
-
-    service
+        ServiceLevel::Unavailable => AdvertisedService::unavailable(ServiceId::SessionPersistence)
+            .with_note(&format!(
+                "Portal v{} does not support restore tokens",
+                portal.version
+            )),
+    }
 }
 
 fn translate_direct_compositor_api(caps: &CompositorCapabilities) -> AdvertisedService {
@@ -587,7 +585,7 @@ fn translate_credential_storage(caps: &CompositorCapabilities) -> AdvertisedServ
         _ => None,
     };
 
-    let service = match level {
+    match level {
         ServiceLevel::Guaranteed => {
             let mut s = AdvertisedService::guaranteed(ServiceId::CredentialStorage, feature);
             if let Some(n) = note {
@@ -608,9 +606,7 @@ fn translate_credential_storage(caps: &CompositorCapabilities) -> AdvertisedServ
             note.as_deref().unwrap_or("Credential storage degraded"),
         ),
         ServiceLevel::Unavailable => AdvertisedService::unavailable(ServiceId::CredentialStorage),
-    };
-
-    service
+    }
 }
 
 fn translate_wlr_screencopy(caps: &CompositorCapabilities) -> AdvertisedService {

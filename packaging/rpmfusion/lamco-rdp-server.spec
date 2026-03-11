@@ -6,7 +6,7 @@
 #
 
 Name:           lamco-rdp-server
-Version:        1.4.1
+Version:        1.4.2
 Release:        1%{?dist}
 Summary:        Wayland RDP server for Linux desktop sharing with GUI
 
@@ -19,6 +19,10 @@ Summary:        Wayland RDP server for Linux desktop sharing with GUI
 License:        0BSD AND Apache-2.0 AND Apache-2.0 WITH LLVM-exception AND BSD-1-Clause AND BSD-2-Clause AND BSD-3-Clause AND BSL-1.0 AND BUSL-1.1 AND CC0-1.0 AND GPL-2.0-only AND ISC AND LGPL-2.1-or-later AND MIT AND MIT-0 AND MPL-2.0 AND NCSA AND OpenSSL AND Unicode-3.0 AND Unlicense AND Zlib
 URL:            https://www.lamco.ai/products/lamco-rdp-server/
 Source0:        https://github.com/lamco-admin/lamco-rdp-server/releases/download/v%{version}/%{name}-%{version}.tar.xz
+
+# No Wayland desktop use case on ppc64le; also OOM during Rust compilation
+# on ppc64le builders (cargo-rpm-macros overrides codegen-units settings)
+ExcludeArch:    ppc64le
 
 # Disable Fedora's system-level LTO flags to prevent double-LTO interaction
 # with Cargo's own LTO (we use CARGO_PROFILE_RELEASE_LTO=thin below)
@@ -965,7 +969,7 @@ Provides:       bundled(crate(x11rb-protocol)) = 0.13.2
 Provides:       bundled(crate(x25519-dalek)) = 3.0.0~pre.1
 Provides:       bundled(crate(x509-cert)) = 0.2.5
 Provides:       bundled(crate(xcursor)) = 0.3.10
-Provides:       bundled(crate(xdg-desktop-portal-generic)) = 0.1.0
+Provides:       bundled(crate(xdg-desktop-portal-generic)) = 0.2.0
 Provides:       bundled(crate(xdg-home)) = 1.3.0
 Provides:       bundled(crate(xkbcommon)) = 0.7.0
 Provides:       bundled(crate(xkbcommon)) = 0.8.0
@@ -1096,6 +1100,28 @@ appstream-util validate-relax --nonet %{buildroot}%{_metainfodir}/io.lamco.rdp-s
 %{_datadir}/icons/hicolor/*/apps/io.lamco.rdp-server.png
 
 %changelog
+* Tue Mar 10 2026 Greg Lamberson <greg@lamco.io> - 1.4.2-1
+- Map Unicode keyboard events to evdev keycodes (rdpdo utype support)
+- Add PipeWire DRIVER stream flag for static desktop frame delivery
+- Handle Wayland WouldBlock errors gracefully in event loop
+- MIME charset fallback for clipboard interop across compositors
+- Fix PipeWire format negotiation to parse compositor-chosen resolution
+- Upgrade to pipewire-rs 0.9.2 (fixes libspa 0.8.0 build failure)
+
+* Thu Mar 05 2026 Greg Lamberson <greg@lamco.io> - 1.4.1-3
+- Fix BitmapConverter not resetting on client reconnection
+- Fix EGFX init flag clearing for non-AVC clients
+- Enable bitmap fallback for V8 EGFX clients without AVC support
+- Fix CPU spin loops in bare continue paths
+- Improve FUSE clipboard mount and PipeWire disconnect error messages
+- ExcludeArch: ppc64le (OOM during Rust compilation on builders)
+
+* Tue Mar 03 2026 Greg Lamberson <greg@lamco.io> - 1.4.1-2
+- Fix systemd service: move StartLimitIntervalSec/Burst to [Unit] section
+- Fix systemd service: allow mount/umount2 syscalls for FUSE clipboard
+- Fix systemd service: remove capability directives that fail in unprivileged VMs
+- Fix systemd service: remove ProtectHome=read-only (hangs KDE plasmashell)
+
 * Tue Mar 03 2026 Greg Lamberson <greg@lamco.io> - 1.4.1-1
 - Source alignment release: all channels reference identical source
 - Carry forward cargo-rpm-macros integration from 1.4.0-3

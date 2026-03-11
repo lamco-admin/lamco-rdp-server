@@ -27,7 +27,7 @@
 //!
 //! See MS-RDPEGFX Section 3.3.8.3.2 and Figure 7 for the specification.
 
-use super::color_convert::{subsample_chroma_420, ColorMatrix, Yuv444Frame};
+use super::color_convert::{ColorMatrix, Yuv444Frame, subsample_chroma_420};
 
 /// YUV420 frame (4:2:0 chroma subsampling)
 ///
@@ -592,8 +592,8 @@ fn pack_auxiliary_view_spec_compliant(yuv444: &Yuv444Frame) -> Yuv420Frame {
         let frame_hash = hasher.finish();
 
         use std::sync::{
-            atomic::{AtomicU64, Ordering},
             Mutex, OnceLock,
+            atomic::{AtomicU64, Ordering},
         };
         static PREV_HASH: AtomicU64 = AtomicU64::new(0);
         static FRAME_NUM: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -609,7 +609,10 @@ fn pack_auxiliary_view_spec_compliant(yuv444: &Yuv444Frame) -> Yuv420Frame {
                 frame_num, frame_hash
             );
         } else if prev != 0 {
-            debug!("[Frame #{}] ⚠️  TEMPORAL CHANGE: Auxiliary DIFFERENT (prev: 0x{:016x}, curr: 0x{:016x})", frame_num, prev, frame_hash);
+            debug!(
+                "[Frame #{}] ⚠️  TEMPORAL CHANGE: Auxiliary DIFFERENT (prev: 0x{:016x}, curr: 0x{:016x})",
+                frame_num, prev, frame_hash
+            );
 
             // OPTION 2: Find first byte that differs
             let buffers =
@@ -624,7 +627,7 @@ fn pack_auxiliary_view_spec_compliant(yuv444: &Yuv444Frame) -> Yuv420Frame {
                         .iter()
                         .zip(prev_y.iter())
                         .enumerate()
-                        .find(|(_, (&a, &b))| a != b)
+                        .find(|&(_, (&a, &b))| a != b)
                         .map(|(i, (&a, &b))| (i, b, a))
                     {
                         let region = if idx < height * width {
@@ -643,7 +646,7 @@ fn pack_auxiliary_view_spec_compliant(yuv444: &Yuv444Frame) -> Yuv420Frame {
                         .iter()
                         .zip(prev_u.iter())
                         .enumerate()
-                        .find(|(_, (&a, &b))| a != b)
+                        .find(|&(_, (&a, &b))| a != b)
                         .map(|(i, (&a, &b))| (i, b, a))
                     {
                         let data_size = chroma_height * chroma_width;
@@ -665,7 +668,7 @@ fn pack_auxiliary_view_spec_compliant(yuv444: &Yuv444Frame) -> Yuv420Frame {
                         .iter()
                         .zip(prev_v.iter())
                         .enumerate()
-                        .find(|(_, (&a, &b))| a != b)
+                        .find(|&(_, (&a, &b))| a != b)
                         .map(|(i, (&a, &b))| (i, b, a))
                     {
                         let data_size = chroma_height * chroma_width;

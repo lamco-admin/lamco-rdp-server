@@ -9,7 +9,7 @@
 use std::{collections::HashMap, time::Duration};
 
 use tokio::sync::mpsc;
-use zbus::{proxy, zvariant::OwnedValue, Connection};
+use zbus::{Connection, proxy, zvariant::OwnedValue};
 
 use super::server_process::{LogLevel, ServerLogLine};
 
@@ -176,11 +176,7 @@ impl DbusClient {
             .await
             .map_err(|e| format!("D-Bus call failed: {}", e))?;
 
-        if success {
-            Ok(())
-        } else {
-            Err(error)
-        }
+        if success { Ok(()) } else { Err(error) }
     }
 
     /// Reload configuration from disk
@@ -191,11 +187,7 @@ impl DbusClient {
             .await
             .map_err(|e| format!("D-Bus call failed: {}", e))?;
 
-        if success {
-            Ok(())
-        } else {
-            Err(error)
-        }
+        if success { Ok(()) } else { Err(error) }
     }
 
     /// Get runtime statistics

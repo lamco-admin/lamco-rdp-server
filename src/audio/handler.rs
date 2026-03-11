@@ -116,6 +116,20 @@ impl PipeWireAudioHandler {
                 bits_per_sample: 16,
                 extra_data: None,
             });
+
+            // 44.1kHz fallback for clients that only support CD-quality rates
+            if sample_rate != 44100 {
+                let fallback_bytes_per_sec = 44100 * channels as u32 * 2;
+                format_specs.push(FormatSpec {
+                    format_tag: WaveFormat::PCM,
+                    channels,
+                    sample_rate: 44100,
+                    avg_bytes_per_sec: fallback_bytes_per_sec,
+                    block_align,
+                    bits_per_sample: 16,
+                    extra_data: None,
+                });
+            }
         }
 
         if audio_config.codec == "adpcm" || audio_config.codec == "auto" {
@@ -158,7 +172,11 @@ impl PipeWireAudioHandler {
 
         info!(
             "PipeWire audio handler: codec={}, sample_rate={}, channels={}, formats={}, node_id={:?}",
-            audio_config.codec, sample_rate, channels, formats.len(), node_id
+            audio_config.codec,
+            sample_rate,
+            channels,
+            formats.len(),
+            node_id
         );
 
         Self {
@@ -217,7 +235,11 @@ impl PipeWireAudioHandler {
                 };
                 debug!(
                     "Creating OPUS encoder: sample_rate={}, channels={}, bitrate={}, frame_size={} ({}ms)",
-                    config.sample_rate, config.channels, config.bitrate, config.frame_size, self.audio_config.frame_ms
+                    config.sample_rate,
+                    config.channels,
+                    config.bitrate,
+                    config.frame_size,
+                    self.audio_config.frame_ms
                 );
                 match AudioEncoder::opus_with_config(config) {
                     Ok(enc) => Some(enc),
@@ -284,6 +306,11 @@ impl RdpsndServerHandler for PipeWireAudioHandler {
     }
 
     fn stop(&mut self) {
+        if !self.active {
+            // Never started (e.g. connection dropped before TrainingConfirm),
+            // nothing to tear down
+            return;
+        }
         info!("Audio handler stopping");
         self.active = false;
         self.selected_format = None;

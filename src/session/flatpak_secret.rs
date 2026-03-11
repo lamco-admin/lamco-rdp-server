@@ -10,7 +10,7 @@
 //! 2. Secret Service D-Bus — requires `--talk-name=org.freedesktop.secrets` permission
 //! 3. Encrypted file — always available, uses machine-ID-derived key
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use tracing::{debug, info, warn};
 
 use super::secret_service::AsyncSecretServiceClient;

@@ -209,11 +209,17 @@ fn validate_input_config(
         });
     }
 
-    // Warn about libei requirement for wlroots
-    if !config.input.use_libei {
+    // Warn about explicit protocol override
+    if config.input.input_protocol == "libei" {
         warnings.push(ValidationWarning {
-            field: "input.use_libei".to_string(),
-            message: "libei is disabled. This may cause input issues on wlroots compositors."
+            field: "input.input_protocol".to_string(),
+            message: "libei forced. EIS input does not work on wlroots/Smithay compositors."
+                .to_string(),
+        });
+    } else if config.input.input_protocol == "wlr" {
+        warnings.push(ValidationWarning {
+            field: "input.input_protocol".to_string(),
+            message: "wlr forced. Virtual-input protocols require a wlroots/Smithay compositor."
                 .to_string(),
         });
     }
@@ -563,10 +569,12 @@ mod tests {
         let mut config = Config::default();
         config.server.listen_addr = "invalid".to_string();
         let result = validate_config(&config);
-        assert!(result
-            .errors
-            .iter()
-            .any(|e| e.field == "server.listen_addr"));
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.field == "server.listen_addr")
+        );
     }
 
     #[test]

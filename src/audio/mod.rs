@@ -82,7 +82,7 @@ pub use codecs::{
     AdpcmDecoder, AdpcmEncoder, AlawEncoder, AudioEncoder, G711Encoder, G711Variant, MulawEncoder,
     OpusApplication, OpusEncoder, OpusEncoderConfig, PcmEncoder,
 };
-pub use factory::{create_sound_factory, LamcoSoundFactory};
+pub use factory::{LamcoSoundFactory, create_sound_factory};
 pub use handler::PipeWireAudioHandler;
 pub use pipeline::{AudioPipeline, FrameBuffer, PipelineConfig, PipelineState, PipelineStats};
 

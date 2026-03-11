@@ -3,8 +3,8 @@
 //! Threading, adaptive FPS, and latency governor settings.
 
 use iced::{
-    widget::{button, column, pick_list, row, slider, text},
     Alignment, Element, Length,
+    widget::{button, column, pick_list, row, slider, text},
 };
 
 use crate::gui::{

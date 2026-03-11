@@ -11,7 +11,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 use zbus::object_server::InterfaceRef;
 
-use super::{manager::RdpServerManager, SharedServerState, OBJECT_PATH};
+use super::{OBJECT_PATH, SharedServerState, manager::RdpServerManager};
 
 /// Events emitted by the server runtime for external consumption.
 ///
@@ -181,7 +181,7 @@ async fn emit_state_changed(
     let iface_ref: InterfaceRef<RdpServerManager> =
         connection.object_server().interface(OBJECT_PATH).await?;
 
-    RdpServerManager::server_state_changed(iface_ref.signal_context(), old, new, message).await
+    RdpServerManager::server_state_changed(iface_ref.signal_emitter(), old, new, message).await
 }
 
 async fn emit_client_connected(
@@ -194,7 +194,7 @@ async fn emit_client_connected(
         connection.object_server().interface(OBJECT_PATH).await?;
 
     RdpServerManager::client_connected(
-        iface_ref.signal_context(),
+        iface_ref.signal_emitter(),
         client_id,
         peer_address,
         timestamp,
@@ -212,7 +212,7 @@ async fn emit_client_disconnected(
         connection.object_server().interface(OBJECT_PATH).await?;
 
     RdpServerManager::client_disconnected(
-        iface_ref.signal_context(),
+        iface_ref.signal_emitter(),
         client_id,
         reason,
         duration_seconds,
@@ -227,7 +227,7 @@ async fn emit_config_reloaded(
     let iface_ref: InterfaceRef<RdpServerManager> =
         connection.object_server().interface(OBJECT_PATH).await?;
 
-    RdpServerManager::config_reloaded(iface_ref.signal_context(), config_path).await
+    RdpServerManager::config_reloaded(iface_ref.signal_emitter(), config_path).await
 }
 
 #[cfg(test)]

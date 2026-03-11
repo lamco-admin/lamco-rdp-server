@@ -3,8 +3,8 @@
 //! Server status, service registry display, and live log viewer.
 
 use iced::{
-    widget::{button, column, container, pick_list, row, scrollable, text},
     Alignment, Element, Length,
+    widget::{button, column, container, pick_list, row, scrollable, text},
 };
 
 use crate::gui::{

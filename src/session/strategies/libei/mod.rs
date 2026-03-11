@@ -12,32 +12,22 @@
 //!
 //! ```text
 //! lamco-rdp-server (Flatpak or native)
-//!   ↓ D-Bus
+//!   | D-Bus
 //! Portal RemoteDesktop
-//!   ├─ CreateSession()
-//!   ├─ SelectDevices(keyboard, pointer)
-//!   ├─ Start() → user approves if needed
-//!   └─ ConnectToEIS() → Unix socket FD
-//!       ↓
+//!   +- CreateSession()
+//!   +- SelectDevices(keyboard, pointer, touchscreen)
+//!   +- Start() -> user approves if needed
+//!   +- ConnectToEIS() -> Unix socket FD
+//!       |
 //! EIS Protocol (via reis crate)
-//!   ├─ Handshake (version, capabilities)
-//!   ├─ Seat discovery
-//!   ├─ Device creation (keyboard, pointer)
-//!   └─ Event streaming (key, motion, button, scroll)
-//!       ↓
+//!   +- Handshake (version, capabilities)
+//!   +- Seat discovery
+//!   +- Device creation (keyboard, pointer, touchscreen)
+//!   +- Event streaming (key, motion, button, scroll, touch)
+//!       |
 //! Portal backend (xdg-desktop-portal-wlr, hyprland, etc.)
-//!   └─ Compositor protocols (zwp_virtual_keyboard, zwlr_virtual_pointer)
+//!   +- Compositor protocols (zwp_virtual_keyboard, zwlr_virtual_pointer)
 //! ```
-//!
-//! # Event-Driven Model
-//!
-//! The EIS protocol is event-driven:
-//! 1. Create context from socket FD
-//! 2. Perform handshake → receive connection and event stream
-//! 3. Listen for SeatAdded events → bind capabilities
-//! 4. Listen for DeviceAdded events → get keyboard/pointer devices
-//! 5. Send input events via devices
-//! 6. Frame events to group related inputs
 //!
 //! # Compatibility
 //!
@@ -50,22 +40,23 @@
 
 use std::{collections::HashMap, os::unix::net::UnixStream, sync::Arc};
 
-use anyhow::{anyhow, Context as AnyhowContext, Result};
+use anyhow::{Context as AnyhowContext, Result};
 use ashpd::desktop::{
-    remote_desktop::{DeviceType, RemoteDesktop},
     PersistMode,
+    remote_desktop::{DeviceType, RemoteDesktop},
 };
 use async_trait::async_trait;
 use futures::stream::StreamExt;
-use reis::{ei, tokio::EiEventStream, PendingRequestResult};
+use reis::{PendingRequestResult, ei, tokio::EiEventStream};
 use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, error, info, warn};
 
+use super::eis_common::{self, DeviceData, EisDevices};
 use crate::{
     health::{HealthEvent, HealthReporter},
     session::{
-        strategy::{PipeWireAccess, SessionHandle, SessionStrategy, SessionType, StreamInfo},
         Tokens,
+        strategy::{PipeWireAccess, SessionHandle, SessionStrategy, SessionType, StreamInfo},
     },
 };
 
@@ -73,10 +64,8 @@ use crate::{
 ///
 /// Provides input injection via Portal RemoteDesktop + EIS protocol.
 pub struct LibeiStrategy {
-    /// Optional Portal manager for session management
     #[expect(dead_code, reason = "retained for future EIS session recovery")]
     portal_manager: Option<Arc<lamco_portal::PortalManager>>,
-    /// Token manager for session persistence (avoids permission dialog on restart)
     token_manager: Option<Arc<Tokens>>,
 }
 
@@ -94,11 +83,7 @@ impl LibeiStrategy {
     pub async fn is_available() -> bool {
         match RemoteDesktop::new().await {
             Ok(_rd) => {
-                // Try to check if ConnectToEIS is available
-                // This is a v2+ method, older portals won't have it
                 debug!("[libei] Portal RemoteDesktop proxy created successfully");
-                // We can't easily check for ConnectToEIS without creating a session
-                // Assume available if RemoteDesktop portal exists
                 true
             }
             Err(e) => {
@@ -122,23 +107,19 @@ impl SessionStrategy for LibeiStrategy {
     }
 
     fn requires_initial_setup(&self) -> bool {
-        // Portal RemoteDesktop requires user approval
         true
     }
 
     fn supports_unattended_restore(&self) -> bool {
-        // Supports restore tokens if Portal v4+
         true
     }
 
     async fn create_session(&self) -> Result<Arc<dyn SessionHandle>> {
-        info!("🚀 libei: Creating session with Portal RemoteDesktop + EIS");
+        info!("libei: Creating session with Portal RemoteDesktop + EIS");
 
         let remote_desktop = RemoteDesktop::new()
             .await
             .context("Failed to create RemoteDesktop proxy")?;
-
-        info!("🔌 libei: Creating Portal RemoteDesktop session");
 
         let session = remote_desktop
             .create_session()
@@ -168,14 +149,14 @@ impl SessionStrategy for LibeiStrategy {
         remote_desktop
             .select_devices(
                 &session,
-                DeviceType::Keyboard | DeviceType::Pointer,
+                DeviceType::Keyboard | DeviceType::Pointer | DeviceType::Touchscreen,
                 restore_token.as_deref(),
                 PersistMode::ExplicitlyRevoked,
             )
             .await
             .context("Failed to select input devices")?;
 
-        info!("✅ libei: Selected keyboard and pointer devices");
+        info!("libei: Selected keyboard, pointer, and touchscreen devices");
 
         let response = remote_desktop
             .start(&session, None)
@@ -184,36 +165,29 @@ impl SessionStrategy for LibeiStrategy {
 
         // Extract and save restore token for future sessions
         let selected = response.response()?;
-        let new_token = selected.restore_token().map(|s| s.to_string());
+        let new_token = selected.restore_token().map(ToString::to_string);
 
         if let Some(ref token) = new_token {
             info!("libei: Received restore token ({} chars)", token.len());
-            if let Some(ref tm) = self.token_manager {
-                if let Err(e) = tm.save_token("libei-default", token).await {
-                    warn!("libei: Failed to save restore token: {}", e);
-                }
+            if let Some(ref tm) = self.token_manager
+                && let Err(e) = tm.save_token("libei-default", token).await
+            {
+                warn!("libei: Failed to save restore token: {}", e);
             }
         } else {
             debug!("[libei] No restore token in response (portal may not support persistence)");
         }
 
-        info!("✅ libei: RemoteDesktop session started");
-
-        info!("🔌 libei: Calling ConnectToEIS to get socket FD");
+        info!("libei: RemoteDesktop session started, calling ConnectToEIS");
 
         let fd = remote_desktop
             .connect_to_eis(&session)
             .await
             .context("ConnectToEIS failed - portal may not support this method (requires v2+)")?;
 
-        info!("✅ libei: Received EIS socket FD");
-
         let stream = UnixStream::from(fd);
-
         let context =
             ei::Context::new(stream).context("Failed to create EIS context from socket")?;
-
-        info!("🔑 libei: EIS context created, performing handshake");
 
         let mut events =
             EiEventStream::new(context.clone()).context("Failed to create EIS event stream")?;
@@ -226,7 +200,7 @@ impl SessionStrategy for LibeiStrategy {
         .await
         .context("EIS handshake failed")?;
 
-        info!("✅ libei: EIS handshake complete, connection established");
+        info!("libei: EIS handshake complete");
 
         let handle = Arc::new(LibeiSessionHandleImpl {
             portal_session: Arc::new(RwLock::new(session)),
@@ -234,45 +208,26 @@ impl SessionStrategy for LibeiStrategy {
             connection: Arc::new(Mutex::new(handshake_resp.connection)),
             event_stream: Arc::new(Mutex::new(events)),
             seats: Arc::new(Mutex::new(HashMap::new())),
-            devices: Arc::new(Mutex::new(HashMap::new())),
-            keyboard_device: Arc::new(Mutex::new(None)),
-            pointer_device: Arc::new(Mutex::new(None)),
+            devices: Arc::new(EisDevices::new(handshake_resp.serial)),
             streams: Arc::new(Mutex::new(vec![])),
-            last_serial: Arc::new(Mutex::new(handshake_resp.serial)),
             health_reporter: std::sync::OnceLock::new(),
         });
 
         let handle_clone = handle.clone();
         tokio::spawn(async move {
             if let Err(e) = handle_clone.event_loop().await {
-                error!("❌ libei: Event loop error: {:#}", e);
+                error!("libei: Event loop error: {:#}", e);
             }
         });
 
-        info!("✅ libei: Session created with background event loop");
+        info!("libei: Session created with background event loop");
 
         Ok(handle as Arc<dyn SessionHandle>)
     }
 
     async fn cleanup(&self, _session: &dyn SessionHandle) -> Result<()> {
-        info!("🔒 libei: Session cleanup complete");
+        info!("libei: Session cleanup complete");
         Ok(())
-    }
-}
-
-/// Device data for EIS devices
-#[derive(Default)]
-struct DeviceData {
-    name: Option<String>,
-    device_type: Option<ei::device::DeviceType>,
-    interfaces: HashMap<String, reis::Object>,
-    #[expect(dead_code, reason = "tracks which seat owns this device")]
-    seat: Option<ei::Seat>,
-}
-
-impl DeviceData {
-    fn interface<T: reis::Interface>(&self) -> Option<T> {
-        self.interfaces.get(T::NAME)?.clone().downcast()
     }
 }
 
@@ -293,18 +248,13 @@ pub struct LibeiSessionHandleImpl {
     connection: Arc<Mutex<ei::Connection>>,
     event_stream: Arc<Mutex<EiEventStream>>,
     seats: Arc<Mutex<HashMap<ei::Seat, SeatData>>>,
-    devices: Arc<Mutex<HashMap<ei::Device, DeviceData>>>,
-    keyboard_device: Arc<Mutex<Option<ei::Device>>>,
-    pointer_device: Arc<Mutex<Option<ei::Device>>>,
+    devices: Arc<EisDevices>,
     streams: Arc<Mutex<Vec<StreamInfo>>>,
-    last_serial: Arc<Mutex<u32>>,
     health_reporter: std::sync::OnceLock<HealthReporter>,
 }
 
 impl LibeiSessionHandleImpl {
     /// Background event loop for EIS protocol
-    ///
-    /// Handles seat/device discovery and maintains EIS connection state.
     async fn event_loop(&self) -> Result<()> {
         let mut events = self.event_stream.lock().await;
 
@@ -312,7 +262,7 @@ impl LibeiSessionHandleImpl {
             let event = match result {
                 Ok(PendingRequestResult::Request(event)) => event,
                 Ok(PendingRequestResult::ParseError(msg)) => {
-                    warn!("⚠️  libei: EIS parse error: {}", msg);
+                    warn!("libei: EIS parse error: {}", msg);
                     continue;
                 }
                 Ok(PendingRequestResult::InvalidObject(obj_id)) => {
@@ -320,7 +270,7 @@ impl LibeiSessionHandleImpl {
                     continue;
                 }
                 Err(e) => {
-                    error!("❌ libei: Event stream error: {}", e);
+                    error!("libei: Event stream error: {}", e);
                     if let Some(r) = self.health_reporter.get() {
                         r.report(HealthEvent::EisStreamEnded {
                             reason: format!("stream error: {e}"),
@@ -333,7 +283,7 @@ impl LibeiSessionHandleImpl {
             self.handle_event(event).await?;
         }
 
-        info!("🔌 libei: Event loop terminated");
+        info!("libei: Event loop terminated");
         if let Some(r) = self.health_reporter.get() {
             r.report(HealthEvent::EisStreamEnded {
                 reason: "stream EOF".into(),
@@ -359,7 +309,10 @@ impl LibeiSessionHandleImpl {
 
             ei::Event::Seat(seat, request) => {
                 let mut seats = self.seats.lock().await;
-                let data = seats.get_mut(&seat).unwrap();
+                let Some(data) = seats.get_mut(&seat) else {
+                    warn!("[libei] Received event for unknown seat, ignoring");
+                    return Ok(());
+                };
 
                 match request {
                     ei::seat::Event::Name { name } => {
@@ -379,16 +332,16 @@ impl LibeiSessionHandleImpl {
                         let _ = self.context.flush();
 
                         info!(
-                            "✅ libei: Seat '{}' ready with capabilities: {:?}",
+                            "libei: Seat '{}' ready with capabilities: {:?}",
                             data.name.as_deref().unwrap_or("unknown"),
                             data.capabilities.keys().collect::<Vec<_>>()
                         );
                     }
                     ei::seat::Event::Device { device } => {
                         debug!("[libei] Device added to seat");
-                        let mut devices = self.devices.lock().await;
-                        devices.insert(
-                            device.clone(),
+                        let mut devs = self.devices.all.lock().await;
+                        devs.insert(
+                            device,
                             DeviceData {
                                 seat: Some(seat.clone()),
                                 ..Default::default()
@@ -400,8 +353,11 @@ impl LibeiSessionHandleImpl {
             }
 
             ei::Event::Device(device, request) => {
-                let mut devices = self.devices.lock().await;
-                let data = devices.get_mut(&device).unwrap();
+                let mut devs = self.devices.all.lock().await;
+                let Some(data) = devs.get_mut(&device) else {
+                    warn!("[libei] Received event for unknown device, ignoring");
+                    return Ok(());
+                };
 
                 match request {
                     ei::device::Event::Name { name } => {
@@ -418,32 +374,7 @@ impl LibeiSessionHandleImpl {
                         debug!("[libei] Device interface: {}", interface_name);
                     }
                     ei::device::Event::Done => {
-                        if let Some(device_type) = data.device_type {
-                            match device_type {
-                                ei::device::DeviceType::Physical => {
-                                    // Physical device - for InputCapture (receiver)
-                                    // We're a sender, so ignore
-                                }
-                                ei::device::DeviceType::Virtual => {
-                                    // Virtual device - for RemoteDesktop (sender)
-                                    if data.interface::<ei::Keyboard>().is_some() {
-                                        debug!("[libei] Found keyboard device");
-                                        let mut kbd = self.keyboard_device.lock().await;
-                                        *kbd = Some(device.clone());
-                                        info!("✅ libei: Keyboard device ready");
-                                    }
-                                    if data.interface::<ei::Pointer>().is_some()
-                                        || data.interface::<ei::PointerAbsolute>().is_some()
-                                    {
-                                        debug!("[libei] Found pointer device");
-                                        let mut ptr = self.pointer_device.lock().await;
-                                        *ptr = Some(device.clone());
-                                        info!("✅ libei: Pointer device ready");
-                                    }
-                                }
-                            }
-                        }
-
+                        eis_common::assign_device_roles(&device, data, &self.devices).await;
                         debug!(
                             "[libei] Device '{}' ready with interfaces: {:?}",
                             data.name.as_deref().unwrap_or("unknown"),
@@ -451,31 +382,17 @@ impl LibeiSessionHandleImpl {
                         );
                     }
                     ei::device::Event::Resumed { serial } => {
-                        *self.last_serial.lock().await = serial;
+                        *self.devices.last_serial.lock().await = serial;
                         debug!("[libei] Device resumed with serial: {}", serial);
                     }
                     _ => {}
                 }
             }
 
-            _ => {
-                // Ignore other events (keyboard keymap, etc.)
-            }
+            _ => {}
         }
 
         Ok(())
-    }
-
-    async fn current_serial(&self) -> u32 {
-        *self.last_serial.lock().await
-    }
-
-    fn current_time_us() -> u64 {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_micros() as u64
     }
 }
 
@@ -486,10 +403,9 @@ impl SessionHandle for LibeiSessionHandleImpl {
     }
 
     fn pipewire_access(&self) -> PipeWireAccess {
-        // libei provides input only (no video capture)
-        // Video comes from Portal ScreenCast (separate session)
+        // libei provides input only; video comes from Portal ScreenCast
         warn!(
-            "⚠️  libei: pipewire_access() called but this strategy provides input only. \
+            "libei: pipewire_access() called but this strategy provides input only. \
              Video capture requires Portal ScreenCast."
         );
         PipeWireAccess::NodeId(0)
@@ -504,164 +420,38 @@ impl SessionHandle for LibeiSessionHandleImpl {
     }
 
     async fn notify_keyboard_keycode(&self, keycode: i32, pressed: bool) -> Result<()> {
-        let kbd_device_opt = {
-            let kbd = self.keyboard_device.lock().await;
-            kbd.clone()
-        };
-
-        let device = kbd_device_opt.ok_or_else(|| anyhow!("Keyboard device not yet available"))?;
-
-        let devices = self.devices.lock().await;
-        let device_data = devices
-            .get(&device)
-            .ok_or_else(|| anyhow!("Keyboard device data not found"))?;
-
-        let keyboard = device_data
-            .interface::<ei::Keyboard>()
-            .ok_or_else(|| anyhow!("Keyboard interface not found on device"))?;
-
-        drop(devices);
-
-        // EIS keycodes are offset by 8 from evdev (Linux kernel offset)
-        let eis_keycode = (keycode - 8) as u32;
-        let state = if pressed {
-            ei::keyboard::KeyState::Press
-        } else {
-            ei::keyboard::KeyState::Released
-        };
-
-        keyboard.key(eis_keycode, state);
-
-        let serial = self.current_serial().await;
-        let time = Self::current_time_us();
-        device.frame(serial, time);
-
-        self.context.flush()?;
-
-        debug!(
-            "[libei] Keyboard event: keycode={} (eis={}), pressed={}",
-            keycode, eis_keycode, pressed
-        );
-
-        Ok(())
+        eis_common::eis_keyboard_keycode(&self.context, &self.devices, keycode, pressed).await
     }
 
-    async fn notify_pointer_motion_absolute(&self, stream_id: u32, x: f64, y: f64) -> Result<()> {
-        let ptr_device_opt = {
-            let ptr = self.pointer_device.lock().await;
-            ptr.clone()
-        };
-
-        let device = ptr_device_opt.ok_or_else(|| anyhow!("Pointer device not yet available"))?;
-
-        let devices = self.devices.lock().await;
-        let device_data = devices
-            .get(&device)
-            .ok_or_else(|| anyhow!("Pointer device data not found"))?;
-
-        let pointer_abs = device_data
-            .interface::<ei::PointerAbsolute>()
-            .ok_or_else(|| anyhow!("PointerAbsolute interface not found on device"))?;
-
-        drop(devices);
-
-        pointer_abs.motion_absolute(x as f32, y as f32);
-
-        let serial = self.current_serial().await;
-        let time = Self::current_time_us();
-        device.frame(serial, time);
-
-        self.context.flush()?;
-
-        debug!(
-            "[libei] Pointer motion: stream={}, x={}, y={}",
-            stream_id, x, y
-        );
-
-        Ok(())
+    async fn notify_pointer_motion_absolute(&self, _stream_id: u32, x: f64, y: f64) -> Result<()> {
+        eis_common::eis_pointer_motion_absolute(&self.context, &self.devices, x, y).await
     }
 
     async fn notify_pointer_button(&self, button: i32, pressed: bool) -> Result<()> {
-        let ptr_device_opt = {
-            let ptr = self.pointer_device.lock().await;
-            ptr.clone()
-        };
-
-        let device = ptr_device_opt.ok_or_else(|| anyhow!("Pointer device not yet available"))?;
-
-        let devices = self.devices.lock().await;
-        let device_data = devices
-            .get(&device)
-            .ok_or_else(|| anyhow!("Pointer device data not found"))?;
-
-        let button_interface = device_data
-            .interface::<ei::Button>()
-            .ok_or_else(|| anyhow!("Button interface not found on device"))?;
-
-        drop(devices);
-
-        button_interface.button(
-            button as u32,
-            if pressed {
-                ei::button::ButtonState::Press
-            } else {
-                ei::button::ButtonState::Released
-            },
-        );
-
-        let serial = self.current_serial().await;
-        let time = Self::current_time_us();
-        device.frame(serial, time);
-
-        self.context.flush()?;
-
-        debug!(
-            "[libei] Pointer button: button={}, pressed={}",
-            button, pressed
-        );
-
-        Ok(())
+        eis_common::eis_pointer_button(&self.context, &self.devices, button, pressed).await
     }
 
     async fn notify_pointer_axis(&self, dx: f64, dy: f64) -> Result<()> {
-        let ptr_device_opt = {
-            let ptr = self.pointer_device.lock().await;
-            ptr.clone()
-        };
+        eis_common::eis_pointer_axis(&self.context, &self.devices, dx, dy).await
+    }
 
-        let device = ptr_device_opt.ok_or_else(|| anyhow!("Pointer device not yet available"))?;
+    async fn notify_pointer_motion_relative(&self, dx: f64, dy: f64) -> Result<()> {
+        eis_common::eis_pointer_motion_relative(&self.context, &self.devices, dx, dy).await
+    }
 
-        let devices = self.devices.lock().await;
-        let device_data = devices
-            .get(&device)
-            .ok_or_else(|| anyhow!("Pointer device data not found"))?;
+    async fn notify_touch_down(&self, _stream_id: u32, slot: u32, x: f64, y: f64) -> Result<()> {
+        eis_common::eis_touch_down(&self.context, &self.devices, slot, x, y).await
+    }
 
-        let scroll = device_data
-            .interface::<ei::Scroll>()
-            .ok_or_else(|| anyhow!("Scroll interface not found on device"))?;
+    async fn notify_touch_motion(&self, _stream_id: u32, slot: u32, x: f64, y: f64) -> Result<()> {
+        eis_common::eis_touch_motion(&self.context, &self.devices, slot, x, y).await
+    }
 
-        drop(devices);
-        if dx.abs() > 0.01 {
-            scroll.scroll(dx as f32, 0.0);
-        }
-        if dy.abs() > 0.01 {
-            scroll.scroll(0.0, dy as f32);
-        }
-
-        let serial = self.current_serial().await;
-        let time = Self::current_time_us();
-        device.frame(serial, time);
-
-        self.context.flush()?;
-
-        debug!("[libei] Pointer axis: dx={}, dy={}", dx, dy);
-
-        Ok(())
+    async fn notify_touch_up(&self, slot: u32) -> Result<()> {
+        eis_common::eis_touch_up(&self.context, &self.devices, slot).await
     }
 
     fn clipboard_source(&self) -> crate::session::strategy::ClipboardSource {
-        // libei uses EIS for input only; clipboard comes from a separate
-        // Portal session created by the server.
         crate::session::strategy::ClipboardSource::None
     }
 }
@@ -689,13 +479,13 @@ mod tests {
         match strategy.create_session().await {
             Ok(session) => {
                 assert_eq!(session.session_type(), SessionType::Libei);
-                println!("✅ libei session created successfully");
+                println!("libei session created successfully");
 
                 // Give event loop time to discover devices
                 tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
             }
             Err(e) => {
-                println!("❌ libei session creation failed: {}", e);
+                println!("libei session creation failed: {}", e);
             }
         }
     }

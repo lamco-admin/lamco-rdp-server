@@ -35,7 +35,7 @@ use ironrdp_graphics::zgfx::CompressionMode;
 use ironrdp_server::{
     GfxDvcBridge, GfxServerFactory, GfxServerHandle, ServerEvent, ServerEventSender,
 };
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{RwLock, mpsc};
 
 use crate::egfx::LamcoGraphicsHandler;
 

@@ -34,26 +34,29 @@
 //! - Requires PipeWire running on the host
 
 use std::{
-    sync::{atomic::AtomicBool, Arc, Mutex},
+    sync::{Arc, Mutex, atomic::AtomicBool},
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 use xdg_desktop_portal_generic::{
+    CaptureProtocol, InputBackend, InputEvent, KeyState, KeyboardEvent, PointerEvent,
     pipewire::PipeWireManager,
     services::{
-        capture::create_capture_backend,
-        clipboard::create_clipboard_backend,
-        input::{create_input_backend, InputBackendConfig},
+        capture::{CapturePreference, create_capture_backend},
+        clipboard::{ClipboardPreference, create_clipboard_backend},
+        input::{InputBackendConfig, create_input_backend},
     },
     types::{CursorMode, DeviceTypes, SourceType},
     wayland::WaylandConnection,
-    InputBackend, InputEvent, KeyState, KeyboardEvent, PointerEvent,
 };
 
 use crate::{
+    compositor::{
+        CaptureBackend as ProfileCaptureBackend, CompositorProfile, Quirk, identify_compositor,
+    },
     health::{HealthEvent, HealthReporter},
     session::strategy::{PipeWireAccess, SessionHandle, SessionStrategy, SessionType, StreamInfo},
 };
@@ -100,6 +103,46 @@ impl PortalGenericStrategy {
     }
 }
 
+impl PortalGenericStrategy {
+    /// Build capture preferences from compositor profile and quirks.
+    ///
+    /// Merges: env override > quirk-derived hints > profile recommendation > default.
+    /// The resulting preferences are passed to portal-generic's `create_capture_backend()`.
+    fn build_capture_preferences() -> CapturePreference {
+        // Start with env overrides (highest priority)
+        let mut prefs = CapturePreference::from_env();
+
+        // If env didn't set a preference, consult compositor profile
+        if prefs.preferred.is_none() {
+            let compositor = identify_compositor();
+            let profile = CompositorProfile::for_compositor(&compositor);
+
+            info!(
+                "portal-generic: Compositor {:?}, recommended capture: {:?}",
+                compositor, profile.recommended_capture
+            );
+
+            // Map server's CaptureBackend enum to portal-generic's CaptureProtocol
+            prefs.preferred = match profile.recommended_capture {
+                ProfileCaptureBackend::WlrScreencopy => Some(CaptureProtocol::WlrScreencopy),
+                ProfileCaptureBackend::ExtImageCopyCapture => {
+                    Some(CaptureProtocol::ExtImageCopyCapture)
+                }
+                ProfileCaptureBackend::Portal => None, // Let auto-detection decide
+            };
+
+            // Derive broken_protocols from quirks
+            if profile.has_quirk(&Quirk::ExtCaptureIncomplete) {
+                prefs
+                    .broken_protocols
+                    .push(CaptureProtocol::ExtImageCopyCapture);
+            }
+        }
+
+        prefs
+    }
+}
+
 impl Default for PortalGenericStrategy {
     fn default() -> Self {
         Self::new()
@@ -128,7 +171,7 @@ impl SessionStrategy for PortalGenericStrategy {
         // All Wayland and PipeWire setup is synchronous; run on blocking thread
         let (handle, wayland_stop) = tokio::task::spawn_blocking(|| -> Result<_> {
             // Connect to compositor and discover protocols
-            let wayland = WaylandConnection::connect()
+            let mut wayland = WaylandConnection::connect()
                 .context("Failed to connect to Wayland display")?;
             let protocols = wayland.available_protocols().clone();
             let sources = wayland.state().get_sources();
@@ -148,7 +191,31 @@ impl SessionStrategy for PortalGenericStrategy {
             let pipewire_manager = Arc::new(PipeWireManager::start()
                 .context("Failed to start PipeWire manager")?);
 
-            // Spawn the Wayland event loop on a dedicated thread
+            // Build capture preferences from compositor profile + quirks
+            let capture_prefs = Self::build_capture_preferences();
+
+            // Configure ext-capture handshake timeout before spawning event loop
+            if capture_prefs.handshake_timeout_ms > 0 {
+                wayland.set_ext_capture_handshake_timeout(
+                    std::time::Duration::from_millis(capture_prefs.handshake_timeout_ms),
+                );
+            }
+
+            // When wlr-screencopy is preferred (or ext is broken), tell the Wayland
+            // event loop to skip ext-capture even if the protocol is bound.
+            // Sway 1.11 advertises ext-image-copy-capture but its SHM constraints
+            // are incomplete, causing zero frames.
+            if capture_prefs.preferred == Some(CaptureProtocol::WlrScreencopy)
+                || capture_prefs.broken_protocols.contains(&CaptureProtocol::ExtImageCopyCapture)
+            {
+                wayland.set_force_wlr_screencopy(true);
+            }
+
+            // Create direct frame channel to bypass PipeWire buffer sharing
+            // (PipeWire buffer data can't be shared across separate connections)
+            let (frame_tx, frame_rx) = std::sync::mpsc::channel();
+
+            // Spawn the Wayland event loop with direct frame channel
             let (
                 wayland_stop,
                 _shared_wayland_state,
@@ -156,10 +223,21 @@ impl SessionStrategy for PortalGenericStrategy {
                 clipboard_tx,
                 shared_clipboard,
                 _wayland_thread,
-            ) = wayland.spawn_event_loop(Arc::clone(&pipewire_manager));
+            ) = wayland.spawn_event_loop_with_frame_channel(
+                Arc::clone(&pipewire_manager),
+                Some(frame_tx),
+            );
 
-            // Create input backend
-            let input_config = InputBackendConfig::from_env();
+            // Create input backend — prefer wlr virtual input for wlroots compositors.
+            // EIS bridge mode has issues on labwc; wlr-virtual-pointer/keyboard work directly.
+            let input_config = {
+                let mut cfg = InputBackendConfig::from_env();
+                // Only override if env didn't explicitly set a preference
+                if std::env::var("XDP_GENERIC_INPUT_PROTOCOL").is_err() {
+                    cfg.preferred = xdg_desktop_portal_generic::services::input::InputProtocol::WlrVirtualInput;
+                }
+                cfg
+            };
             let mut input_backend = create_input_backend(&input_config, &protocols)
                 .map_err(|e| anyhow::anyhow!("Input backend: {e}"))?;
 
@@ -173,9 +251,10 @@ impl SessionStrategy for PortalGenericStrategy {
             input_backend.create_context(&session_id, devices)
                 .map_err(|e| anyhow::anyhow!("Input context: {e}"))?;
 
-            // Create capture backend and start capture session
+            // Create capture backend with server-informed preferences
             let mut capture_backend = create_capture_backend(
                 &protocols,
+                &capture_prefs,
                 sources,
                 Arc::clone(&pipewire_manager),
                 capture_tx,
@@ -220,8 +299,10 @@ impl SessionStrategy for PortalGenericStrategy {
             }
 
             // Create clipboard backend (optional, may not be available)
+            let clipboard_prefs = ClipboardPreference::from_env();
             let clipboard_backend = create_clipboard_backend(
                 &protocols,
+                &clipboard_prefs,
                 clipboard_tx,
                 shared_clipboard,
             );
@@ -239,6 +320,7 @@ impl SessionStrategy for PortalGenericStrategy {
                 clipboard_backend: clipboard_backend.map(|cb| Arc::new(Mutex::new(cb))),
                 _pipewire_manager: pipewire_manager,
                 streams,
+                frame_rx: std::sync::Mutex::new(Some(frame_rx)),
             };
 
             Ok((handle, wayland_stop))
@@ -340,6 +422,9 @@ pub struct PortalGenericSessionHandle {
     clipboard_backend: Option<Arc<Mutex<Box<dyn xdg_desktop_portal_generic::ClipboardBackend>>>>,
     _pipewire_manager: Arc<PipeWireManager>,
     streams: Vec<StreamInfo>,
+    /// Direct frame channel receiver (taken once by the display handler).
+    frame_rx:
+        std::sync::Mutex<Option<std::sync::mpsc::Receiver<xdg_desktop_portal_generic::RawFrame>>>,
 }
 
 /// Get current time in microseconds for event timestamps.
@@ -353,13 +438,50 @@ fn current_time_usec() -> u64 {
 #[async_trait]
 impl SessionHandle for PortalGenericSessionHandle {
     fn pipewire_access(&self) -> PipeWireAccess {
-        // Use the first stream's node ID for PipeWire access
-        if let Some(stream) = self.streams.first() {
-            PipeWireAccess::NodeId(stream.node_id)
-        } else {
-            warn!("portal-generic: No streams available for PipeWire access");
-            PipeWireAccess::NodeId(0)
+        // Use direct frame channel — PipeWire buffer sharing doesn't work
+        // across separate connections (the buffer data pointer is NULL on the
+        // consumer side because the source's ALLOC_BUFFERS creates MemPtr
+        // buffers that can't be shared across address spaces).
+        let raw_rx = self
+            .frame_rx
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+
+        let Some(raw_rx) = raw_rx else {
+            warn!("portal-generic: Direct frame channel already taken, falling back to NodeId");
+            let node_id = self.streams.first().map_or(0, |s| s.node_id);
+            return PipeWireAccess::NodeId(node_id);
+        };
+
+        info!("portal-generic: Using direct frame channel (bypassing PipeWire)");
+
+        // Bridge RawFrame (portal crate) -> RawFrameData (pipewire crate)
+        let (tx, rx) = std::sync::mpsc::sync_channel(256);
+        if let Err(e) = std::thread::Builder::new()
+            .name("raw-frame-bridge".into())
+            .spawn(move || {
+                while let Ok(raw) = raw_rx.recv() {
+                    let converted = lamco_pipewire::frame::RawFrameData {
+                        data: raw.data,
+                        width: Some(raw.width),
+                        height: Some(raw.height),
+                        stride: Some(raw.stride),
+                        format: None,
+                    };
+                    if tx.send(converted).is_err() {
+                        break;
+                    }
+                }
+                info!("portal-generic: raw-frame-bridge thread exited");
+            })
+        {
+            error!("Failed to spawn raw-frame-bridge thread: {e}");
+            let node_id = self.streams.first().map_or(0, |s| s.node_id);
+            return PipeWireAccess::NodeId(node_id);
         }
+
+        PipeWireAccess::DirectChannel(rx)
     }
 
     fn streams(&self) -> Vec<StreamInfo> {

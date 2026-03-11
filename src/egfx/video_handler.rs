@@ -33,7 +33,7 @@ use std::time::Instant;
 
 #[cfg(feature = "h264")]
 use tokio::sync::Mutex;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{RwLock, mpsc};
 use tracing::{debug, error, info, trace, warn};
 
 #[cfg(feature = "h264")]

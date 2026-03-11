@@ -58,7 +58,10 @@
 //! - Target: <100ms end-to-end latency
 //! - Target: 30-60 FPS video streaming
 //! - RemoteFX compression for efficient bandwidth usage
-#![allow(unsafe_code)]
+#![expect(
+    unsafe_code,
+    reason = "OwnedFd::from_raw_fd for Portal/PipeWire file descriptors"
+)]
 
 mod display_handler;
 mod egfx_sender;
@@ -79,14 +82,14 @@ pub use gfx_factory::{HandlerState, LamcoGfxFactory, SharedHandlerState};
 pub use input_handler::LamcoInputHandler;
 use ironrdp_graphics::zgfx::CompressionMode;
 use ironrdp_pdu::rdp::capability_sets::server_codecs_capabilities;
-use ironrdp_server::{Credentials, RdpServer};
+use ironrdp_server::RdpServer;
 use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, error, info, warn};
 
 use crate::{
     audio::factory::create_sound_factory,
     clipboard::{ClipboardOrchestrator, ClipboardOrchestratorConfig, LamcoCliprdrFactory},
-    config::{is_flatpak, Config},
+    config::{Config, is_flatpak},
     dbus::events::{self, ServerEvent},
     health::{HealthSubscriber, SessionHealthMonitor},
     input::MonitorInfo as InputMonitorInfo,
@@ -324,11 +327,27 @@ impl LamcoRdpServer {
         } else {
             info!("Selecting session strategy based on detected capabilities");
 
+            // Resolve input protocol preference from config + compositor type
+            let prefers_libei = config
+                .input
+                .resolve_for_compositor(&capabilities.compositor);
+            info!(
+                "Input protocol: {} (config={}, compositor={})",
+                if prefers_libei {
+                    "libei/EIS"
+                } else {
+                    "wlr-virtual-input"
+                },
+                config.input.effective_protocol(),
+                capabilities.compositor,
+            );
+
             let strategy_selector = SessionStrategySelector::with_keyboard_layout(
                 service_registry.clone(),
                 Arc::new(token_manager),
                 config.input.keyboard_layout.clone(),
-            );
+            )
+            .with_input_protocol(prefers_libei);
 
             strategy_selector
                 .select_strategy()
@@ -381,24 +400,36 @@ impl LamcoRdpServer {
 
         info!("✅ Session created successfully via {}", strategy.name());
 
-        // wlr-direct: input-only strategy, acquire video via standalone Portal ScreenCast
-        let (pipewire_fd, stream_info) = if session_handle.session_type() == SessionType::WlrDirect
-        {
-            info!("wlr-direct: acquiring video via standalone Portal ScreenCast");
+        // How video frames reach the display handler
+        enum PipeWireSource {
+            Fd(i32),
+            Direct(std::sync::mpsc::Receiver<lamco_pipewire::frame::RawFrameData>),
+        }
+
+        // Input-only strategies (libei, wlr-direct): acquire video via standalone Portal ScreenCast.
+        // These strategies handle input injection but don't provide video capture.
+        let (pipewire_source, stream_info) = if matches!(
+            session_handle.session_type(),
+            SessionType::WlrDirect | SessionType::Libei
+        ) {
+            info!(
+                "{}: acquiring video via standalone Portal ScreenCast",
+                session_handle.session_type()
+            );
 
             use ashpd::desktop::{
-                screencast::{CursorMode, Screencast, SourceType as ScSourceType},
                 PersistMode,
+                screencast::{CursorMode, Screencast, SourceType as ScSourceType},
             };
 
             let screencast = Screencast::new()
                 .await
-                .context("Failed to connect to ScreenCast portal for wlr-direct video")?;
+                .context("Failed to connect to ScreenCast portal for input-only video")?;
 
             let sc_session = screencast
                 .create_session()
                 .await
-                .context("Failed to create ScreenCast session for wlr-direct video")?;
+                .context("Failed to create ScreenCast session for input-only video")?;
 
             // Pick best available cursor mode from what the portal actually supports.
             // Hyprland's portal only offers Hidden+Embedded (no Metadata).
@@ -417,10 +448,7 @@ impl LamcoRdpServer {
             } else {
                 CursorMode::Hidden
             };
-            debug!(
-                "wlr-direct: using cursor mode {:?} for ScreenCast",
-                cursor_mode
-            );
+            debug!("Using cursor mode {:?} for ScreenCast", cursor_mode);
 
             screencast
                 .select_sources(
@@ -432,19 +460,19 @@ impl LamcoRdpServer {
                     PersistMode::DoNot,
                 )
                 .await
-                .context("Failed to select ScreenCast sources for wlr-direct video")?;
+                .context("Failed to select ScreenCast sources for input-only video")?;
 
             let response = screencast
                 .start(&sc_session, None)
                 .await
-                .context("Failed to start ScreenCast for wlr-direct video")?
+                .context("Failed to start ScreenCast for input-only video")?
                 .response()
-                .context("ScreenCast start rejected by user (wlr-direct video)")?;
+                .context("ScreenCast start rejected by user")?;
 
             let portal_streams = response.streams();
             if portal_streams.is_empty() {
                 return Err(anyhow::anyhow!(
-                    "No streams from ScreenCast for wlr-direct video"
+                    "No streams from ScreenCast for input-only video"
                 ));
             }
 
@@ -462,10 +490,7 @@ impl LamcoRdpServer {
                 })
                 .collect();
 
-            info!(
-                "wlr-direct: ScreenCast started with {} stream(s)",
-                streams.len()
-            );
+            info!("ScreenCast started with {} stream(s)", streams.len());
             for stream in &streams {
                 info!(
                     "  Stream: node_id={}, {}x{} at ({},{})",
@@ -480,7 +505,7 @@ impl LamcoRdpServer {
             let fd = screencast
                 .open_pipe_wire_remote(&sc_session)
                 .await
-                .context("Failed to open PipeWire remote for wlr-direct video")?;
+                .context("Failed to open PipeWire remote for input-only video")?;
 
             use std::os::fd::AsRawFd;
             let raw_fd = fd.as_raw_fd();
@@ -488,7 +513,7 @@ impl LamcoRdpServer {
             // Cleaned up when the server process exits.
             std::mem::forget(fd);
 
-            info!("wlr-direct: PipeWire FD: {}", raw_fd);
+            info!("PipeWire FD: {}", raw_fd);
 
             // Provide stream dimensions to the session handle so pointer
             // coordinate transformation uses the real resolution.
@@ -504,25 +529,23 @@ impl LamcoRdpServer {
                 .collect();
             session_handle.set_streams(handle_streams);
 
-            (raw_fd, streams)
+            (PipeWireSource::Fd(raw_fd), streams)
         } else {
+            let strategy_streams = session_handle.streams();
+            let portal_streams: Vec<crate::portal::StreamInfo> = strategy_streams
+                .iter()
+                .map(|s| crate::portal::StreamInfo {
+                    node_id: s.node_id,
+                    position: (s.position_x, s.position_y),
+                    size: (s.width, s.height),
+                    source_type: crate::portal::SourceType::Monitor,
+                })
+                .collect();
+
             match session_handle.pipewire_access() {
                 PipeWireAccess::FileDescriptor(fd) => {
-                    // Portal path: FD directly provided
                     info!("Using Portal-provided PipeWire file descriptor: {}", fd);
-
-                    let strategy_streams = session_handle.streams();
-                    let portal_streams: Vec<crate::portal::StreamInfo> = strategy_streams
-                        .iter()
-                        .map(|s| crate::portal::StreamInfo {
-                            node_id: s.node_id,
-                            position: (s.position_x, s.position_y),
-                            size: (s.width, s.height),
-                            source_type: crate::portal::SourceType::Monitor,
-                        })
-                        .collect();
-
-                    (fd, portal_streams)
+                    (PipeWireSource::Fd(fd), portal_streams)
                 }
                 PipeWireAccess::NodeId(node_id) => {
                     info!("Using Mutter-provided PipeWire node ID: {}", node_id);
@@ -531,41 +554,34 @@ impl LamcoRdpServer {
                         .context("Failed to connect to PipeWire daemon for Mutter")?;
 
                     info!("Connected to PipeWire daemon, FD: {}", fd);
-
-                    let strategy_streams = session_handle.streams();
-                    let portal_streams: Vec<crate::portal::StreamInfo> = strategy_streams
-                        .iter()
-                        .map(|s| crate::portal::StreamInfo {
-                            node_id: s.node_id,
-                            position: (s.position_x, s.position_y),
-                            size: (s.width, s.height),
-                            source_type: crate::portal::SourceType::Monitor,
-                        })
-                        .collect();
-
-                    (fd, portal_streams)
+                    (PipeWireSource::Fd(fd), portal_streams)
+                }
+                PipeWireAccess::DirectChannel(rx) => {
+                    info!("Using direct frame channel (bypassing PipeWire transport)");
+                    (PipeWireSource::Direct(rx), portal_streams)
                 }
             }
         };
 
-        // SAFETY: The file descriptor is provided by the XDG Desktop Portal or
-        // PipeWire daemon connection. We take ownership here — this is the only
-        // place in the codebase where we convert the raw fd to OwnedFd.
-        let pipewire_fd = unsafe {
-            use std::os::fd::FromRawFd;
-            std::os::fd::OwnedFd::from_raw_fd(pipewire_fd)
-        };
-
-        // ScreenCast-only or wlr-direct: skip Portal RemoteDesktop entirely.
+        // Self-sufficient strategies: skip Portal RemoteDesktop entirely.
         // ScreenCast-only = view-only (no input). WlrDirect = input via native Wayland protocols.
-        // Both use standalone Portal ScreenCast for video and bypass the full-featured path.
+        // PortalGeneric = embedded wlroots video + input + clipboard (no Portal daemon needed).
+        // All bypass the full-featured Portal RemoteDesktop path.
         if matches!(
             session_handle.session_type(),
-            SessionType::ScreenCastOnly | SessionType::WlrDirect
+            SessionType::ScreenCastOnly | SessionType::WlrDirect | SessionType::PortalGeneric
         ) {
             let is_wlr_direct = session_handle.session_type() == SessionType::WlrDirect;
+            let is_portal_generic = session_handle.session_type() == SessionType::PortalGeneric;
 
-            if is_wlr_direct {
+            if is_portal_generic {
+                info!("═══════════════════════════════════════════════════════════");
+                info!("  PORTAL-GENERIC MODE (embedded wlroots backend)");
+                info!("═══════════════════════════════════════════════════════════");
+                info!("Native Wayland video + input + clipboard via portal-generic.");
+                info!("No external Portal daemon required.");
+                info!("═══════════════════════════════════════════════════════════");
+            } else if is_wlr_direct {
                 info!("═══════════════════════════════════════════════════════════");
                 info!("  WLR-DIRECT MODE (native Wayland input + Portal video)");
                 info!("═══════════════════════════════════════════════════════════");
@@ -605,11 +621,32 @@ impl LamcoRdpServer {
             let gfx_handler_state = gfx_factory.handler_state();
             let gfx_server_handle = gfx_factory.server_handle();
 
-            let display_handler = Arc::new(
-                LamcoDisplayHandler::new(
+            let display_handler = Arc::new(match pipewire_source {
+                PipeWireSource::Fd(raw_fd) => {
+                    // SAFETY: fd from XDG Desktop Portal or PipeWire daemon.
+                    // We take ownership here — only place we convert raw fd to OwnedFd.
+                    let pipewire_fd = unsafe {
+                        use std::os::fd::FromRawFd;
+                        std::os::fd::OwnedFd::from_raw_fd(raw_fd)
+                    };
+                    LamcoDisplayHandler::new(
+                        initial_size.0,
+                        initial_size.1,
+                        pipewire_fd,
+                        stream_info.clone(),
+                        Some(graphics_tx),
+                        Some(gfx_server_handle),
+                        Some(gfx_handler_state),
+                        Arc::clone(&config),
+                        Arc::clone(&service_registry),
+                    )
+                    .await
+                    .context("Failed to create display handler")?
+                }
+                PipeWireSource::Direct(raw_rx) => LamcoDisplayHandler::new_direct(
                     initial_size.0,
                     initial_size.1,
-                    pipewire_fd,
+                    raw_rx,
                     stream_info.clone(),
                     Some(graphics_tx),
                     Some(gfx_server_handle),
@@ -618,15 +655,15 @@ impl LamcoRdpServer {
                     Arc::clone(&service_registry),
                 )
                 .await
-                .context("Failed to create display handler")?,
-            );
+                .context("Failed to create display handler (direct channel)")?,
+            });
 
             display_handler
                 .set_health_reporter(health_reporter.clone())
                 .await;
 
             // Report subsystems that aren't wired in this code path
-            if !is_wlr_direct {
+            if !is_wlr_direct && !is_portal_generic {
                 // ScreenCastOnly: no input injection at all
                 health_reporter.report(crate::health::HealthEvent::SubsystemNotAvailable {
                     subsystem: "input".into(),
@@ -671,12 +708,14 @@ impl LamcoRdpServer {
                 .parse()
                 .context("Invalid listen address")?;
 
-            // wlr-direct clipboard via wl-clipboard-rs (data-control protocol)
+            // Clipboard for self-sufficient strategies:
+            // - wlr-direct: wl-clipboard-rs (data-control protocol)
+            // - portal-generic: embedded DataControl backend from session handle
             type CliprdrFactory = Box<dyn ironrdp_server::CliprdrServerFactory>;
             let (wlr_clipboard_manager, wlr_clipboard_factory): (
                 Option<Arc<Mutex<ClipboardOrchestrator>>>,
                 Option<CliprdrFactory>,
-            ) = if is_wlr_direct && config.clipboard.enabled {
+            ) = if (is_wlr_direct || is_portal_generic) && config.clipboard.enabled {
                 let all_allowed = config.clipboard.allowed_types.is_empty();
                 let has_type = |patterns: &[&str]| {
                     all_allowed
@@ -702,18 +741,52 @@ impl LamcoRdpServer {
                     Ok(mut clipboard_mgr) => {
                         clipboard_mgr.set_health_reporter(health_reporter.clone());
 
-                        #[cfg(feature = "wl-clipboard")]
-                        {
-                            let provider = crate::clipboard::providers::WlClipboardProvider::new();
-                            clipboard_mgr
-                                .set_clipboard_provider(Arc::new(provider))
-                                .await;
-                            info!("wlr-direct: clipboard via wl-clipboard-rs (data-control)");
+                        // Wire clipboard provider based on strategy type
+                        #[cfg(feature = "portal-generic")]
+                        if is_portal_generic {
+                            // portal-generic provides its own DataControl clipboard backend
+                            use crate::session::strategy::ClipboardSource;
+                            match session_handle.clipboard_source() {
+                                ClipboardSource::DataControl(ref backend) => {
+                                    let provider =
+                                    crate::clipboard::providers::DataControlClipboardProvider::new(
+                                        Arc::clone(backend),
+                                    );
+                                    clipboard_mgr
+                                        .set_clipboard_provider(Arc::new(provider))
+                                        .await;
+                                    info!(
+                                        "portal-generic: clipboard via embedded data-control backend"
+                                    );
+                                }
+                                _ => {
+                                    warn!(
+                                        "portal-generic: expected DataControl clipboard source but got different variant"
+                                    );
+                                }
+                            }
                         }
 
-                        #[cfg(not(feature = "wl-clipboard"))]
-                        {
-                            warn!("wlr-direct: no clipboard provider compiled in (need wl-clipboard feature)");
+                        #[cfg(not(feature = "portal-generic"))]
+                        let _ = is_portal_generic; // suppress unused warning
+
+                        if is_wlr_direct {
+                            #[cfg(feature = "wl-clipboard")]
+                            {
+                                let provider =
+                                    crate::clipboard::providers::WlClipboardProvider::new();
+                                clipboard_mgr
+                                    .set_clipboard_provider(Arc::new(provider))
+                                    .await;
+                                info!("wlr-direct: clipboard via wl-clipboard-rs (data-control)");
+                            }
+
+                            #[cfg(not(feature = "wl-clipboard"))]
+                            {
+                                warn!(
+                                    "wlr-direct: no clipboard provider compiled in (need wl-clipboard feature)"
+                                );
+                            }
                         }
 
                         let mgr = Arc::new(Mutex::new(clipboard_mgr));
@@ -729,14 +802,14 @@ impl LamcoRdpServer {
                 (None, None)
             };
 
-            if is_wlr_direct && wlr_clipboard_manager.is_none() {
+            if (is_wlr_direct || is_portal_generic) && wlr_clipboard_manager.is_none() {
                 health_reporter.report(crate::health::HealthEvent::SubsystemNotAvailable {
                     subsystem: "clipboard".into(),
                 });
             }
 
-            let rdp_server = if is_wlr_direct {
-                // wlr-direct: video from ScreenCast, input from native Wayland protocols
+            let rdp_server = if is_wlr_direct || is_portal_generic {
+                // wlr-direct/portal-generic: input via session handle (native Wayland protocols)
                 let monitors: Vec<InputMonitorInfo> = stream_info
                     .iter()
                     .enumerate()
@@ -831,7 +904,9 @@ impl LamcoRdpServer {
                 session_type: session_handle.session_type().to_string(),
             });
 
-            let mode_name = if is_wlr_direct {
+            let mode_name = if is_portal_generic {
+                "portal-generic"
+            } else if is_wlr_direct {
                 "wlr-direct"
             } else {
                 "view-only"
@@ -960,6 +1035,17 @@ impl LamcoRdpServer {
             }
         };
 
+        // Portal RemoteDesktop path always uses fd-based PipeWire
+        let pipewire_fd = match pipewire_source {
+            PipeWireSource::Fd(raw_fd) => unsafe {
+                use std::os::fd::FromRawFd;
+                std::os::fd::OwnedFd::from_raw_fd(raw_fd)
+            },
+            PipeWireSource::Direct(_) => {
+                unreachable!("DirectChannel only used with self-sufficient strategies")
+            }
+        };
+
         info!(
             "Session started with {} streams, PipeWire FD: {:?}",
             stream_info.len(),
@@ -1007,7 +1093,9 @@ impl LamcoRdpServer {
         let gfx_handler_state = gfx_factory.handler_state();
         let gfx_server_handle = gfx_factory.server_handle();
         if force_avc420_only {
-            info!("EGFX factory created for H.264/AVC420 streaming (AVC444 disabled by platform quirk)");
+            info!(
+                "EGFX factory created for H.264/AVC420 streaming (AVC444 disabled by platform quirk)"
+            );
         } else {
             info!("EGFX factory created for H.264/AVC420+AVC444 streaming");
         }
@@ -1159,7 +1247,7 @@ impl LamcoRdpServer {
             match session_handle_for_clipboard.clipboard_source() {
                 ClipboardSource::Portal(_) => {
                     // Portal strategy: use the portal_clipboard_manager wired above
-                    if let (Some(ref clipboard_mgr_arc), Some(ref session)) =
+                    if let (Some(clipboard_mgr_arc), Some(session)) =
                         (&portal_clipboard_manager, &portal_clipboard_session)
                     {
                         if uses_data_control {
@@ -1253,7 +1341,7 @@ impl LamcoRdpServer {
                         warn!(
                             "WaylandDataControlMode selected but no data-control provider available"
                         );
-                        if let (Some(ref clipboard_mgr_arc), Some(ref session)) =
+                        if let (Some(clipboard_mgr_arc), Some(session)) =
                             (&portal_clipboard_manager, &portal_clipboard_session)
                         {
                             let provider =
@@ -1275,7 +1363,7 @@ impl LamcoRdpServer {
                     // No clipboard from strategy and no data-control mode.
                     // Try Portal if available (libei/wlr-direct with separate Portal session),
                     // otherwise view-only has no clipboard.
-                    if let (Some(ref clipboard_mgr_arc), Some(ref session)) =
+                    if let (Some(clipboard_mgr_arc), Some(session)) =
                         (&portal_clipboard_manager, &portal_clipboard_session)
                     {
                         let provider = crate::clipboard::providers::PortalClipboardProvider::new(
@@ -1299,29 +1387,25 @@ impl LamcoRdpServer {
                 fallback_to_portal,
                 ..
             } = &clipboard_strategy
+                && let Err(e) = clipboard_mgr.health_check_provider().await
             {
-                if let Err(e) = clipboard_mgr.health_check_provider().await {
-                    warn!("Data-control clipboard health check failed: {e}");
-                    if *fallback_to_portal {
-                        warn!("Falling back to Portal clipboard provider");
-                        if let (Some(ref clipboard_mgr_arc), Some(ref session)) =
-                            (&portal_clipboard_manager, &portal_clipboard_session)
-                        {
-                            let provider =
-                                crate::clipboard::providers::PortalClipboardProvider::new(
-                                    Arc::clone(clipboard_mgr_arc),
-                                    Arc::clone(session),
-                                    Arc::clone(&portal_session_valid),
-                                    config.clipboard.rate_limit_ms,
-                                )
-                                .await;
-                            clipboard_mgr
-                                .set_clipboard_provider(Arc::new(provider))
-                                .await;
-                            info!(
-                                "Clipboard provider: Portal (fallback after health check failure)"
-                            );
-                        }
+                warn!("Data-control clipboard health check failed: {e}");
+                if *fallback_to_portal {
+                    warn!("Falling back to Portal clipboard provider");
+                    if let (Some(clipboard_mgr_arc), Some(session)) =
+                        (&portal_clipboard_manager, &portal_clipboard_session)
+                    {
+                        let provider = crate::clipboard::providers::PortalClipboardProvider::new(
+                            Arc::clone(clipboard_mgr_arc),
+                            Arc::clone(session),
+                            Arc::clone(&portal_session_valid),
+                            config.clipboard.rate_limit_ms,
+                        )
+                        .await;
+                        clipboard_mgr
+                            .set_clipboard_provider(Arc::new(provider))
+                            .await;
+                        info!("Clipboard provider: Portal (fallback after health check failure)");
                     }
                 }
             }
@@ -1352,9 +1436,14 @@ impl LamcoRdpServer {
 
             // FUSE is not available in Flatpak sandbox (no /dev/fuse access)
             if is_flatpak() {
-                info!("Flatpak detected - skipping FUSE mount (using staging fallback for file clipboard)");
+                info!(
+                    "Flatpak detected - skipping FUSE mount (using staging fallback for file clipboard)"
+                );
             } else if let Err(e) = clipboard_mgr.mount_fuse().await {
                 warn!("Failed to mount FUSE clipboard filesystem: {:?}", e);
+                warn!(
+                    "Common causes: missing /dev/fuse, user not in 'fuse' group, or 'user_allow_other' not in /etc/fuse.conf"
+                );
                 warn!("File clipboard will use staging fallback (download files upfront)");
             }
 
@@ -1460,6 +1549,13 @@ impl LamcoRdpServer {
             _ => "TLS",
         };
 
+        if std::env::var("WAYLAND_DISPLAY").is_err() {
+            warn!("WAYLAND_DISPLAY is not set - screen capture will not work");
+            warn!(
+                "Start the server from a Wayland graphical session or set WAYLAND_DISPLAY manually"
+            );
+        }
+
         info!("╔════════════════════════════════════════════════════════════╗");
         info!("║          Server Starting                                   ║");
         info!("╚════════════════════════════════════════════════════════════╝");
@@ -1504,27 +1600,24 @@ impl LamcoRdpServer {
         let use_hybrid =
             resolve_security_mode(&self.config.security.security_mode, effective_auth_method);
 
-        let has_credentials = effective_auth_method == "none";
-        let credentials = if has_credentials {
-            Some(Credentials {
-                username: String::new(),
-                password: String::new(),
-                domain: None,
-            })
+        // auth_method=none: pass None so IronRDP skips credential comparison.
+        // auth_method=pam: PamValidator handles validation via CredentialValidator trait.
+        self.rdp_server.set_credentials(None);
+
+        // Set up PAM credential validator if auth_method=pam
+        let pam_validator = if effective_auth_method == "pam" {
+            let validator = std::sync::Arc::new(crate::security::PamValidator::new(None));
+            self.rdp_server.set_credential_validator(validator.clone());
+            info!("PAM credential validator attached to RDP server");
+            Some(validator)
         } else {
-            // PAM mode: credentials need to be set externally via
-            // ServerEvent::SetCredentials for CredSSP to work.
-            // The server will accept connections without pre-set
-            // credentials in TLS mode (no CredSSP needed).
             None
         };
 
-        self.rdp_server.set_credentials(credentials);
-
         if use_hybrid {
             info!("Security mode: Hybrid (NLA/CredSSP)");
-            if !has_credentials {
-                warn!("Hybrid mode active but no credentials configured");
+            if effective_auth_method != "none" {
+                warn!("Hybrid mode active — credentials must be set before clients connect");
                 warn!("Set credentials via D-Bus or GUI before clients connect");
             }
         } else {
@@ -1596,6 +1689,11 @@ impl LamcoRdpServer {
                                 timestamp: conn_timestamp,
                             });
 
+                            // Set peer IP for PAM rate limiting before handshake
+                            if let Some(ref validator) = pam_validator {
+                                validator.set_peer_ip(peer.ip());
+                            }
+
                             if let Err(e) = self.rdp_server.run_connection(stream).await {
                                 let duration = conn_start.elapsed();
                                 let msg = format!("{e:#}");
@@ -1622,10 +1720,15 @@ impl LamcoRdpServer {
                                 duration_seconds: duration,
                             });
 
+                            // Prune stale rate limit entries between connections
+                            if let Some(ref validator) = pam_validator {
+                                validator.prune_stale_entries();
+                            }
+
                             // Client disconnected (or failed): clean up transient state
                             // while keeping Portal/PipeWire alive for the next client.
-                            // If session health is invalid (compositor destroyed session),
-                            // break the accept loop — no point accepting doomed connections.
+                            // Only breaks the accept loop if the Portal session itself was
+                            // destroyed — subsystem failures (video/input) are recoverable.
                             if !self.on_disconnect().await {
                                 let _ = self.event_tx.send(ServerEvent::StatusChanged {
                                     old: "running".into(),
@@ -1782,8 +1885,10 @@ impl LamcoRdpServer {
     /// Clears transient state without closing Portal session (reusable for reconnect).
     /// The Portal session, PipeWire stream, and input handler survive for the next client.
     ///
-    /// Returns `true` if the session is healthy enough to accept another client,
-    /// `false` if the accept loop should break (session is fatally invalid).
+    /// Returns `true` if the server can accept another client. Video/input failures
+    /// return `true` because the display pipeline reinitializes per-connection.
+    /// Returns `false` only when the Portal session itself was destroyed by the
+    /// compositor — the D-Bus session object is gone and can't be recreated.
     async fn on_disconnect(&self) -> bool {
         info!("Client disconnected - performing cleanup");
 
@@ -1793,24 +1898,37 @@ impl LamcoRdpServer {
         self.display_handler.on_client_disconnect();
 
         // Check health state to decide whether this server instance can accept
-        // another client. If the compositor destroyed the session, there's no
-        // point looping — the Portal/Mutter session object is gone.
+        // another client. Only session destruction (compositor closed the Portal
+        // session) is truly fatal — the D-Bus session object is gone and can't be
+        // recreated without user interaction. Video/input failures are recoverable:
+        // a new client connection restarts the display pipeline.
         if let Some(ref subscriber) = self.health_subscriber {
             let health = subscriber.current();
+
+            if health.session.is_failed() {
+                // Session destroyed by compositor — irrecoverable without restart
+                error!("Portal session destroyed — cannot accept new clients");
+                error!("  session: {}", health.session);
+                error!("  video: {}", health.video);
+                error!("  input: {}", health.input);
+                error!("  clipboard: {}", health.clipboard);
+                return false;
+            }
+
             match health.overall {
                 crate::health::OverallHealth::Invalid => {
-                    error!(
-                        "Session health is invalid after disconnect — cannot accept new clients"
+                    // Subsystem failure (video/input) but session is alive.
+                    // The next client connection will reinitialize the display
+                    // pipeline, so we can accept another connection.
+                    warn!(
+                        "Session health is invalid (subsystem failure) but Portal session is alive — accepting new clients"
                     );
-                    error!("  session: {}", health.session);
-                    error!("  video: {}", health.video);
-                    error!("  input: {}", health.input);
-                    error!("  clipboard: {}", health.clipboard);
-                    return false;
+                    warn!("  video: {}", health.video);
+                    warn!("  input: {}", health.input);
+                    warn!("  clipboard: {}", health.clipboard);
                 }
                 crate::health::OverallHealth::Degraded => {
                     warn!("Session health is degraded — will accept new clients cautiously");
-                    warn!("  session: {}", health.session);
                     warn!("  video: {}", health.video);
                     warn!("  input: {}", health.input);
                 }
@@ -1830,18 +1948,26 @@ impl Drop for LamcoRdpServer {
     fn drop(&mut self) {
         info!("LamcoRdpServer dropping - initiating cleanup");
 
-        // cleanup_resources() is async but Drop is sync
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            handle.block_on(async {
-                if let Err(e) = self.cleanup_resources().await {
-                    error!("Error during cleanup: {:#}", e);
-                } else {
-                    info!("✅ Cleanup completed successfully");
-                }
-            });
-        } else {
-            warn!("No tokio runtime available for cleanup - resources may leak!");
-            warn!("Portal session not closed - will leak in Portal daemon");
+        // cleanup_resources() is async but Drop is sync. block_in_place moves this
+        // thread out of the tokio worker pool so block_on won't panic.
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                tokio::task::block_in_place(|| {
+                    handle.block_on(async {
+                        match self.cleanup_resources().await {
+                            Err(e) => {
+                                error!("Error during cleanup: {:#}", e);
+                            }
+                            _ => {
+                                info!("Cleanup completed successfully");
+                            }
+                        }
+                    });
+                });
+            }
+            _ => {
+                warn!("No tokio runtime available for cleanup - resources may leak");
+            }
         }
     }
 }
@@ -1895,32 +2021,32 @@ fn check_port_available(addr: &std::net::SocketAddr) {
             }
             let local_addr = fields[1];
             // local_addr format: "IIIIIIII:PPPP" (hex ip:port)
-            if let Some(local_port) = local_addr.split(':').nth(1) {
-                if local_port == port_hex {
-                    let state = fields[3];
-                    let inode = fields[9];
-                    let state_name = match state {
-                        "0A" => "LISTEN",
-                        "01" => "ESTABLISHED",
-                        "06" => "TIME_WAIT",
-                        "08" => "CLOSE_WAIT",
-                        _ => state,
-                    };
+            if let Some(local_port) = local_addr.split(':').nth(1)
+                && local_port == port_hex
+            {
+                let state = fields[3];
+                let inode = fields[9];
+                let state_name = match state {
+                    "0A" => "LISTEN",
+                    "01" => "ESTABLISHED",
+                    "06" => "TIME_WAIT",
+                    "08" => "CLOSE_WAIT",
+                    _ => state,
+                };
 
-                    // Try to find the process via /proc/*/fd -> socket inode
-                    let process_info = find_process_by_inode(inode);
+                // Try to find the process via /proc/*/fd -> socket inode
+                let process_info = find_process_by_inode(inode);
 
-                    if let Some((pid, name)) = process_info {
-                        error!(
-                            "Port {} is held by process '{}' (PID {}) in state {}",
-                            port, name, pid, state_name
-                        );
-                    } else {
-                        warn!(
-                            "Port {} is in use (state: {}, inode: {})",
-                            port, state_name, inode
-                        );
-                    }
+                if let Some((pid, name)) = process_info {
+                    error!(
+                        "Port {} is held by process '{}' (PID {}) in state {}",
+                        port, name, pid, state_name
+                    );
+                } else {
+                    warn!(
+                        "Port {} is in use (state: {}, inode: {})",
+                        port, state_name, inode
+                    );
                 }
             }
         }
@@ -1948,15 +2074,15 @@ fn find_process_by_inode(inode: &str) -> Option<(u32, String)> {
         let fd_dir = format!("/proc/{pid}/fd");
         if let Ok(fds) = std::fs::read_dir(&fd_dir) {
             for fd in fds.flatten() {
-                if let Ok(link) = std::fs::read_link(fd.path()) {
-                    if link.to_string_lossy() == target {
-                        // Found the process - get its name
-                        let comm = std::fs::read_to_string(format!("/proc/{pid}/comm"))
-                            .unwrap_or_default()
-                            .trim()
-                            .to_string();
-                        return Some((pid, comm));
-                    }
+                if let Ok(link) = std::fs::read_link(fd.path())
+                    && link.to_string_lossy() == target
+                {
+                    // Found the process - get its name
+                    let comm = std::fs::read_to_string(format!("/proc/{pid}/comm"))
+                        .unwrap_or_default()
+                        .trim()
+                        .to_string();
+                    return Some((pid, comm));
                 }
             }
         }

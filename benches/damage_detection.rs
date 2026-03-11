@@ -3,7 +3,7 @@
 //! Measures performance of tile-based frame comparison and region detection
 //! at various resolutions.
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use lamco_rdp_server::damage::{DamageConfig, DamageDetector, DamageRegion};
 
 /// Generate test BGRA data with a gradient pattern
@@ -62,7 +62,10 @@ fn bench_detect_no_damage(c: &mut Criterion) {
         let frame = generate_bgra_frame(width, height, 0);
         let pixels = (width * height) as u64;
 
-        group.throughput(Throughput::Elements(pixels));
+        group.throughput(Throughput::ElementsAndBytes {
+            elements: pixels,
+            bytes: pixels * 4, // BGRA = 4 bytes per pixel
+        });
 
         group.bench_with_input(BenchmarkId::new("identical", name), &frame, |b, data| {
             let mut detector = DamageDetector::new(DamageConfig::default());
@@ -89,7 +92,10 @@ fn bench_detect_full_damage(c: &mut Criterion) {
     for (width, height, name) in resolutions {
         let pixels = (width * height) as u64;
 
-        group.throughput(Throughput::Elements(pixels));
+        group.throughput(Throughput::ElementsAndBytes {
+            elements: pixels,
+            bytes: pixels * 4, // BGRA = 4 bytes per pixel
+        });
 
         group.bench_function(BenchmarkId::new("full_change", name), |b| {
             let mut detector = DamageDetector::new(DamageConfig::default());
@@ -120,7 +126,10 @@ fn bench_detect_partial_damage(c: &mut Criterion) {
         let base_frame = generate_bgra_frame(width, height, 0);
         let pixels = (width * height) as u64;
 
-        group.throughput(Throughput::Elements(pixels));
+        group.throughput(Throughput::ElementsAndBytes {
+            elements: pixels,
+            bytes: pixels * 4, // BGRA = 4 bytes per pixel
+        });
 
         // Small damage (cursor-like, 32x32)
         group.bench_function(BenchmarkId::new("small_32x32", name), |b| {

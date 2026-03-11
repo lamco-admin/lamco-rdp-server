@@ -3,8 +3,8 @@
 //! Keyboard, mouse, and touch input settings.
 
 use iced::{
-    widget::{column, pick_list},
     Element, Length,
+    widget::{column, pick_list},
 };
 
 use crate::gui::{message::Message, state::AppState, widgets, widgets::space};
@@ -24,18 +24,26 @@ const KEYBOARD_LAYOUTS: &[&str] = &[
     "zh", // Chinese
 ];
 
+const INPUT_PROTOCOLS: &[&str] = &["auto", "libei", "wlr"];
+
 pub fn view_input_tab(state: &AppState) -> Element<'_, Message> {
     column![
         // Section header
         widgets::section_header("Input Configuration"),
         space().height(20.0),
 
-        // Use libei toggle
-        widgets::toggle_with_help(
-            "Use libei for Input Injection",
-            state.config.input.use_libei,
-            "Modern input method via Portal RemoteDesktop (recommended)",
-            Message::InputUseLibeiToggled,
+        // Input protocol selection
+        widgets::labeled_row_with_help(
+            "Input Protocol:",
+            150.0,
+            pick_list(
+                INPUT_PROTOCOLS.to_vec(),
+                Some(state.config.input.input_protocol.as_str()),
+                |s| Message::InputProtocolChanged(s.to_string()),
+            )
+            .width(Length::Fixed(200.0))
+            .into(),
+            "auto: GNOME/KDE use libei, wlroots/Smithay use wlr virtual input",
         ),
         space().height(16.0),
 

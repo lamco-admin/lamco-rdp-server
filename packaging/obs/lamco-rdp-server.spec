@@ -6,7 +6,7 @@
 #
 
 Name:           lamco-rdp-server
-Version:        1.4.0
+Version:        1.4.2
 Release:        1%{?dist}
 Summary:        Wayland RDP server for Linux desktop sharing with GUI
 
@@ -131,6 +131,14 @@ done
 %{_datadir}/icons/hicolor/*/apps/io.lamco.rdp-server.png
 
 %changelog
+* Mon Mar 10 2026 Greg Lamberson <greg@lamco.io> - 1.4.2-1
+- Fix Unicode keyboard mapping: map Unicode events to evdev keycodes
+- PipeWire stream DRIVER flag: ensure frames at negotiated framerate
+- Fix Wayland WouldBlock handling in event loop
+- Fix MIME charset handling for clipboard text negotiation
+- Upgrade pipewire-rs to 0.9.2 via lamco-pipewire 0.3.1
+- Fix PipeWire format negotiation for audio capture
+
 * Tue Feb 24 2026 Greg Lamberson <greg@lamco.io> - 1.4.0-1
 - Clipboard provider trait rearchitecture with backend abstraction
   (Portal, Mutter D-Bus, wlr data-control providers)

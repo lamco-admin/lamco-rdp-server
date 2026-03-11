@@ -28,6 +28,7 @@ Rules-Requires-Root: no
 Package: lamco-rdp-server
 Architecture: amd64
 Depends:
+ libfuse3-3 | libfuse3-4,
  pipewire,
  xdg-desktop-portal,
  ${misc:Depends},

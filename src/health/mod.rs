@@ -34,8 +34,8 @@ mod monitor;
 use std::{
     fmt,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
 };
 
@@ -158,6 +158,24 @@ pub enum HealthEvent {
 
     /// PipeWire stream state changed
     VideoStreamStateChanged { state: VideoStreamState },
+
+    /// No video frames received for an extended period while stream is active
+    VideoFrameStalled {
+        /// How long since the last frame, in milliseconds
+        stall_duration_ms: u64,
+    },
+
+    /// Video capture never produced any frames within the expected startup period.
+    /// Unlike `VideoFrameStalled` (which fires after frames stop), this fires
+    /// when frames never started -- e.g., ext-capture handshake succeeded but
+    /// no pixel data was ever delivered.
+    VideoFrameNeverStarted {
+        /// How long we waited before declaring failure, in milliseconds
+        elapsed_ms: u64,
+    },
+
+    /// Video frame timing recovered after a stall
+    VideoFrameResumed,
 
     /// Input injection failed with a transient or permanent error
     InputFailed { reason: String, permanent: bool },

@@ -14,7 +14,7 @@ use std::{sync::Arc, time::Instant};
 use anyhow::{Context, Result};
 use ironrdp_rdpsnd::server::RdpsndServer;
 use ironrdp_svc::SvcMessage;
-use tokio::sync::{mpsc, Mutex, RwLock};
+use tokio::sync::{Mutex, RwLock, mpsc};
 use tracing::{debug, error, info, warn};
 
 use crate::audio::{
@@ -164,17 +164,22 @@ impl AudioPipeline {
                                 match rdpsnd_guard.wave(encoded.clone(), timestamp) {
                                     Ok(messages) => {
                                         let svc_messages: Vec<SvcMessage> = messages.into();
-                                        if let Err(e) = svc_tx.try_send(svc_messages) {
-                                            if matches!(e, mpsc::error::TrySendError::Full(_)) {
-                                                self.stats.frames_dropped += 1;
-                                                debug!("Audio SVC channel full, dropping frame");
-                                            } else {
-                                                error!("Audio SVC channel closed");
-                                                break;
+                                        match svc_tx.try_send(svc_messages) {
+                                            Err(e) => {
+                                                if matches!(e, mpsc::error::TrySendError::Full(_)) {
+                                                    self.stats.frames_dropped += 1;
+                                                    debug!(
+                                                        "Audio SVC channel full, dropping frame"
+                                                    );
+                                                } else {
+                                                    error!("Audio SVC channel closed");
+                                                    break;
+                                                }
                                             }
-                                        } else {
-                                            self.stats.frames_encoded += 1;
-                                            self.stats.bytes_sent += encoded.len() as u64;
+                                            _ => {
+                                                self.stats.frames_encoded += 1;
+                                                self.stats.bytes_sent += encoded.len() as u64;
+                                            }
                                         }
                                     }
                                     Err(e) => {

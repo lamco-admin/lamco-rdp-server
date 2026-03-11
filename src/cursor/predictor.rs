@@ -180,11 +180,7 @@ impl CursorPredictor {
 
         trace!(
             "Cursor update: pos=({}, {}), vel=({:.1}, {:.1}), moving={}",
-            x,
-            y,
-            self.velocity.0,
-            self.velocity.1,
-            self.is_moving
+            x, y, self.velocity.0, self.velocity.1, self.is_moving
         );
     }
 

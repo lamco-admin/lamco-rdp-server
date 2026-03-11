@@ -1,6 +1,6 @@
 name: lamco-rdp-server
 title: Lamco RDP Server
-version: '1.4.1'
+version: '1.4.2'
 summary: Native Wayland RDP server — Community Edition
 description: |
   Lamco RDP Server — Community Edition
@@ -60,7 +60,7 @@ apps:
 parts:
   lamco-rdp-server:
     plugin: rust
-    source: https://github.com/lamco-admin/lamco-rdp-server/releases/download/v1.4.1/lamco-rdp-server-1.4.1.tar.xz
+    source: https://github.com/lamco-admin/lamco-rdp-server/releases/download/v1.4.2/lamco-rdp-server-1.4.2.tar.xz
     # Vendored tarball includes .cargo/config.toml + vendor/
     rust-cargo-parameters:
       - --frozen

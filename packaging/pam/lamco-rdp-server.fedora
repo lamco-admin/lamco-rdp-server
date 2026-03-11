@@ -1,0 +1,20 @@
+# PAM configuration for lamco-rdp-server (Fedora/RHEL)
+#
+# This file should be installed to /etc/pam.d/lamco-rdp-server
+#
+# Uses the standard system authentication stacks provided by
+# pam (authselect) on Fedora/RHEL/CentOS.
+
+# --- Authentication ---
+auth       required     pam_env.so
+auth       substack     system-auth
+auth       include      postlogin
+
+# --- Account management ---
+account    required     pam_nologin.so
+account    include      system-auth
+
+# --- Session management ---
+session    optional     pam_keyinit.so force revoke
+session    include      system-auth
+session    include      postlogin

@@ -15,13 +15,13 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 use zeroize::Zeroizing;
 
 use super::{
-    credentials::{detect_deployment_context, CredentialStorageMethod},
+    credentials::{CredentialStorageMethod, detect_deployment_context},
     flatpak_secret::FlatpakSecrets,
     secret_service::AsyncSecretServiceClient,
     tpm_store::AsyncTpmCredentialStore,
@@ -422,8 +422,8 @@ impl Tokens {
 
     fn encrypt_token(&self, token: &str) -> Result<Vec<u8>> {
         use aes_gcm::{
-            aead::{Aead, KeyInit, OsRng},
             Aes256Gcm, Key, Nonce,
+            aead::{Aead, KeyInit, OsRng},
         };
 
         let key_bytes = derive_machine_key()?;
@@ -452,8 +452,8 @@ impl Tokens {
         }
 
         use aes_gcm::{
-            aead::{Aead, KeyInit},
             Aes256Gcm, Key, Nonce,
+            aead::{Aead, KeyInit},
         };
 
         let key_bytes = derive_machine_key()?;

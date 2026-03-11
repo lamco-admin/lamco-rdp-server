@@ -48,7 +48,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use async_trait::async_trait;
 // Re-export for external use
 pub use keyboard::VirtualKeyboard as WlrVirtualKeyboard;
@@ -57,9 +57,9 @@ pub use pointer::VirtualPointer as WlrVirtualPointer;
 use pointer::{Axis, AxisSource, ButtonState, VirtualPointer};
 use tracing::{debug, info, warn};
 use wayland_client::{
-    globals::{registry_queue_init, GlobalListContents},
-    protocol::{wl_registry, wl_seat::WlSeat},
     Connection, Dispatch, QueueHandle,
+    globals::{GlobalListContents, registry_queue_init},
+    protocol::{wl_registry, wl_seat::WlSeat},
 };
 use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1;
 use wayland_protocols_wlr::virtual_pointer::v1::client::zwlr_virtual_pointer_manager_v1::ZwlrVirtualPointerManagerV1;

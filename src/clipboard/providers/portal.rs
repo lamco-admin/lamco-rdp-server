@@ -5,13 +5,13 @@
 //! (SelectionTransfer, SelectionOwnerChanged, D-Bus bridge) internally.
 
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc,
+    atomic::{AtomicBool, Ordering},
 };
 
 use async_trait::async_trait;
 use lamco_portal::dbus_clipboard::DbusClipboardBridge;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{RwLock, mpsc};
 use tracing::{debug, error, info, warn};
 
 use crate::clipboard::{
@@ -138,16 +138,16 @@ impl PortalClipboardProvider {
 
                         let now = std::time::Instant::now();
 
-                        if let Some(last) = last_forwarded.get(&transfer_event.mime_type) {
-                            if now.duration_since(*last).as_millis() < 2000 {
-                                debug!(
-                                    "Suppressing repeat SelectionTransfer for {} (serial {}, {}ms since last)",
-                                    transfer_event.mime_type,
-                                    transfer_event.serial,
-                                    now.duration_since(*last).as_millis(),
-                                );
-                                continue;
-                            }
+                        if let Some(last) = last_forwarded.get(&transfer_event.mime_type)
+                            && now.duration_since(*last).as_millis() < 2000
+                        {
+                            debug!(
+                                "Suppressing repeat SelectionTransfer for {} (serial {}, {}ms since last)",
+                                transfer_event.mime_type,
+                                transfer_event.serial,
+                                now.duration_since(*last).as_millis(),
+                            );
+                            continue;
                         }
                         last_forwarded.insert(transfer_event.mime_type.clone(), now);
 
@@ -285,13 +285,11 @@ impl PortalClipboardProvider {
                 tokio::select! {
                     Ok(dbus_event) = dbus_rx.recv() => {
                         // Rate limiting
-                        if rate_limit_ms > 0 {
-                            if let Some(last_time) = last_forward_time {
-                                if last_time.elapsed().as_millis() < rate_limit_ms as u128 {
+                        if rate_limit_ms > 0
+                            && let Some(last_time) = last_forward_time
+                                && last_time.elapsed().as_millis() < rate_limit_ms as u128 {
                                     continue;
                                 }
-                            }
-                        }
 
                         // Loop suppression: skip events matching data we recently wrote
                         {

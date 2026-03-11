@@ -6,7 +6,7 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 use zbus::zvariant::{OwnedObjectPath, Value};
@@ -209,7 +209,7 @@ impl MutterSessionManager {
                 Err(_) => {
                     return Err(anyhow::anyhow!(
                         "Timeout waiting for PipeWireStreamAdded signal (5s)"
-                    ))
+                    ));
                 }
             };
 

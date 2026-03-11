@@ -20,11 +20,11 @@
 //! See: docs/analysis/SESSION-FACTORY-PLAN-20260128.md
 
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc,
+    atomic::{AtomicBool, Ordering},
 };
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use tracing::{debug, error, info, warn};
@@ -33,9 +33,9 @@ use crate::{
     health::{HealthEvent, HealthReporter},
     services::ServiceRegistry,
     session::{
+        Tokens,
         factory::{PortalSessionFactory, SessionFactory},
         strategy::{PipeWireAccess, SessionHandle, SessionStrategy, SessionType, StreamInfo},
-        Tokens,
     },
 };
 

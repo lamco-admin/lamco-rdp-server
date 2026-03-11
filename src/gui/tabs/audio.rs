@@ -3,8 +3,8 @@
 //! RDPSND audio output settings including codec selection, sample rate, and quality.
 
 use iced::{
-    widget::{column, pick_list, row, text},
     Alignment, Element, Length,
+    widget::{column, pick_list, row, text},
 };
 
 use crate::gui::{message::Message, state::AppState, widgets, widgets::space};

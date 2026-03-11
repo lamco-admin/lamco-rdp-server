@@ -37,7 +37,7 @@ pub use portal::PortalSessionFactory;
 pub use quirks::{InitQuirk, InitQuirkRegistry, SessionStrategyType};
 pub use state::{SessionCreationError, SessionCreationFailure, SessionCreationState};
 
-use crate::session::{strategy::SessionHandle, DeploymentContext};
+use crate::session::{DeploymentContext, strategy::SessionHandle};
 
 /// Capabilities provided by a session factory
 #[derive(Debug, Clone)]

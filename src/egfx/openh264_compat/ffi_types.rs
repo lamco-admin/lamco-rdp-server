@@ -1,4 +1,7 @@
-#![allow(unsafe_code)]
+#![expect(
+    unsafe_code,
+    reason = "C FFI types: mem::zeroed for POD structs, raw pointer access for encoded frame extraction"
+)]
 // Field names match the OpenH264 C API exactly — renaming would break FFI layout.
 // Dead code allowed: complete API binding — constants/fields used on demand.
 #![allow(non_snake_case, non_camel_case_types, dead_code)]
@@ -188,8 +191,8 @@ impl Default for ISVCEncoderVtbl {
 
 pub(crate) mod abi7 {
     use super::{
-        c_int, c_longlong, c_uchar, c_uint, c_ushort, EParameterSetStrategy, EUsageType,
-        EVideoFrameType, SSpatialLayerConfig, ECOMPLEXITY_MODE, RC_MODES,
+        ECOMPLEXITY_MODE, EParameterSetStrategy, EUsageType, EVideoFrameType, RC_MODES,
+        SSpatialLayerConfig, c_int, c_longlong, c_uchar, c_uint, c_ushort,
     };
 
     #[repr(C)]
@@ -303,8 +306,8 @@ pub(crate) mod abi7 {
 
 pub(crate) mod abi8 {
     use super::{
-        c_int, c_longlong, c_uchar, c_uint, c_ushort, EParameterSetStrategy, EUsageType,
-        EVideoFrameType, SSpatialLayerConfig, ECOMPLEXITY_MODE, RC_MODES,
+        ECOMPLEXITY_MODE, EParameterSetStrategy, EUsageType, EVideoFrameType, RC_MODES,
+        SSpatialLayerConfig, c_int, c_longlong, c_uchar, c_uint, c_ushort,
     };
 
     #[repr(C)]

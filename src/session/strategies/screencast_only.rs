@@ -11,10 +11,10 @@
 
 use std::sync::Arc;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use ashpd::desktop::{
-    screencast::{CursorMode, Screencast, SourceType},
     PersistMode,
+    screencast::{CursorMode, Screencast, SourceType},
 };
 use async_trait::async_trait;
 use tracing::{info, warn};
@@ -315,10 +315,12 @@ mod tests {
             health_reporter: Arc::new(std::sync::OnceLock::new()),
         };
         assert!(handle.notify_keyboard_keycode(42, true).await.is_err());
-        assert!(handle
-            .notify_pointer_motion_absolute(0, 100.0, 100.0)
-            .await
-            .is_err());
+        assert!(
+            handle
+                .notify_pointer_motion_absolute(0, 100.0, 100.0)
+                .await
+                .is_err()
+        );
         assert!(handle.notify_pointer_button(1, true).await.is_err());
         assert!(handle.notify_pointer_axis(0.0, 1.0).await.is_err());
     }

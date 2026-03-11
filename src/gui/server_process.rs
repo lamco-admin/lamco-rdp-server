@@ -2,20 +2,18 @@
 //!
 //! Handles spawning, monitoring, and controlling the lamco-rdp-server process
 //! from the GUI. Provides real-time log capture and status updates.
-#![allow(unsafe_code)]
-
 use std::{
     io::{BufRead, BufReader},
     path::PathBuf,
     process::{Child, Command, Stdio},
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
     time::{Duration, Instant},
 };
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
@@ -161,23 +159,15 @@ impl ServerProcess {
     }
 
     pub fn is_running(&self) -> bool {
-        // Try to get exit status without blocking
-        match self.try_wait() {
-            Ok(None) => true,     // Still running
-            Ok(Some(_)) => false, // Exited
-            Err(_) => false,      // Error checking = assume not running
-        }
-    }
+        // Check via kill(pid, 0) which is a true read-only probe:
+        // returns Ok if the process exists, ESRCH if it doesn't.
+        use nix::{sys::signal::kill, unistd::Pid};
 
-    /// Try to get exit status without blocking
-    fn try_wait(&self) -> Result<Option<std::process::ExitStatus>> {
-        // We need mutable access, but the child is owned by self
-        // Use unsafe to work around this (the check is read-only)
-        let child_ptr = &self.child as *const Child as *mut Child;
-        unsafe {
-            (*child_ptr)
-                .try_wait()
-                .context("Failed to check process status")
+        match kill(Pid::from_raw(self.pid as i32), None) {
+            Ok(()) => true,
+            Err(nix::errno::Errno::ESRCH) => false, // No such process
+            Err(nix::errno::Errno::EPERM) => true, // Exists but we lack permission (shouldn't happen for our child)
+            Err(_) => false,
         }
     }
 
@@ -199,7 +189,7 @@ impl ServerProcess {
         #[cfg(unix)]
         {
             use nix::{
-                sys::signal::{kill, Signal},
+                sys::signal::{Signal, kill},
                 unistd::Pid,
             };
 
@@ -221,6 +211,8 @@ impl ServerProcess {
         let deadline = Instant::now() + Duration::from_secs(5);
         while Instant::now() < deadline {
             if !self.is_running() {
+                // Reap the zombie process now that we know it exited
+                let _ = self.child.wait();
                 info!("Server stopped gracefully");
                 self.cleanup();
                 return Ok(());

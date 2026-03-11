@@ -70,6 +70,25 @@ pub trait ClipboardProvider: Send + Sync {
         success: bool,
     ) -> Result<()>;
 
+    /// Provide data for a previously announced MIME type.
+    ///
+    /// Updates the clipboard backend's source data cache so the compositor
+    /// can serve it on the next paste. Used by backends where the Wayland
+    /// `send` event requires data synchronously (data-control). Portal
+    /// backends use delayed rendering and ignore this.
+    async fn provide_data(&self, _mime_type: &str, _data: Vec<u8>) -> Result<()> {
+        Ok(()) // Default: no-op (Portal uses SelectionTransfer)
+    }
+
+    /// Whether this provider needs data before the compositor requests it.
+    ///
+    /// Returns `true` for data-control (Wayland `send` is synchronous),
+    /// `false` for Portal D-Bus (supports delayed rendering via
+    /// `SelectionTransfer`).
+    fn requires_upfront_data(&self) -> bool {
+        false
+    }
+
     /// Subscribe to provider events.
     ///
     /// Returns a receiver for selection-changed and transfer-request events.

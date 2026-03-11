@@ -14,7 +14,7 @@ use std::sync::Arc;
 use futures::stream::StreamExt;
 use tokio::sync::broadcast;
 use tracing::{debug, error, info, warn};
-use zbus::{proxy, Connection};
+use zbus::{Connection, proxy};
 
 /// Event emitted when Klipper processes clipboard
 #[derive(Debug, Clone)]

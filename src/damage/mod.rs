@@ -42,6 +42,8 @@
 //!     }
 //! }
 //! ```
+// allow (not expect): SIMD unsafe blocks are behind #[cfg(target_arch, target_feature)]
+// gates, so the lint is only triggered on specific compile targets.
 #![allow(unsafe_code)]
 
 use std::time::Instant;

@@ -73,7 +73,7 @@ async fn watch_names(
         clippy::expect_used,
         reason = "static well-known D-Bus names are always valid"
     )]
-    let dbus_proxy: zbus::Proxy<'_> = match zbus::ProxyBuilder::new(&connection)
+    let dbus_proxy: zbus::Proxy<'_> = match zbus::proxy::Builder::new(&connection)
         .interface("org.freedesktop.DBus")
         .expect("valid interface")
         .path("/org/freedesktop/DBus")

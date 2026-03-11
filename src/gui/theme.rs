@@ -5,8 +5,8 @@
 //! strain during extended use and make status indicators pop.
 
 use iced::{
-    widget::{button, container, text_input},
     Background, Border, Color, Shadow, Theme,
+    widget::{button, container, text_input},
 };
 
 /// Professional dark color palette with cyan/teal accents.

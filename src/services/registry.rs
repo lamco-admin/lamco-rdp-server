@@ -259,11 +259,7 @@ impl ServiceRegistry {
     }
 
     pub fn recommended_auth_method(&self) -> &'static str {
-        if self.has_pam_auth() {
-            "pam"
-        } else {
-            "none"
-        }
+        if self.has_pam_auth() { "pam" } else { "none" }
     }
 
     /// NLA requires a working authentication backend (PAM).

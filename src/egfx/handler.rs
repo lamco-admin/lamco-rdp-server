@@ -12,8 +12,8 @@
 //! - Cross-task visibility for the frame sender to check EGFX readiness
 
 use std::sync::{
-    atomic::{AtomicBool, AtomicU16, Ordering},
     Arc,
+    atomic::{AtomicBool, AtomicU16, Ordering},
 };
 
 use ironrdp_egfx::{
@@ -189,31 +189,34 @@ impl LamcoGraphicsHandler {
             // Note: We use try_write because callbacks are synchronous but
             // SharedHandlerState uses tokio::sync::RwLock. This is safe because
             // we initialize the state in the same thread before callbacks start.
-            if let Ok(mut guard) = shared.try_write() {
-                // Preserve existing channel_id if we had one.
-                // NOTE: channel_id is stored in GraphicsPipelineServer (set by DvcProcessor::start),
-                // and EgfxFrameSender queries it directly via server.channel_id() when sending frames.
-                // We preserve it here for diagnostic purposes only - it's not used for frame sending.
-                let existing_channel_id: u32 = guard
-                    .as_ref()
-                    .map_or(0, |s: &HandlerState| s.dvc_channel_id);
+            match shared.try_write() {
+                Ok(mut guard) => {
+                    // Preserve existing channel_id if we had one.
+                    // NOTE: channel_id is stored in GraphicsPipelineServer (set by DvcProcessor::start),
+                    // and EgfxFrameSender queries it directly via server.channel_id() when sending frames.
+                    // We preserve it here for diagnostic purposes only - it's not used for frame sending.
+                    let existing_channel_id: u32 = guard
+                        .as_ref()
+                        .map_or(0, |s: &HandlerState| s.dvc_channel_id);
 
-                let state = HandlerState {
-                    is_ready: self.ready.load(Ordering::Acquire),
-                    is_avc420_enabled: self.avc420_enabled.load(Ordering::Acquire),
-                    is_avc444_enabled: self.avc444_enabled.load(Ordering::Acquire),
-                    // Convert has_surface + surface_id to Option<u16>
-                    // Surface ID 0 is valid in EGFX, so we use Option instead of sentinel
-                    primary_surface_id: if self.has_surface.load(Ordering::Acquire) {
-                        Some(self.primary_surface_id.load(Ordering::Acquire))
-                    } else {
-                        None
-                    },
-                    dvc_channel_id: existing_channel_id,
-                };
-                *guard = Some(state);
-            } else {
-                warn!("Failed to sync EGFX handler state (lock contention)");
+                    let state = HandlerState {
+                        is_ready: self.ready.load(Ordering::Acquire),
+                        is_avc420_enabled: self.avc420_enabled.load(Ordering::Acquire),
+                        is_avc444_enabled: self.avc444_enabled.load(Ordering::Acquire),
+                        // Convert has_surface + surface_id to Option<u16>
+                        // Surface ID 0 is valid in EGFX, so we use Option instead of sentinel
+                        primary_surface_id: if self.has_surface.load(Ordering::Acquire) {
+                            Some(self.primary_surface_id.load(Ordering::Acquire))
+                        } else {
+                            None
+                        },
+                        dvc_channel_id: existing_channel_id,
+                    };
+                    *guard = Some(state);
+                }
+                _ => {
+                    warn!("Failed to sync EGFX handler state (lock contention)");
+                }
             }
         }
     }
@@ -326,8 +329,7 @@ impl GraphicsPipelineHandler for LamcoGraphicsHandler {
     fn on_frame_ack(&mut self, frame_id: u32, queue_depth: u32) {
         trace!(
             "EGFX: frame_ack id={}, queue_depth={}",
-            frame_id,
-            queue_depth
+            frame_id, queue_depth
         );
     }
 
@@ -391,8 +393,8 @@ impl GraphicsPipelineHandler for LamcoGraphicsHandler {
 
     fn preferred_capabilities(&self) -> Vec<CapabilitySet> {
         use ironrdp_egfx::pdu::{
-            CapabilitiesV103Flags, CapabilitiesV104Flags, CapabilitiesV107Flags,
-            CapabilitiesV10Flags,
+            CapabilitiesV10Flags, CapabilitiesV103Flags, CapabilitiesV104Flags,
+            CapabilitiesV107Flags,
         };
 
         // Prefer highest V10.x version for best features (all V10+ support AVC420)

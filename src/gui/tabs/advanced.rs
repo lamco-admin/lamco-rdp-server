@@ -4,8 +4,8 @@
 //! logging, advanced video, and cursor settings.
 
 use iced::{
-    widget::{button, column, container, pick_list, row, slider, text},
     Alignment, Element, Length,
+    widget::{button, column, container, pick_list, row, slider, text},
 };
 
 use crate::gui::{

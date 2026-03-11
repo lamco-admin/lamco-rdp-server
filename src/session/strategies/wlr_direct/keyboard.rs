@@ -35,11 +35,11 @@
 //! virtual-keyboard-unstable-v1 protocol (zwp namespace), supported by most
 //! Wayland compositors including wlroots, GNOME (via RemoteDesktop portal),
 //! and KDE (via RemoteDesktop portal).
-use std::os::fd::{AsFd, AsRawFd, OwnedFd};
+use std::os::fd::{AsFd, OwnedFd};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use tracing::{debug, info, warn};
-use wayland_client::{protocol::wl_seat::WlSeat, QueueHandle};
+use wayland_client::{QueueHandle, protocol::wl_seat::WlSeat};
 use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::{
     zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1,
     zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1,
@@ -242,17 +242,14 @@ fn generate_xkb_keymap(layout: &str) -> Result<String> {
 /// Requires Linux 3.17+ (memfd_create syscall).
 /// This is available on all modern distributions (Ubuntu 14.04+, RHEL 7+, etc.)
 fn create_keymap_fd(keymap: &str) -> Result<OwnedFd> {
-    use std::ffi::CString;
-
     use nix::{
-        sys::memfd::{memfd_create, MemFdCreateFlag},
+        sys::memfd::{MFdFlags, memfd_create},
         unistd::write,
     };
 
-    let name = CString::new("xkb-keymap")?;
     let owned_fd = memfd_create(
-        &name,
-        MemFdCreateFlag::MFD_CLOEXEC | MemFdCreateFlag::MFD_ALLOW_SEALING,
+        "xkb-keymap",
+        MFdFlags::MFD_CLOEXEC | MFdFlags::MFD_ALLOW_SEALING,
     )
     .context("Failed to create memfd. Requires Linux 3.17+ with memfd_create support.")?;
 
@@ -288,9 +285,8 @@ fn create_keymap_fd(keymap: &str) -> Result<OwnedFd> {
     // Note: nix crate doesn't provide fcntl_add_seals, but memfd sealing is optional
     // The keymap fd will work without sealing, just less secure
 
-    use nix::unistd::{lseek, Whence};
-    lseek(owned_fd.as_fd().as_raw_fd(), 0, Whence::SeekSet)
-        .context("Failed to seek memfd to beginning")?;
+    use nix::unistd::{Whence, lseek};
+    lseek(&owned_fd, 0, Whence::SeekSet).context("Failed to seek memfd to beginning")?;
 
     Ok(owned_fd)
 }
@@ -347,15 +343,13 @@ mod tests {
         match create_keymap_fd(test_keymap) {
             Ok(fd) => {
                 // Verify we can read back the data
-                use std::os::fd::AsFd;
-
-                use nix::unistd::{lseek, read, Whence};
+                use nix::unistd::{Whence, lseek, read};
                 let mut buffer = vec![0u8; test_keymap.len()];
 
                 // Seek to start before reading
-                lseek(fd.as_fd().as_raw_fd(), 0, Whence::SeekSet).unwrap();
+                lseek(&fd, 0, Whence::SeekSet).unwrap();
 
-                let n = read(fd.as_raw_fd(), &mut buffer).unwrap();
+                let n = read(&fd, &mut buffer).unwrap();
                 assert_eq!(n, test_keymap.len());
                 assert_eq!(&buffer[..n], test_keymap.as_bytes());
             }
@@ -374,7 +368,7 @@ mod tests {
             Ok(fd) => {
                 // Verify size using fstat
                 use nix::sys::stat::fstat;
-                let metadata = fstat(fd.as_raw_fd()).unwrap();
+                let metadata = fstat(&fd).unwrap();
                 assert_eq!(metadata.st_size as usize, large_keymap.len());
             }
             Err(e) => {

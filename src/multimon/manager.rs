@@ -14,8 +14,8 @@ use tracing::{debug, info};
 
 use crate::{
     multimon::{
-        layout::{Layout, LayoutCalculator, LayoutStrategy},
         Result,
+        layout::{Layout, LayoutCalculator, LayoutStrategy},
     },
     portal::StreamInfo,
 };

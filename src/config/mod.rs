@@ -4,7 +4,10 @@
 //! - TOML files
 //! - Environment variables
 //! - CLI arguments
-#![allow(unsafe_code)]
+#![expect(
+    unsafe_code,
+    reason = "getuid() for root detection, set_var() for portal env bridge"
+)]
 
 use std::{net::SocketAddr, path::PathBuf};
 
@@ -15,6 +18,7 @@ use ashpd::desktop::{
 };
 use enumflags2::BitFlags;
 use serde::{Deserialize, Serialize};
+use tracing::{debug, warn};
 
 /// Check if running inside a Flatpak sandbox
 pub fn is_flatpak() -> bool {
@@ -82,34 +86,56 @@ pub mod types;
 // Use types from types.rs
 // Re-export types needed by other modules
 use types::{
-    AdaptiveFpsConfig, AdvancedVideoConfig, ClipboardConfig, DamageTrackingConfig, DisplayConfig,
-    EgfxConfig, InputConfig, LatencyConfig, LoggingConfig, MultiMonitorConfig, NotificationConfig,
+    AdvancedVideoConfig, CaptureProtocolConfig, ClipboardConfig, DamageTrackingConfig,
+    DisplayConfig, EgfxConfig, InputConfig, LoggingConfig, MultiMonitorConfig, NotificationConfig,
     PerformanceConfig, SecurityConfig, ServerConfig, VideoConfig, VideoPipelineConfig,
 };
 pub use types::{
     AudioConfig, CursorConfig, CursorPredictorConfig, GuiStateConfig, HardwareEncodingConfig,
 };
 
+/// Current config file version. Bumped when breaking changes require migration.
+const CURRENT_CONFIG_VERSION: u32 = 1;
+
 /// Main configuration structure
+#[expect(
+    clippy::unsafe_derive_deserialize,
+    reason = "unsafe in this module (getuid, set_var) is unrelated to deserialized fields"
+)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
+    /// Config file format version (for migration support)
+    #[serde(default = "default_config_version")]
+    pub config_version: u32,
     /// Server configuration
+    #[serde(default)]
     pub server: ServerConfig,
     /// Security configuration
+    #[serde(default)]
     pub security: SecurityConfig,
     /// Video configuration
+    #[serde(default)]
     pub video: VideoConfig,
     /// Video pipeline configuration
+    #[serde(default)]
     pub video_pipeline: VideoPipelineConfig,
+    /// Capture protocol configuration (portal-generic strategy)
+    #[serde(default)]
+    pub capture: CaptureProtocolConfig,
     /// Input configuration
+    #[serde(default)]
     pub input: InputConfig,
     /// Clipboard configuration
+    #[serde(default)]
     pub clipboard: ClipboardConfig,
     /// Multi-monitor configuration
+    #[serde(default)]
     pub multimon: MultiMonitorConfig,
     /// Performance configuration
+    #[serde(default)]
     pub performance: PerformanceConfig,
     /// Logging configuration
+    #[serde(default)]
     pub logging: LoggingConfig,
     /// EGFX configuration
     #[serde(default)]
@@ -141,86 +167,112 @@ pub struct Config {
     pub gui_state: GuiStateConfig,
 }
 
+fn default_config_version() -> u32 {
+    CURRENT_CONFIG_VERSION
+}
+
 impl Config {
-    /// Load configuration from file
+    /// Load configuration with layered overrides.
+    ///
+    /// Priority (highest wins):
+    /// 1. Environment variables (`LAMCO_` prefix, `__` for nesting)
+    /// 2. TOML config file
+    /// 3. Compiled-in defaults (via `#[serde(default)]`)
+    ///
+    /// Environment variable examples:
+    /// - `LAMCO_SERVER__LISTEN_ADDR=0.0.0.0:3390` overrides `server.listen_addr`
+    /// - `LAMCO_EGFX__ENABLED=false` overrides `egfx.enabled`
+    /// - `LAMCO_VIDEO__TARGET_FPS=60` overrides `video.target_fps`
     pub fn load(path: &str) -> Result<Self> {
-        let content =
-            std::fs::read_to_string(path).context(format!("Failed to read config file: {path}"))?;
+        let mut table = match std::fs::read_to_string(path) {
+            Ok(content) => content
+                .parse::<toml::Table>()
+                .context("Failed to parse config file")?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                debug!("Config file not found at {path}, using defaults");
+                toml::Table::new()
+            }
+            Err(e) => return Err(e).context("Failed to read config file"),
+        };
 
-        let mut config: Config = toml::from_str(&content).context("Failed to parse config file")?;
+        // Snapshot before env overlays so we can fall back if they cause errors
+        let base_table = table.clone();
 
-        // Migrate legacy enable_nla field to security_mode
-        if config.security.enable_nla && config.security.security_mode == "auto" {
-            config.security.security_mode = "hybrid".to_string();
+        // Overlay LAMCO_* env vars: LAMCO_SECTION__KEY → table["section"]["key"]
+        let mut env_overrides = Vec::new();
+        for (key, value) in std::env::vars() {
+            let Some(suffix) = key.strip_prefix("LAMCO_") else {
+                continue;
+            };
+            let parts: Vec<String> = suffix.split("__").map(str::to_lowercase).collect();
+            if parts.is_empty() {
+                continue;
+            }
+
+            let mut current = &mut table;
+            for part in &parts[..parts.len() - 1] {
+                current = current
+                    .entry(part)
+                    .or_insert_with(|| toml::Value::Table(toml::Table::new()))
+                    .as_table_mut()
+                    .with_context(|| format!("Config path conflict for env var {key}"))?;
+            }
+
+            // parts is non-empty (guarded above)
+            let field = &parts[parts.len() - 1];
+            let path_str = if parts.len() > 1 {
+                format!("{}.{field}", parts[..parts.len() - 1].join("."))
+            } else {
+                field.clone()
+            };
+            debug!("Config env override: {key} -> {path_str}");
+            current.insert(field.clone(), infer_toml_value(&value));
+            env_overrides.push(key.clone());
         }
 
+        // Try deserialization with env overlays applied
+        let mut config: Config = match toml::Value::Table(table).try_into() {
+            Ok(config) => config,
+            Err(e) if env_overrides.is_empty() => {
+                return Err(e).context("Failed to deserialize config");
+            }
+            Err(e) => {
+                // Env overrides caused a type mismatch; fall back to file + defaults only
+                warn!(
+                    "Config env overrides caused deserialization error, ignoring them: {e}. \
+                     Set vars: {}",
+                    env_overrides.join(", ")
+                );
+                toml::Value::Table(base_table)
+                    .try_into()
+                    .context("Failed to deserialize config (without env overrides)")?
+            }
+        };
+
+        config.migrate();
         config.validate()?;
         Ok(config)
     }
 
+    /// Apply any necessary migrations for older config versions.
+    fn migrate(&mut self) {
+        // v0 (implicit): enable_nla field used instead of security_mode
+        if self.security.enable_nla && self.security.security_mode == "auto" {
+            self.security.security_mode = "hybrid".to_string();
+        }
+
+        self.config_version = CURRENT_CONFIG_VERSION;
+    }
+
     /// Create default configuration
     pub fn default_config() -> Result<Self> {
-        Ok(Config {
-            server: ServerConfig {
-                listen_addr: "0.0.0.0:3389".to_string(),
-                max_connections: 10,
-                session_timeout: 0,
-                use_portals: true,
-                view_only: false,
-            },
-            security: SecurityConfig {
-                cert_path: default_cert_path(),
-                key_path: default_key_path(),
-                enable_nla: false,
-                security_mode: "auto".to_string(),
-                auth_method: "none".to_string(),
-                require_tls_13: false,
-            },
-            video: VideoConfig {
-                target_fps: 30,
-                cursor_mode: "metadata".to_string(),
-            },
-            video_pipeline: VideoPipelineConfig::default(),
-            input: InputConfig {
-                use_libei: true,
-                keyboard_layout: "auto".to_string(),
-                enable_touch: false,
-            },
-            clipboard: ClipboardConfig {
-                enabled: true,
-                max_size: 10_485_760, // 10 MB
-                rate_limit_ms: 200,   // Max 5 events/second
-                allowed_types: vec![],
-                kde_syncselection_hint: false, // Disabled by default (experimental)
-                strategy_override: None,       // Automatic selection by default
-            },
-            multimon: MultiMonitorConfig {
-                enabled: true,
-                max_monitors: 4,
-            },
-            performance: PerformanceConfig {
-                encoder_threads: 0,
-                network_threads: 0,
-                buffer_pool_size: 16,
-                zero_copy: true,
-                adaptive_fps: AdaptiveFpsConfig::default(),
-                latency: LatencyConfig::default(),
-            },
-            logging: LoggingConfig {
-                level: "info".to_string(),
-                log_dir: None,
-                metrics: true,
-            },
-            egfx: EgfxConfig::default(),
-            damage_tracking: DamageTrackingConfig::default(),
-            hardware_encoding: HardwareEncodingConfig::default(),
-            display: DisplayConfig::default(),
-            advanced_video: AdvancedVideoConfig::default(),
-            cursor: CursorConfig::default(),
-            audio: AudioConfig::default(),
-            notifications: NotificationConfig::default(),
-            gui_state: GuiStateConfig::default(),
-        })
+        Ok(Config::default())
+    }
+
+    /// Generate a commented TOML config file with all defaults.
+    pub fn generate_default_toml() -> Result<String> {
+        let config = Config::default();
+        toml::to_string_pretty(&config).context("Failed to serialize default config")
     }
 
     /// Check if TLS certificates are configured and exist
@@ -270,12 +322,30 @@ impl Config {
             );
         }
 
+        match self.security.auth_method.as_str() {
+            "none" | "pam" => {}
+            _ => anyhow::bail!(
+                "Invalid auth_method: {} (expected none or pam)",
+                self.security.auth_method
+            ),
+        }
+
         match self.security.security_mode.as_str() {
             "tls" | "hybrid" | "auto" => {}
             _ => anyhow::bail!(
                 "Invalid security mode: {} (expected tls, hybrid, or auto)",
                 self.security.security_mode
             ),
+        }
+
+        // PAM requires TLS-only mode. CredSSP/Hybrid uses NTLM challenge-response
+        // which requires the server to already know the password — incompatible with
+        // PAM's validate-on-receipt model. Same approach as xrdp.
+        if self.security.auth_method == "pam" && self.security.security_mode != "tls" {
+            anyhow::bail!(
+                "auth_method=pam requires security_mode=tls (CredSSP/Hybrid is \
+                 incompatible with PAM authentication)"
+            );
         }
 
         match self.video.cursor_mode.as_str() {
@@ -337,6 +407,48 @@ impl Config {
         Ok(())
     }
 
+    /// Export protocol preferences as environment variables.
+    ///
+    /// The portal-generic library reads `XDP_GENERIC_*` env vars for protocol
+    /// selection. This bridges config.toml values into that env-var interface,
+    /// but only if the user hasn't already set an env override (env wins).
+    pub fn export_protocol_env_vars(&self) {
+        // SAFETY: called from main() before tokio runtime starts, single-threaded
+        unsafe {
+            // Capture protocol
+            if std::env::var("XDP_GENERIC_CAPTURE_PROTOCOL").is_err()
+                && self.capture.protocol != "auto"
+            {
+                std::env::set_var("XDP_GENERIC_CAPTURE_PROTOCOL", &self.capture.protocol);
+            }
+            if std::env::var("XDP_GENERIC_CAPTURE_NO_FALLBACK").is_err()
+                && !self.capture.allow_fallback
+            {
+                std::env::set_var("XDP_GENERIC_CAPTURE_NO_FALLBACK", "1");
+            }
+            if std::env::var("XDP_GENERIC_CAPTURE_TIMEOUT_MS").is_err()
+                && self.capture.handshake_timeout_ms != 5000
+            {
+                std::env::set_var(
+                    "XDP_GENERIC_CAPTURE_TIMEOUT_MS",
+                    self.capture.handshake_timeout_ms.to_string(),
+                );
+            }
+
+            // Clipboard protocol
+            if std::env::var("XDP_GENERIC_CLIPBOARD_PROTOCOL").is_err()
+                && self.clipboard.protocol != "auto"
+            {
+                std::env::set_var("XDP_GENERIC_CLIPBOARD_PROTOCOL", &self.clipboard.protocol);
+            }
+            if std::env::var("XDP_GENERIC_CLIPBOARD_NO_FALLBACK").is_err()
+                && !self.clipboard.allow_fallback
+            {
+                std::env::set_var("XDP_GENERIC_CLIPBOARD_NO_FALLBACK", "1");
+            }
+        }
+    }
+
     /// Override config with CLI arguments
     pub fn with_overrides(mut self, listen: Option<String>, port: u16) -> Self {
         if let Some(listen_addr) = listen {
@@ -354,14 +466,9 @@ impl Config {
     /// Maps relevant server settings to `lamco_portal::PortalConfig` for
     /// screen capture and input injection via XDG Desktop Portals.
     ///
-    /// # Mapping
-    ///
-    /// | Server Config | Portal Config |
-    /// |--------------|---------------|
-    /// | video.cursor_mode | cursor_mode |
-    /// | multimon.enabled | allow_multiple |
-    /// | input.use_libei | devices (Keyboard + Pointer) |
-    /// | input.enable_touch | devices (+ Touchscreen) |
+    /// Portal RemoteDesktop always requests Keyboard + Pointer devices
+    /// so the compositor grants both input types regardless of which
+    /// injection protocol the server ends up using.
     pub fn to_portal_config(&self) -> lamco_portal::PortalConfig {
         // Map cursor mode from string to enum
         let cursor_mode = match self.video.cursor_mode.to_lowercase().as_str() {
@@ -370,11 +477,9 @@ impl Config {
             _ => CursorMode::Metadata, // Default for "metadata" or invalid
         };
 
-        // Build device flags based on input configuration
-        let mut devices: BitFlags<DeviceType> = DeviceType::Keyboard.into();
-        if self.input.use_libei {
-            devices |= DeviceType::Pointer;
-        }
+        // Always request both keyboard and pointer from the portal.
+        // The injection protocol (libei vs wlr) is decided separately.
+        let mut devices: BitFlags<DeviceType> = DeviceType::Keyboard | DeviceType::Pointer;
         if self.input.enable_touch {
             devices |= DeviceType::Touchscreen;
         }
@@ -392,13 +497,47 @@ impl Config {
 }
 
 impl Default for Config {
-    #[expect(
-        clippy::expect_used,
-        reason = "default config construction is infallible in practice"
-    )]
     fn default() -> Self {
-        Self::default_config().expect("Failed to create default config")
+        Self {
+            config_version: CURRENT_CONFIG_VERSION,
+            server: ServerConfig::default(),
+            security: SecurityConfig::default(),
+            video: VideoConfig::default(),
+            video_pipeline: VideoPipelineConfig::default(),
+            capture: CaptureProtocolConfig::default(),
+            input: InputConfig::default(),
+            clipboard: ClipboardConfig::default(),
+            multimon: MultiMonitorConfig::default(),
+            performance: PerformanceConfig::default(),
+            logging: LoggingConfig::default(),
+            egfx: EgfxConfig::default(),
+            damage_tracking: DamageTrackingConfig::default(),
+            hardware_encoding: HardwareEncodingConfig::default(),
+            display: DisplayConfig::default(),
+            advanced_video: AdvancedVideoConfig::default(),
+            cursor: CursorConfig::default(),
+            audio: AudioConfig::default(),
+            notifications: NotificationConfig::default(),
+            gui_state: GuiStateConfig::default(),
+        }
     }
+}
+
+/// Infer a TOML value type from an environment variable string.
+///
+/// Tries bool → integer → float → string, matching the coercion
+/// order that layered config libraries use.
+fn infer_toml_value(s: &str) -> toml::Value {
+    if let Ok(b) = s.parse::<bool>() {
+        return toml::Value::Boolean(b);
+    }
+    if let Ok(i) = s.parse::<i64>() {
+        return toml::Value::Integer(i);
+    }
+    if let Ok(f) = s.parse::<f64>() {
+        return toml::Value::Float(f);
+    }
+    toml::Value::String(s.to_string())
 }
 
 #[cfg(test)]
@@ -425,5 +564,50 @@ mod tests {
         let mut config = Config::default_config().unwrap();
         config.video.cursor_mode = "invalid_mode".to_string();
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_infer_toml_value_bool() {
+        assert_eq!(infer_toml_value("true"), toml::Value::Boolean(true));
+        assert_eq!(infer_toml_value("false"), toml::Value::Boolean(false));
+    }
+
+    #[test]
+    fn test_infer_toml_value_integer() {
+        assert_eq!(infer_toml_value("42"), toml::Value::Integer(42));
+        assert_eq!(infer_toml_value("0"), toml::Value::Integer(0));
+        assert_eq!(infer_toml_value("-1"), toml::Value::Integer(-1));
+    }
+
+    #[test]
+    fn test_infer_toml_value_float() {
+        assert_eq!(infer_toml_value("3.14"), toml::Value::Float(3.14));
+    }
+
+    #[test]
+    fn test_infer_toml_value_string() {
+        assert_eq!(
+            infer_toml_value("hello"),
+            toml::Value::String("hello".into())
+        );
+        assert_eq!(
+            infer_toml_value("0.0.0.0:3389"),
+            toml::Value::String("0.0.0.0:3389".into())
+        );
+    }
+
+    #[test]
+    fn test_infer_toml_value_ordering() {
+        // "0" parses as integer, not bool or string
+        assert_eq!(infer_toml_value("0"), toml::Value::Integer(0));
+        // "1" parses as integer, not bool
+        assert_eq!(infer_toml_value("1"), toml::Value::Integer(1));
+        // "1.0" parses as float, not string
+        assert_eq!(infer_toml_value("1.0"), toml::Value::Float(1.0));
+        // IP:port stays string (colon prevents numeric parse)
+        assert!(matches!(
+            infer_toml_value("127.0.0.1:3389"),
+            toml::Value::String(_)
+        ));
     }
 }

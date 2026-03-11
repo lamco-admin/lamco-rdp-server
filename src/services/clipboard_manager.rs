@@ -325,9 +325,9 @@ impl DetectedSystemClipboardManager {
     async fn detect_via_process() -> Option<Self> {
         debug!("  Checking for clipboard manager processes...");
 
-        // wl-clipboard is a CLI tool, not a persistent clipboard manager
-        if Self::check_process("wl-copy").await {
-            debug!("    wl-clipboard tools detected");
+        // Check for running clipboard manager processes
+        if Self::check_process_running("wl-copy").await {
+            debug!("    wl-clipboard process running");
             return Some(Self {
                 manager_type: SystemClipboardManagerKind::WlClipboard,
                 version: None,
@@ -339,14 +339,41 @@ impl DetectedSystemClipboardManager {
             });
         }
 
+        // wl-clipboard tools are invoked on-demand, not always running.
+        // Check if they're installed (in PATH) as a fallback.
+        if Self::check_command_exists("wl-copy").await
+            && Self::check_command_exists("wl-paste").await
+        {
+            debug!("    wl-clipboard tools installed (not running)");
+            return Some(Self {
+                manager_type: SystemClipboardManagerKind::WlClipboard,
+                version: None,
+                dbus_responsive: false,
+                takeover_delay_ms: None,
+                mime_signatures: vec![],
+                lock_api_available: false,
+                notes: vec!["Installed but not running (invoked on-demand)".to_string()],
+            });
+        }
+
         None
     }
 
-    async fn check_process(process_name: &str) -> bool {
-        // Use pgrep to check for process
+    async fn check_process_running(process_name: &str) -> bool {
         match tokio::process::Command::new("pgrep")
             .arg("-x")
             .arg(process_name)
+            .output()
+            .await
+        {
+            Ok(output) => output.status.success(),
+            Err(_) => false,
+        }
+    }
+
+    async fn check_command_exists(command: &str) -> bool {
+        match tokio::process::Command::new("which")
+            .arg(command)
             .output()
             .await
         {
@@ -365,6 +392,37 @@ impl DetectedSystemClipboardManager {
                 mime_signatures: vec![],
                 lock_api_available: false,
                 notes: vec!["GNOME Shell built-in clipboard".to_string()],
+            },
+
+            CompositorType::Kde { version } => Self {
+                manager_type: SystemClipboardManagerKind::Klipper {
+                    plasma_version: version.clone().unwrap_or_else(|| "unknown".into()),
+                    has_dbus_api: false, // D-Bus detection already failed if we're here
+                },
+                version: version.clone(),
+                dbus_responsive: false,
+                takeover_delay_ms: Some(1000),
+                mime_signatures: vec![
+                    "application/x-kde-onlyReplaceEmpty".to_string(),
+                    "application/x-kde-cutselection".to_string(),
+                ],
+                lock_api_available: false,
+                notes: vec!["Inferred from KDE compositor (D-Bus probe failed)".to_string()],
+            },
+
+            // wlroots compositors typically use wl-clipboard or data-control
+            CompositorType::Sway { .. }
+            | CompositorType::Hyprland { .. }
+            | CompositorType::Wlroots { .. } => Self {
+                manager_type: SystemClipboardManagerKind::WlClipboard,
+                version: None,
+                dbus_responsive: false,
+                takeover_delay_ms: None,
+                mime_signatures: vec![],
+                lock_api_available: false,
+                notes: vec![
+                    "Inferred from wlroots compositor (uses data-control protocol)".to_string(),
+                ],
             },
 
             _ => Self::none(),
@@ -448,6 +506,27 @@ mod tests {
             DetectedSystemClipboardManager::infer_from_compositor(&CompositorType::Sway {
                 version: Some("1.9".to_string()),
             });
-        assert_eq!(sway_info.manager_type, SystemClipboardManagerKind::None);
+        assert_eq!(
+            sway_info.manager_type,
+            SystemClipboardManagerKind::WlClipboard
+        );
+
+        let kde_info =
+            DetectedSystemClipboardManager::infer_from_compositor(&CompositorType::Kde {
+                version: Some("6.5.4".to_string()),
+            });
+        assert!(matches!(
+            kde_info.manager_type,
+            SystemClipboardManagerKind::Klipper { .. }
+        ));
+
+        let hypr_info =
+            DetectedSystemClipboardManager::infer_from_compositor(&CompositorType::Hyprland {
+                version: Some("0.54.1".to_string()),
+            });
+        assert_eq!(
+            hypr_info.manager_type,
+            SystemClipboardManagerKind::WlClipboard
+        );
     }
 }

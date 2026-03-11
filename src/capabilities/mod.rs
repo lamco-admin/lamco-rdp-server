@@ -45,7 +45,7 @@ mod manager;
 pub mod probes;
 mod state;
 
-pub use diagnostics::{run_diagnostics, DiagnosticReport};
+pub use diagnostics::{DiagnosticReport, run_diagnostics};
 pub use fallback::{
     AllStrategiesFailed, AttemptResult, FallbackChain, FallbackStrategy, InstantiationError,
     ProbeError, StrategyProbe,

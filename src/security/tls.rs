@@ -9,8 +9,8 @@ use std::{fs::File, io::BufReader, path::Path, sync::Arc};
 use anyhow::{Context, Result};
 use ironrdp_server::tokio_rustls::rustls;
 use rustls::{
-    pki_types::{CertificateDer, PrivateKeyDer},
     ServerConfig,
+    pki_types::{CertificateDer, PrivateKeyDer},
 };
 use tracing::{debug, info};
 use x509_cert::der::Decode as _;

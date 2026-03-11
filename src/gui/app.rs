@@ -5,8 +5,8 @@
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use iced::{
-    widget::{button, column, container, image, row, scrollable, text},
     Alignment, Element, Length, Subscription, Task,
+    widget::{button, column, container, image, row, scrollable, text},
 };
 use tracing::debug;
 
@@ -427,8 +427,8 @@ impl ConfigGuiApp {
                 Task::none()
             }
 
-            Message::InputUseLibeiToggled(val) => {
-                self.state.config.input.use_libei = val;
+            Message::InputProtocolChanged(protocol) => {
+                self.state.config.input.input_protocol = protocol;
                 self.state.mark_dirty();
                 Task::none()
             }

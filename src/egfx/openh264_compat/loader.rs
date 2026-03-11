@@ -1,4 +1,7 @@
-#![allow(unsafe_code)]
+#![expect(
+    unsafe_code,
+    reason = "dlopen/dlsym for OpenH264 dynamic loading, Send/Sync for library handle"
+)]
 
 //! OpenH264 library loading with version detection.
 //!
@@ -196,7 +199,6 @@ fn find_openh264_in_dir(dir: &str) -> Option<PathBuf> {
 }
 
 /// Load a specific library path, detect version, resolve symbols.
-#[expect(unsafe_code, reason = "dlopen of system-managed OpenH264 binary")]
 fn try_load(path: &str) -> Result<OpenH264Api, String> {
     // Safety: loading a system-managed library binary (distro package or
     // Flatpak extension), not an arbitrary blob.

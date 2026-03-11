@@ -73,8 +73,8 @@
 
 use std::{
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicU64, Ordering},
     },
     time::Instant,
 };
@@ -82,12 +82,182 @@ use std::{
 use ironrdp_server::{
     KeyboardEvent as IronKeyboardEvent, MouseEvent as IronMouseEvent, RdpServerInputHandler,
 };
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 use tracing::{debug, error, info, trace, warn};
 
 use crate::input::{
     CoordinateTransformer, InputError, KeyboardHandler, MonitorInfo, MouseButton, MouseHandler,
 };
+
+/// Map a Unicode code point to an evdev keycode and whether Shift is needed.
+/// Covers printable ASCII (0x20-0x7E) on US QWERTY layout.
+fn unicode_to_evdev(cp: u16) -> Option<(u32, bool)> {
+    // evdev keycodes from lamco-rdp-input::mapper::keycodes
+    const KEY_SPACE: u32 = 57;
+    const KEY_1: u32 = 2;
+    const KEY_2: u32 = 3;
+    const KEY_3: u32 = 4;
+    const KEY_4: u32 = 5;
+    const KEY_5: u32 = 6;
+    const KEY_6: u32 = 7;
+    const KEY_7: u32 = 8;
+    const KEY_8: u32 = 9;
+    const KEY_9: u32 = 10;
+    const KEY_0: u32 = 11;
+    const KEY_MINUS: u32 = 12;
+    const KEY_EQUAL: u32 = 13;
+    const KEY_TAB: u32 = 15;
+    const KEY_Q: u32 = 16;
+    const KEY_W: u32 = 17;
+    const KEY_E: u32 = 18;
+    const KEY_R: u32 = 19;
+    const KEY_T: u32 = 20;
+    const KEY_Y: u32 = 21;
+    const KEY_U: u32 = 22;
+    const KEY_I: u32 = 23;
+    const KEY_O: u32 = 24;
+    const KEY_P: u32 = 25;
+    const KEY_LEFTBRACE: u32 = 26;
+    const KEY_RIGHTBRACE: u32 = 27;
+    const KEY_ENTER: u32 = 28;
+    const KEY_A: u32 = 30;
+    const KEY_S: u32 = 31;
+    const KEY_D: u32 = 32;
+    const KEY_F: u32 = 33;
+    const KEY_G: u32 = 34;
+    const KEY_H: u32 = 35;
+    const KEY_J: u32 = 36;
+    const KEY_K: u32 = 37;
+    const KEY_L: u32 = 38;
+    const KEY_SEMICOLON: u32 = 39;
+    const KEY_APOSTROPHE: u32 = 40;
+    const KEY_GRAVE: u32 = 41;
+    const KEY_BACKSLASH: u32 = 43;
+    const KEY_Z: u32 = 44;
+    const KEY_X: u32 = 45;
+    const KEY_C: u32 = 46;
+    const KEY_V: u32 = 47;
+    const KEY_B: u32 = 48;
+    const KEY_N: u32 = 49;
+    const KEY_M: u32 = 50;
+    const KEY_COMMA: u32 = 51;
+    const KEY_DOT: u32 = 52;
+    const KEY_SLASH: u32 = 53;
+
+    // (evdev_keycode, needs_shift)
+    match cp {
+        // Whitespace
+        0x20 => Some((KEY_SPACE, false)),        // ' '
+        0x09 => Some((KEY_TAB, false)),          // Tab
+        0x0A | 0x0D => Some((KEY_ENTER, false)), // Newline / CR
+
+        // Digits
+        0x30 => Some((KEY_0, false)), // '0'
+        0x31 => Some((KEY_1, false)), // '1'
+        0x32 => Some((KEY_2, false)), // '2'
+        0x33 => Some((KEY_3, false)), // '3'
+        0x34 => Some((KEY_4, false)), // '4'
+        0x35 => Some((KEY_5, false)), // '5'
+        0x36 => Some((KEY_6, false)), // '6'
+        0x37 => Some((KEY_7, false)), // '7'
+        0x38 => Some((KEY_8, false)), // '8'
+        0x39 => Some((KEY_9, false)), // '9'
+
+        // Lowercase letters
+        0x61 => Some((KEY_A, false)), // 'a'
+        0x62 => Some((KEY_B, false)),
+        0x63 => Some((KEY_C, false)),
+        0x64 => Some((KEY_D, false)),
+        0x65 => Some((KEY_E, false)),
+        0x66 => Some((KEY_F, false)),
+        0x67 => Some((KEY_G, false)),
+        0x68 => Some((KEY_H, false)),
+        0x69 => Some((KEY_I, false)),
+        0x6A => Some((KEY_J, false)),
+        0x6B => Some((KEY_K, false)),
+        0x6C => Some((KEY_L, false)),
+        0x6D => Some((KEY_M, false)),
+        0x6E => Some((KEY_N, false)),
+        0x6F => Some((KEY_O, false)),
+        0x70 => Some((KEY_P, false)),
+        0x71 => Some((KEY_Q, false)),
+        0x72 => Some((KEY_R, false)),
+        0x73 => Some((KEY_S, false)),
+        0x74 => Some((KEY_T, false)),
+        0x75 => Some((KEY_U, false)),
+        0x76 => Some((KEY_V, false)),
+        0x77 => Some((KEY_W, false)),
+        0x78 => Some((KEY_X, false)),
+        0x79 => Some((KEY_Y, false)),
+        0x7A => Some((KEY_Z, false)), // 'z'
+
+        // Uppercase letters (same keys, with Shift)
+        0x41 => Some((KEY_A, true)), // 'A'
+        0x42 => Some((KEY_B, true)),
+        0x43 => Some((KEY_C, true)),
+        0x44 => Some((KEY_D, true)),
+        0x45 => Some((KEY_E, true)),
+        0x46 => Some((KEY_F, true)),
+        0x47 => Some((KEY_G, true)),
+        0x48 => Some((KEY_H, true)),
+        0x49 => Some((KEY_I, true)),
+        0x4A => Some((KEY_J, true)),
+        0x4B => Some((KEY_K, true)),
+        0x4C => Some((KEY_L, true)),
+        0x4D => Some((KEY_M, true)),
+        0x4E => Some((KEY_N, true)),
+        0x4F => Some((KEY_O, true)),
+        0x50 => Some((KEY_P, true)),
+        0x51 => Some((KEY_Q, true)),
+        0x52 => Some((KEY_R, true)),
+        0x53 => Some((KEY_S, true)),
+        0x54 => Some((KEY_T, true)),
+        0x55 => Some((KEY_U, true)),
+        0x56 => Some((KEY_V, true)),
+        0x57 => Some((KEY_W, true)),
+        0x58 => Some((KEY_X, true)),
+        0x59 => Some((KEY_Y, true)),
+        0x5A => Some((KEY_Z, true)), // 'Z'
+
+        // Symbols (unshifted)
+        0x2D => Some((KEY_MINUS, false)),      // '-'
+        0x3D => Some((KEY_EQUAL, false)),      // '='
+        0x5B => Some((KEY_LEFTBRACE, false)),  // '['
+        0x5D => Some((KEY_RIGHTBRACE, false)), // ']'
+        0x5C => Some((KEY_BACKSLASH, false)),  // '\'
+        0x3B => Some((KEY_SEMICOLON, false)),  // ';'
+        0x27 => Some((KEY_APOSTROPHE, false)), // '\''
+        0x60 => Some((KEY_GRAVE, false)),      // '`'
+        0x2C => Some((KEY_COMMA, false)),      // ','
+        0x2E => Some((KEY_DOT, false)),        // '.'
+        0x2F => Some((KEY_SLASH, false)),      // '/'
+
+        // Symbols (shifted)
+        0x21 => Some((KEY_1, true)),          // '!'
+        0x40 => Some((KEY_2, true)),          // '@'
+        0x23 => Some((KEY_3, true)),          // '#'
+        0x24 => Some((KEY_4, true)),          // '$'
+        0x25 => Some((KEY_5, true)),          // '%'
+        0x5E => Some((KEY_6, true)),          // '^'
+        0x26 => Some((KEY_7, true)),          // '&'
+        0x2A => Some((KEY_8, true)),          // '*'
+        0x28 => Some((KEY_9, true)),          // '('
+        0x29 => Some((KEY_0, true)),          // ')'
+        0x5F => Some((KEY_MINUS, true)),      // '_'
+        0x2B => Some((KEY_EQUAL, true)),      // '+'
+        0x7B => Some((KEY_LEFTBRACE, true)),  // '{'
+        0x7D => Some((KEY_RIGHTBRACE, true)), // '}'
+        0x7C => Some((KEY_BACKSLASH, true)),  // '|'
+        0x3A => Some((KEY_SEMICOLON, true)),  // ':'
+        0x22 => Some((KEY_APOSTROPHE, true)), // '"'
+        0x7E => Some((KEY_GRAVE, true)),      // '~'
+        0x3C => Some((KEY_COMMA, true)),      // '<'
+        0x3E => Some((KEY_DOT, true)),        // '>'
+        0x3F => Some((KEY_SLASH, true)),      // '?'
+
+        _ => None,
+    }
+}
 
 fn portal_err(e: impl std::fmt::Display) -> InputError {
     InputError::PortalError(e.to_string())
@@ -250,7 +420,9 @@ impl LamcoInputHandler {
             let mouse_errs = consecutive_mouse_errors.load(Ordering::Relaxed);
             let kbd_errs = consecutive_kbd_errors.load(Ordering::Relaxed);
             if mouse_errs > 0 || kbd_errs > 0 {
-                info!("Input batching task stopped (pending errors: mouse={mouse_errs}, kbd={kbd_errs})");
+                info!(
+                    "Input batching task stopped (pending errors: mouse={mouse_errs}, kbd={kbd_errs})"
+                );
             } else {
                 info!("Input batching task stopped");
             }
@@ -379,7 +551,7 @@ impl LamcoInputHandler {
                     _ => {
                         return Err(InputError::InvalidKeyEvent(
                             "Unexpected event type".to_string(),
-                        ))
+                        ));
                     }
                 };
 
@@ -399,21 +571,52 @@ impl LamcoInputHandler {
             }
 
             IronKeyboardEvent::UnicodePressed(unicode) => {
-                debug!("Unicode key pressed: 0x{:04X}", unicode);
-                // Unicode events - for now log as unsupported
-                // Full implementation would use XKB keysym injection
-                warn!(
-                    "Unicode keyboard events not yet fully supported: 0x{:04X}",
-                    unicode
-                );
+                if let Some((keycode, needs_shift)) = unicode_to_evdev(unicode) {
+                    debug!(
+                        "Unicode press 0x{:04X} -> evdev {} (shift={})",
+                        unicode, keycode, needs_shift
+                    );
+                    // KEY_LEFTSHIFT = 42
+                    if needs_shift {
+                        session_handle
+                            .notify_keyboard_keycode(42, true)
+                            .await
+                            .map_err(portal_err)?;
+                    }
+                    session_handle
+                        .notify_keyboard_keycode(keycode as i32, true)
+                        .await
+                        .map_err(portal_err)?;
+                } else {
+                    debug!(
+                        "Unicode press 0x{:04X}: no evdev mapping (non-ASCII or unmapped)",
+                        unicode
+                    );
+                }
             }
 
             IronKeyboardEvent::UnicodeReleased(unicode) => {
-                debug!("Unicode key released: 0x{:04X}", unicode);
-                warn!(
-                    "Unicode keyboard events not yet fully supported: 0x{:04X}",
-                    unicode
-                );
+                if let Some((keycode, needs_shift)) = unicode_to_evdev(unicode) {
+                    debug!(
+                        "Unicode release 0x{:04X} -> evdev {} (shift={})",
+                        unicode, keycode, needs_shift
+                    );
+                    session_handle
+                        .notify_keyboard_keycode(keycode as i32, false)
+                        .await
+                        .map_err(portal_err)?;
+                    if needs_shift {
+                        session_handle
+                            .notify_keyboard_keycode(42, false)
+                            .await
+                            .map_err(portal_err)?;
+                    }
+                } else {
+                    debug!(
+                        "Unicode release 0x{:04X}: no evdev mapping (non-ASCII or unmapped)",
+                        unicode
+                    );
+                }
             }
 
             IronKeyboardEvent::Synchronize(flags) => {
@@ -452,7 +655,7 @@ impl LamcoInputHandler {
                     _ => {
                         return Err(InputError::InvalidMouseEvent(
                             "Unexpected event type".to_string(),
-                        ))
+                        ));
                     }
                 };
 
@@ -472,7 +675,7 @@ impl LamcoInputHandler {
                     _ => {
                         return Err(InputError::InvalidMouseEvent(
                             "Unexpected event type".to_string(),
-                        ))
+                        ));
                     }
                 };
 

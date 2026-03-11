@@ -17,7 +17,7 @@
 //! # MS-RDPEGFX Reference
 //!
 //! Color conversion follows the formulas in MS-RDPEGFX Section 3.3.8.3.
-#![allow(unsafe_code)]
+#![expect(unsafe_code, reason = "AVX2/NEON SIMD intrinsics for color conversion")]
 
 /// Color matrix standard for RGB to YUV conversion
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -257,12 +257,12 @@ fn bgra_to_yuv444_scalar(bgra: &[u8], frame: &mut Yuv444Frame, matrix: ColorMatr
 unsafe fn bgra_to_yuv444_avx2_impl(bgra: &[u8], frame: &mut Yuv444Frame, matrix: ColorMatrix) {
     unsafe {
         use std::arch::x86_64::{
-            __m128i, __m256i, _mm256_add_epi32, _mm256_castsi256_si128, _mm256_extracti128_si256,
-            _mm256_loadu_si256, _mm256_max_epi32, _mm256_min_epi32, _mm256_mullo_epi32,
-            _mm256_packs_epi32, _mm256_packus_epi16, _mm256_set1_epi32, _mm256_set_m128i,
-            _mm256_setzero_si256, _mm256_srai_epi32, _mm_setr_epi8, _mm_setzero_si128,
-            _mm_shuffle_epi8, _mm_storel_epi64, _mm_unpackhi_epi16, _mm_unpacklo_epi16,
-            _mm_unpacklo_epi32, _mm_unpacklo_epi8,
+            __m128i, __m256i, _mm_setr_epi8, _mm_setzero_si128, _mm_shuffle_epi8, _mm_storel_epi64,
+            _mm_unpackhi_epi16, _mm_unpacklo_epi8, _mm_unpacklo_epi16, _mm_unpacklo_epi32,
+            _mm256_add_epi32, _mm256_castsi256_si128, _mm256_extracti128_si256, _mm256_loadu_si256,
+            _mm256_max_epi32, _mm256_min_epi32, _mm256_mullo_epi32, _mm256_packs_epi32,
+            _mm256_packus_epi16, _mm256_set_m128i, _mm256_set1_epi32, _mm256_setzero_si256,
+            _mm256_srai_epi32,
         };
 
         let (y_kr, y_kg, y_kb) = matrix.y_coefficients_fixed();
@@ -694,10 +694,10 @@ pub fn subsample_chroma_420(chroma_444: &[u8], width: usize, height: usize) -> V
 unsafe fn subsample_chroma_420_avx2(chroma_444: &[u8], width: usize, height: usize) -> Vec<u8> {
     unsafe {
         use std::arch::x86_64::{
-            __m128i, __m256i, _mm256_add_epi16, _mm256_castsi256_si128, _mm256_hadd_epi16,
-            _mm256_loadu_si256, _mm256_packus_epi16, _mm256_permute4x64_epi64, _mm256_set1_epi16,
-            _mm256_setzero_si256, _mm256_srli_epi16, _mm256_unpackhi_epi8, _mm256_unpacklo_epi8,
-            _mm_storeu_si128,
+            __m128i, __m256i, _mm_storeu_si128, _mm256_add_epi16, _mm256_castsi256_si128,
+            _mm256_hadd_epi16, _mm256_loadu_si256, _mm256_packus_epi16, _mm256_permute4x64_epi64,
+            _mm256_set1_epi16, _mm256_setzero_si256, _mm256_srli_epi16, _mm256_unpackhi_epi8,
+            _mm256_unpacklo_epi8,
         };
 
         let out_width = width / 2;

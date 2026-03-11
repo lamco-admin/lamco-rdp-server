@@ -17,7 +17,7 @@ pub use lamco_rdp_clipboard::{
     ClipboardEvent, ClipboardEventReceiver, ClipboardEventSender, ClipboardGeneralCapabilityFlags,
     RdpCliprdrBackend, RdpCliprdrFactory as LibRdpCliprdrFactory,
 };
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 use tracing::{debug, info};
 
 use crate::clipboard::manager::ClipboardOrchestrator;
@@ -134,12 +134,17 @@ impl LamcoCliprdrFactory {
                         ClipboardEvent::FormatDataResponse { data, is_error } => {
                             if is_error {
                                 // Error response is expected when client doesn't have the format
-                                debug!("🔗 Bridge: RDP FormatDataResponse (format unavailable) → ClipboardManager");
+                                debug!(
+                                    "🔗 Bridge: RDP FormatDataResponse (format unavailable) → ClipboardManager"
+                                );
                                 let _ = manager_tx
                                     .send(crate::clipboard::ClipboardEvent::RdpDataError)
                                     .await;
                             } else {
-                                info!("🔗 Bridge: RDP FormatDataResponse ({} bytes) → ClipboardManager", data.len());
+                                info!(
+                                    "🔗 Bridge: RDP FormatDataResponse ({} bytes) → ClipboardManager",
+                                    data.len()
+                                );
                                 let _ = manager_tx
                                     .send(crate::clipboard::ClipboardEvent::RdpDataResponse(data))
                                     .await;
@@ -153,8 +158,10 @@ impl LamcoCliprdrFactory {
                             size,
                             is_size_request,
                         } => {
-                            info!("🔗 Bridge: RDP FileContentsRequest (stream={}, index={}, pos={}, size={}, size_req={}) → ClipboardManager",
-                                stream_id, index, position, size, is_size_request);
+                            info!(
+                                "🔗 Bridge: RDP FileContentsRequest (stream={}, index={}, pos={}, size={}, size_req={}) → ClipboardManager",
+                                stream_id, index, position, size, is_size_request
+                            );
                             let _ = manager_tx
                                 .send(crate::clipboard::ClipboardEvent::RdpFileContentsRequest {
                                     stream_id,
@@ -172,9 +179,16 @@ impl LamcoCliprdrFactory {
                             is_error,
                         } => {
                             if is_error {
-                                info!("🔗 Bridge: RDP FileContentsResponse ERROR (stream={}) → ClipboardManager", stream_id);
+                                info!(
+                                    "🔗 Bridge: RDP FileContentsResponse ERROR (stream={}) → ClipboardManager",
+                                    stream_id
+                                );
                             } else {
-                                info!("🔗 Bridge: RDP FileContentsResponse (stream={}, {} bytes) → ClipboardManager", stream_id, data.len());
+                                info!(
+                                    "🔗 Bridge: RDP FileContentsResponse (stream={}, {} bytes) → ClipboardManager",
+                                    stream_id,
+                                    data.len()
+                                );
                             }
                             let _ = manager_tx
                                 .send(crate::clipboard::ClipboardEvent::RdpFileContentsResponse {
@@ -194,7 +208,9 @@ impl LamcoCliprdrFactory {
 
                         ClipboardEvent::RequestFormatList => {
                             // This is essentially the same as Ready - re-announce Linux clipboard
-                            info!("🔗 Bridge: RDP RequestFormatList → ClipboardManager (treating as Ready)");
+                            info!(
+                                "🔗 Bridge: RDP RequestFormatList → ClipboardManager (treating as Ready)"
+                            );
                             let _ = manager_tx
                                 .send(crate::clipboard::ClipboardEvent::RdpReady)
                                 .await;

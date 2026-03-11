@@ -18,6 +18,8 @@ Description=Lamco RDP Server
 Documentation=https://github.com/lamco-admin/lamco-rdp-server
 After=graphical-session.target
 Wants=graphical-session.target
+StartLimitIntervalSec=60
+StartLimitBurst=3
 
 # Require a graphical session - we need Wayland compositor access
 ConditionEnvironment=WAYLAND_DISPLAY
@@ -32,8 +34,6 @@ ExecStart=/usr/bin/lamco-rdp-server --dbus-service
 # Restart on failure, but not too aggressively
 Restart=on-failure
 RestartSec=5
-StartLimitIntervalSec=60
-StartLimitBurst=3
 
 # Environment
 Environment=RUST_LOG=info
@@ -41,7 +41,6 @@ Environment=RUST_LOG=info
 # Filesystem hardening
 NoNewPrivileges=yes
 ProtectSystem=strict
-ProtectHome=read-only
 PrivateTmp=yes
 ProtectProc=invisible
 ProcSubset=pid
@@ -51,6 +50,8 @@ ReadWritePaths=%t
 # Allow writes to config and state directories
 ReadWritePaths=%h/.config/lamco-rdp-server
 ReadWritePaths=%h/.local/share/lamco-rdp-server
+# Allow writes to Downloads for clipboard file transfer staging
+ReadWritePaths=%h/Downloads
 
 # Kernel and device hardening
 ProtectKernelTunables=yes
@@ -58,7 +59,6 @@ ProtectKernelModules=yes
 ProtectKernelLogs=yes
 ProtectControlGroups=yes
 ProtectClock=yes
-ProtectHostname=yes
 LockPersonality=yes
 MemoryDenyWriteExecute=yes
 RestrictRealtime=yes
@@ -70,13 +70,10 @@ RestrictNamespaces=yes
 # Network: only TCP (RDP listening)
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 
-# Capability bounding (user service has no caps by default, but be explicit)
-CapabilityBoundingSet=
-AmbientCapabilities=
-
-# Syscall filtering: allow only what an RDP server needs
+# Syscall filtering: allow system-service baseline plus mount/umount for FUSE clipboard
 SystemCallFilter=@system-service
 SystemCallFilter=~@privileged @resources
+SystemCallFilter=mount umount2
 SystemCallArchitectures=native
 
 [Install]

@@ -100,7 +100,7 @@ pub fn create_hardware_encoder(
             Ok(encoder) => return Ok(encoder),
             Err(e) => {
                 debug!("VA-API initialization failed: {}", e);
-                errors.push(format!("VA-API: {}", e));
+                errors.push(format!("VA-API: {e}"));
             }
         }
     }
@@ -172,7 +172,7 @@ fn try_nvenc(
 /// Performs quick checks without actually initializing an encoder.
 ///
 /// Returns (vaapi_available, nvenc_available)
-pub fn probe_backends() -> (bool, bool) {
+pub(super) fn probe_backends() -> (bool, bool) {
     let vaapi = probe_vaapi();
     let nvenc = probe_nvenc();
 

@@ -59,7 +59,7 @@ use tracing::{debug, info, trace};
 #[cfg(feature = "h264")]
 use super::openh264_compat;
 use super::{
-    color_convert::{bgra_to_yuv444, ColorMatrix},
+    color_convert::{ColorMatrix, bgra_to_yuv444},
     color_space::{ColorRange, ColorSpaceConfig},
     encoder::{EncoderConfig, EncoderError, EncoderResult},
     yuv444_packing::pack_dual_views,
@@ -975,8 +975,7 @@ impl Avc444Encoder {
         if self.frames_since_aux < MIN_AUX_INTERVAL {
             trace!(
                 "Skipping aux: rate limited ({} frames since last, min={})",
-                self.frames_since_aux,
-                MIN_AUX_INTERVAL
+                self.frames_since_aux, MIN_AUX_INTERVAL
             );
             return false;
         }

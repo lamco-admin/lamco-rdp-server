@@ -305,10 +305,8 @@ impl LoopDetector {
             return true;
         }
 
-        let would_loop = match source {
-            ClipboardSource::Rdp => self.would_cause_loop(formats),
-            ClipboardSource::Local => self.would_cause_loop(formats),
-        };
+        let hash = Self::hash_formats(formats);
+        let would_loop = self.check_hash_collision(&self.format_history, &hash, source);
 
         if would_loop {
             tracing::debug!("Sync skipped: would cause loop");
@@ -324,7 +322,8 @@ impl LoopDetector {
             return true;
         }
 
-        let would_loop = self.would_cause_loop_mime(mime_types);
+        let hash = Self::hash_mime_types(mime_types);
+        let would_loop = self.check_hash_collision(&self.format_history, &hash, source);
 
         if would_loop {
             tracing::debug!("Sync skipped: would cause loop");

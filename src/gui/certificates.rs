@@ -1,14 +1,17 @@
-//! Certificate Generation Module
+//! Certificate Generation and Validation
 //!
-//! Generates self-signed TLS certificates for RDP server authentication.
+//! Generates self-signed TLS certificates for RDP server authentication
+//! and provides X.509 certificate inspection via x509-parser.
 
 use std::{
     fs,
     path::{Path, PathBuf},
 };
 
-use rcgen::generate_simple_self_signed;
+use rcgen::{CertifiedKey, generate_simple_self_signed};
+use serde::Serialize;
 use time::{Duration, OffsetDateTime};
+use x509_parser::pem::parse_x509_pem;
 
 /// Certificate generation parameters
 #[derive(Debug, Clone)]
@@ -36,7 +39,6 @@ pub enum KeySize {
 
 impl Default for CertGenParams {
     fn default() -> Self {
-        // Get hostname for default CN
         let hostname = hostname::get()
             .map(|h| h.to_string_lossy().to_string())
             .unwrap_or_else(|_| "localhost".to_string());
@@ -65,9 +67,42 @@ pub struct GeneratedCertificate {
     pub expires: String,
 }
 
-/// Generate a self-signed certificate with the given parameters
+/// Structured certificate details parsed from X.509.
 ///
-/// This is the main API for certificate generation, taking explicit parameters.
+/// Serializable for D-Bus, health endpoints, or management APIs.
+#[derive(Debug, Clone, Serialize)]
+pub struct CertificateDetails {
+    /// Subject common name (CN)
+    pub subject_cn: Option<String>,
+    /// Full subject distinguished name (RFC 4514)
+    pub subject: String,
+    /// Issuer distinguished name
+    pub issuer: String,
+    /// Serial number (hex)
+    pub serial: String,
+    /// Not valid before (UTC)
+    pub not_before: String,
+    /// Not valid after (UTC)
+    pub not_after: String,
+    /// Whether the certificate is currently within its validity window
+    pub is_currently_valid: bool,
+    /// Days until expiration (negative if already expired)
+    pub days_until_expiry: i64,
+    /// SHA-256 fingerprint (colon-separated hex)
+    pub fingerprint: String,
+    /// Signature algorithm (e.g. "ecdsa-with-SHA256")
+    pub signature_algorithm: String,
+    /// Public key algorithm (e.g. "id-ecPublicKey")
+    pub public_key_algorithm: String,
+    /// Subject alternative names
+    pub san: Vec<String>,
+    /// Whether this is a self-signed certificate (subject == issuer)
+    pub is_self_signed: bool,
+    /// Path to the certificate file
+    pub path: PathBuf,
+}
+
+/// Generate a self-signed certificate with the given parameters
 pub fn generate_self_signed_certificate(
     cert_path: PathBuf,
     key_path: PathBuf,
@@ -96,21 +131,12 @@ pub fn generate_self_signed_certificate(
 
 /// Internal certificate generation from params
 fn generate_certificate_internal(params: &CertGenParams) -> Result<GeneratedCertificate, String> {
-    // Use rcgen's simple self-signed certificate generator
-    // It takes a list of subject alternative names
-    let certificate = generate_simple_self_signed(params.san_names.clone())
-        .map_err(|e| format!("Failed to generate certificate: {}", e))?;
+    let CertifiedKey { cert, signing_key } = generate_simple_self_signed(params.san_names.clone())
+        .map_err(|e| format!("Failed to generate certificate: {e}"))?;
 
-    // Get PEM representations - rcgen 0.12 API returns Result
-    let certificate_pem = certificate
-        .serialize_pem()
-        .map_err(|e| format!("Failed to serialize certificate: {}", e))?;
-    let private_key_pem = certificate.serialize_private_key_pem();
-
-    let der_bytes = certificate
-        .serialize_der()
-        .map_err(|e| format!("Failed to serialize certificate DER: {}", e))?;
-    let fingerprint = calculate_sha256_fingerprint(&der_bytes);
+    let certificate_pem = cert.pem();
+    let private_key_pem = signing_key.serialize_pem();
+    let fingerprint = sha256_fingerprint(cert.der());
 
     let now = OffsetDateTime::now_utc();
     let not_after = now + Duration::days(params.validity_days as i64);
@@ -124,17 +150,13 @@ fn generate_certificate_internal(params: &CertGenParams) -> Result<GeneratedCert
     })
 }
 
-/// Calculate SHA-256 fingerprint of certificate DER bytes
-fn calculate_sha256_fingerprint(der: &[u8]) -> String {
+/// SHA-256 fingerprint of DER-encoded certificate bytes
+fn sha256_fingerprint(der: &[u8]) -> String {
     use sha2::{Digest, Sha256};
 
-    let mut hasher = Sha256::new();
-    hasher.update(der);
-    let result = hasher.finalize();
-
-    result
-        .iter()
-        .map(|b| format!("{:02X}", b))
+    let hash = Sha256::digest(der);
+    hash.iter()
+        .map(|b| format!("{b:02X}"))
         .collect::<Vec<_>>()
         .join(":")
 }
@@ -160,15 +182,15 @@ pub fn save_certificate_files(
 ) -> Result<(), String> {
     if let Some(parent) = cert_path.parent() {
         fs::create_dir_all(parent)
-            .map_err(|e| format!("Failed to create certificate directory: {}", e))?;
+            .map_err(|e| format!("Failed to create certificate directory: {e}"))?;
     }
 
     if let Some(parent) = key_path.parent() {
-        fs::create_dir_all(parent).map_err(|e| format!("Failed to create key directory: {}", e))?;
+        fs::create_dir_all(parent).map_err(|e| format!("Failed to create key directory: {e}"))?;
     }
 
     fs::write(cert_path, &cert.certificate_pem)
-        .map_err(|e| format!("Failed to write certificate file: {}", e))?;
+        .map_err(|e| format!("Failed to write certificate file: {e}"))?;
 
     write_private_key(key_path, &cert.private_key_pem)?;
 
@@ -177,114 +199,93 @@ pub fn save_certificate_files(
 
 /// Write private key file with appropriate permissions (Unix: 0600)
 fn write_private_key(path: &Path, content: &str) -> Result<(), String> {
-    fs::write(path, content).map_err(|e| format!("Failed to write private key file: {}", e))?;
+    fs::write(path, content).map_err(|e| format!("Failed to write private key file: {e}"))?;
 
-    // Set restrictive permissions on Unix
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let permissions = fs::Permissions::from_mode(0o600);
         fs::set_permissions(path, permissions)
-            .map_err(|e| format!("Failed to set key file permissions: {}", e))?;
+            .map_err(|e| format!("Failed to set key file permissions: {e}"))?;
     }
 
     Ok(())
 }
 
-/// Validate an existing certificate file
-pub fn validate_certificate_file(cert_path: &Path) -> Result<CertificateInfo, String> {
+/// Parse a PEM certificate file and extract structured X.509 details.
+pub fn inspect_certificate(cert_path: &Path) -> Result<CertificateDetails, String> {
     let pem_content =
-        fs::read_to_string(cert_path).map_err(|e| format!("Failed to read certificate: {}", e))?;
+        fs::read_to_string(cert_path).map_err(|e| format!("Failed to read certificate: {e}"))?;
 
-    // Parse the PEM to extract basic info
-    // Note: Full X.509 parsing would require additional dependencies
-    // For now, we verify it's a valid PEM and extract what we can
+    let (_, pem) =
+        parse_x509_pem(pem_content.as_bytes()).map_err(|e| format!("Failed to parse PEM: {e}"))?;
 
-    if !pem_content.contains("-----BEGIN CERTIFICATE-----") {
-        return Err("File does not contain a valid PEM certificate".to_string());
-    }
+    let (_, x509) = x509_parser::parse_x509_certificate(&pem.contents)
+        .map_err(|e| format!("Failed to parse X.509 certificate: {e}"))?;
 
-    let cert_start = pem_content
-        .find("-----BEGIN CERTIFICATE-----")
-        .ok_or("Invalid PEM format")?;
-    let cert_end = pem_content
-        .find("-----END CERTIFICATE-----")
-        .ok_or("Invalid PEM format")?;
+    let subject = x509.subject().to_string();
+    let issuer = x509.issuer().to_string();
 
-    let b64_content: String = pem_content[cert_start + 27..cert_end]
-        .chars()
-        .filter(|c| !c.is_whitespace())
-        .collect();
+    let subject_cn = x509
+        .subject()
+        .iter_common_name()
+        .next()
+        .and_then(|cn| cn.as_str().ok().map(String::from));
 
-    // Decode base64 manually (simple implementation)
-    let der_bytes = decode_base64(&b64_content)?;
+    let not_before = x509.validity().not_before.to_rfc2822().unwrap_or_default();
+    let not_after = x509.validity().not_after.to_rfc2822().unwrap_or_default();
+    let is_currently_valid = x509.validity().is_valid();
 
-    let fingerprint = calculate_sha256_fingerprint(&der_bytes);
+    let now_epoch = OffsetDateTime::now_utc().unix_timestamp();
+    let expiry_epoch = x509.validity().not_after.timestamp();
+    let days_until_expiry = (expiry_epoch - now_epoch) / 86400;
 
-    Ok(CertificateInfo {
+    let serial = format_serial(x509.raw_serial());
+
+    let fingerprint = sha256_fingerprint(&pem.contents);
+
+    let signature_algorithm = x509.signature_algorithm.algorithm.to_id_string();
+
+    let public_key_algorithm = x509.public_key().algorithm.algorithm.to_id_string();
+
+    let san = x509
+        .subject_alternative_name()
+        .ok()
+        .flatten()
+        .map(|ext| {
+            ext.value
+                .general_names
+                .iter()
+                .map(|name| format!("{name}"))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let is_self_signed = subject == issuer;
+
+    Ok(CertificateDetails {
+        subject_cn,
+        subject,
+        issuer,
+        serial,
+        not_before,
+        not_after,
+        is_currently_valid,
+        days_until_expiry,
         fingerprint,
-        is_valid: true,
+        signature_algorithm,
+        public_key_algorithm,
+        san,
+        is_self_signed,
         path: cert_path.to_path_buf(),
     })
-}
-
-/// Simple base64 decoder
-fn decode_base64(input: &str) -> Result<Vec<u8>, String> {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-    fn decode_char(c: char) -> Result<u8, String> {
-        if c == '=' {
-            return Ok(0);
-        }
-        ALPHABET
-            .iter()
-            .position(|&x| x == c as u8)
-            .map(|p| p as u8)
-            .ok_or_else(|| format!("Invalid base64 character: {}", c))
-    }
-
-    let mut result = Vec::new();
-    let chars: Vec<char> = input.chars().collect();
-
-    for chunk in chars.chunks(4) {
-        if chunk.len() < 4 {
-            break;
-        }
-
-        let a = decode_char(chunk[0])?;
-        let b = decode_char(chunk[1])?;
-        let c = decode_char(chunk[2])?;
-        let d = decode_char(chunk[3])?;
-
-        result.push((a << 2) | (b >> 4));
-        if chunk[2] != '=' {
-            result.push((b << 4) | (c >> 2));
-        }
-        if chunk[3] != '=' {
-            result.push((c << 6) | d);
-        }
-    }
-
-    Ok(result)
-}
-
-/// Information about an existing certificate
-#[derive(Debug)]
-pub struct CertificateInfo {
-    /// SHA-256 fingerprint
-    pub fingerprint: String,
-    /// Whether the certificate is valid (parseable)
-    pub is_valid: bool,
-    /// Path to the certificate file
-    pub path: std::path::PathBuf,
 }
 
 /// Validate a private key file
 pub fn validate_private_key_file(key_path: &Path) -> Result<(), String> {
     let pem_content =
-        fs::read_to_string(key_path).map_err(|e| format!("Failed to read private key: {}", e))?;
+        fs::read_to_string(key_path).map_err(|e| format!("Failed to read private key: {e}"))?;
 
-    // Check for valid PEM markers
     if pem_content.contains("-----BEGIN PRIVATE KEY-----")
         || pem_content.contains("-----BEGIN RSA PRIVATE KEY-----")
         || pem_content.contains("-----BEGIN EC PRIVATE KEY-----")
@@ -293,6 +294,14 @@ pub fn validate_private_key_file(key_path: &Path) -> Result<(), String> {
     } else {
         Err("File does not contain a valid PEM private key".to_string())
     }
+}
+
+/// Format a serial number as colon-separated hex
+fn format_serial(raw: &[u8]) -> String {
+    raw.iter()
+        .map(|b| format!("{b:02X}"))
+        .collect::<Vec<_>>()
+        .join(":")
 }
 
 #[cfg(test)]
@@ -316,12 +325,46 @@ mod tests {
         let params = CertGenParams::default();
         let cert = generate_certificate_internal(&params).unwrap();
 
-        // Fingerprint should be colon-separated hex pairs
+        // SHA-256 = 32 bytes = 32 colon-separated hex pairs
         let parts: Vec<&str> = cert.fingerprint.split(':').collect();
-        assert_eq!(parts.len(), 32); // SHA-256 = 32 bytes
+        assert_eq!(parts.len(), 32);
         for part in &parts {
             assert_eq!(part.len(), 2);
             assert!(part.chars().all(|c| c.is_ascii_hexdigit()));
         }
+    }
+
+    #[test]
+    fn test_inspect_generated_certificate() {
+        let params = CertGenParams::default();
+        let cert = generate_certificate_internal(&params).unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let cert_path = dir.path().join("cert.pem");
+        let key_path = dir.path().join("key.pem");
+        save_certificate_files(&cert, &cert_path, &key_path).unwrap();
+
+        let details = inspect_certificate(&cert_path).unwrap();
+        assert!(details.is_currently_valid);
+        assert!(details.days_until_expiry > 360);
+        assert!(details.is_self_signed);
+        assert!(!details.fingerprint.is_empty());
+        assert!(!details.san.is_empty());
+    }
+
+    #[test]
+    fn test_certificate_details_serializable() {
+        let params = CertGenParams::default();
+        let cert = generate_certificate_internal(&params).unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let cert_path = dir.path().join("cert.pem");
+        let key_path = dir.path().join("key.pem");
+        save_certificate_files(&cert, &cert_path, &key_path).unwrap();
+
+        let details = inspect_certificate(&cert_path).unwrap();
+        let json = serde_json::to_string_pretty(&details).unwrap();
+        assert!(json.contains("fingerprint"));
+        assert!(json.contains("days_until_expiry"));
     }
 }

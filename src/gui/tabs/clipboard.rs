@@ -3,8 +3,8 @@
 //! Clipboard synchronization settings, rate limiting, and MIME type filtering.
 
 use iced::{
-    widget::{button, column, row, text, text_input},
     Alignment, Element, Length,
+    widget::{button, column, row, text, text_input},
 };
 
 use crate::gui::{

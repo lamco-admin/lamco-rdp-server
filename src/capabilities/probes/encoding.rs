@@ -209,10 +209,10 @@ impl EncodingProbe {
 
     fn parse_vaapi_driver(output: &str) -> String {
         for line in output.lines() {
-            if line.contains("Driver version:") || line.contains("vainfo:") {
-                if let Some(driver) = line.split(':').nth(1) {
-                    return driver.trim().to_string();
-                }
+            if (line.contains("Driver version:") || line.contains("vainfo:"))
+                && let Some(driver) = line.split(':').nth(1)
+            {
+                return driver.trim().to_string();
             }
         }
         "unknown".to_string()

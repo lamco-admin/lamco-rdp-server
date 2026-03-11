@@ -32,8 +32,8 @@
 //! protocols are required.
 
 use std::sync::{
-    atomic::{AtomicBool, AtomicU64, Ordering},
     Arc,
+    atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
 use tokio::sync::mpsc;
@@ -193,12 +193,11 @@ impl KlipperMonitor {
             )
             .await;
 
-        if let Ok(msg) = result {
-            if let Ok(variant) = msg.body().deserialize::<zbus::zvariant::OwnedValue>() {
-                if let Ok(version) = String::try_from(variant) {
-                    return Some(version);
-                }
-            }
+        if let Ok(msg) = result
+            && let Ok(variant) = msg.body().deserialize::<zbus::zvariant::OwnedValue>()
+            && let Ok(version) = String::try_from(variant)
+        {
+            return Some(version);
         }
 
         std::env::var("KDE_SESSION_VERSION").ok()

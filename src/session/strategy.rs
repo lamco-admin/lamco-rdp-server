@@ -7,8 +7,8 @@
 //! - wlr-direct (wlroots native protocols, no Flatpak)
 
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc,
+    atomic::{AtomicBool, Ordering},
 };
 
 use anyhow::Result;
@@ -102,6 +102,28 @@ pub trait SessionHandle: Send + Sync {
 
     async fn notify_pointer_axis(&self, dx: f64, dy: f64) -> Result<()>;
 
+    async fn notify_pointer_motion_relative(&self, _dx: f64, _dy: f64) -> Result<()> {
+        Ok(())
+    }
+
+    async fn notify_touch_down(&self, _stream_id: u32, _slot: u32, _x: f64, _y: f64) -> Result<()> {
+        Ok(())
+    }
+
+    async fn notify_touch_motion(
+        &self,
+        _stream_id: u32,
+        _slot: u32,
+        _x: f64,
+        _y: f64,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    async fn notify_touch_up(&self, _slot: u32) -> Result<()> {
+        Ok(())
+    }
+
     // === Health Integration ===
 
     /// Wire a health reporter into this session handle.
@@ -128,12 +150,35 @@ pub trait SessionHandle: Send + Sync {
 }
 
 /// PipeWire access method
-#[derive(Debug, Clone)]
 pub enum PipeWireAccess {
     /// Portal provides a file descriptor
     FileDescriptor(std::os::fd::RawFd),
     /// Mutter provides a PipeWire node ID
     NodeId(u32),
+    /// Direct frame channel — bypasses PipeWire for frame transport.
+    /// Used when the capture backend runs in-process (portal-generic)
+    /// and PipeWire buffer sharing across connections doesn't work.
+    DirectChannel(std::sync::mpsc::Receiver<lamco_pipewire::frame::RawFrameData>),
+}
+
+impl std::fmt::Debug for PipeWireAccess {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::FileDescriptor(fd) => f.debug_tuple("FileDescriptor").field(fd).finish(),
+            Self::NodeId(id) => f.debug_tuple("NodeId").field(id).finish(),
+            Self::DirectChannel(_) => f.debug_tuple("DirectChannel").finish(),
+        }
+    }
+}
+
+impl Clone for PipeWireAccess {
+    fn clone(&self) -> Self {
+        match self {
+            Self::FileDescriptor(fd) => Self::FileDescriptor(*fd),
+            Self::NodeId(id) => Self::NodeId(*id),
+            Self::DirectChannel(_) => panic!("DirectChannel cannot be cloned"),
+        }
+    }
 }
 
 /// Stream information (unified across strategies)

@@ -196,13 +196,12 @@ impl InputProbe {
         if Path::new("/.dockerenv").exists() {
             return DeploymentType::Container;
         }
-        if let Ok(cgroup) = std::fs::read_to_string("/proc/1/cgroup") {
-            if cgroup.contains("docker")
+        if let Ok(cgroup) = std::fs::read_to_string("/proc/1/cgroup")
+            && (cgroup.contains("docker")
                 || cgroup.contains("podman")
-                || cgroup.contains("containerd")
-            {
-                return DeploymentType::Container;
-            }
+                || cgroup.contains("containerd"))
+        {
+            return DeploymentType::Container;
         }
 
         // INVOCATION_ID is set by systemd for service units

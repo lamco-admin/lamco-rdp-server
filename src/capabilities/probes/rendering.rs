@@ -17,7 +17,7 @@ use tracing::warn;
 use tracing::{debug, info};
 
 use super::environment::{
-    detect_display_server, detect_virtualization, run_command, DisplayServer, VirtualizationType,
+    DisplayServer, VirtualizationType, detect_display_server, detect_virtualization, run_command,
 };
 use crate::capabilities::state::ServiceLevel;
 
@@ -176,10 +176,10 @@ impl RenderingProbe {
             return (false, None);
         }
 
-        if let Ok(output) = run_command("glxinfo", &["-B"]) {
-            if let Some(info) = Self::parse_glxinfo(&output) {
-                return (true, Some(info));
-            }
+        if let Ok(output) = run_command("glxinfo", &["-B"])
+            && let Some(info) = Self::parse_glxinfo(&output)
+        {
+            return (true, Some(info));
         }
 
         if let Ok(output) = run_command("lspci", &[]) {
@@ -272,13 +272,12 @@ impl RenderingProbe {
     }
 
     fn check_software_rendering() -> bool {
-        if let Ok(output) = run_command("glxinfo", &["-B"]) {
-            if output.contains("llvmpipe")
+        if let Ok(output) = run_command("glxinfo", &["-B"])
+            && (output.contains("llvmpipe")
                 || output.contains("softpipe")
-                || output.contains("swrast")
-            {
-                return true;
-            }
+                || output.contains("swrast"))
+        {
+            return true;
         }
 
         if Path::new("/usr/lib/x86_64-linux-gnu/dri").exists()
@@ -370,22 +369,23 @@ impl RenderingProbe {
 
         let is_virtual_gpu = gpu_info.is_some_and(|g| g.is_virtual);
 
-        if let Some(virt) = virtualization {
-            if !wgpu_supported || is_virtual_gpu {
-                if software_available {
-                    let reason = format!(
-                        "Virtual machine ({:?}) with virtual GPU ({:?})",
-                        virt,
-                        gpu_info.map_or(&"unknown".to_string(), |g| &g.name)
-                    );
-                    return (
-                        RenderingRecommendation::UseSoftware {
-                            reason: reason.clone(),
-                        },
-                        Some(reason),
-                    );
-                } else {
-                    return (
+        if let Some(virt) = virtualization
+            && (!wgpu_supported || is_virtual_gpu)
+        {
+            if software_available {
+                let reason = format!(
+                    "Virtual machine ({:?}) with virtual GPU ({:?})",
+                    virt,
+                    gpu_info.map_or(&"unknown".to_string(), |g| &g.name)
+                );
+                return (
+                    RenderingRecommendation::UseSoftware {
+                        reason: reason.clone(),
+                    },
+                    Some(reason),
+                );
+            } else {
+                return (
                         RenderingRecommendation::NoGui {
                             reason: format!(
                                 "Virtual machine ({virt:?}) without GPU passthrough or software rendering"
@@ -394,7 +394,6 @@ impl RenderingProbe {
                         },
                         None,
                     );
-                }
             }
         }
 

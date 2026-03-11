@@ -20,22 +20,23 @@
 //!
 //! FUSE callbacks are synchronous (called from kernel), but RDP is async.
 //! We use channels to bridge: FUSE blocks on oneshot, async task fetches data.
-#![allow(unsafe_code)]
+#![expect(unsafe_code, reason = "libc::getuid/getgid for FUSE file ownership")]
 
 use std::{
     collections::HashMap,
     ffi::OsStr,
     path::PathBuf,
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicU64, Ordering},
     },
     time::{Duration, SystemTime},
 };
 
 use fuser::{
-    FileAttr, FileType, Filesystem, MountOption, ReplyAttr, ReplyData, ReplyDirectory, ReplyEntry,
-    ReplyOpen, Request,
+    Config, Errno, FileAttr, FileHandle, FileType, Filesystem, FopenFlags, Generation, INodeNo,
+    LockOwner, MountOption, OpenFlags, ReplyAttr, ReplyData, ReplyDirectory, ReplyEntry, ReplyOpen,
+    Request, SessionACL,
 };
 use parking_lot::RwLock;
 use tokio::sync::{mpsc, oneshot};
@@ -81,7 +82,7 @@ impl VirtualFile {
     fn to_attr(&self) -> FileAttr {
         let now = self.created;
         FileAttr {
-            ino: self.inode,
+            ino: INodeNo(self.inode),
             size: self.size,
             blocks: self.size.div_ceil(512),
             atime: now,
@@ -125,113 +126,30 @@ pub enum FileContentsResponse {
 }
 
 /// FUSE filesystem for clipboard file transfer
-pub struct FuseClipboardFs {
-    /// Virtual files indexed by inode
+///
+/// All state is behind Arc<RwLock<>> so that the fuser 0.17 `&self` Filesystem
+/// trait works naturally with concurrent access from multiple event loop threads.
+struct ClipboardFs {
     files: Arc<RwLock<HashMap<u64, VirtualFile>>>,
-    /// Filename to inode mapping for lookup
     name_to_inode: Arc<RwLock<HashMap<String, u64>>>,
-    /// Next available inode
-    next_inode: AtomicU64,
-    /// Channel to send file content requests to async task
+    #[expect(dead_code, reason = "inode allocation for dynamically added files")]
+    next_inode: Arc<AtomicU64>,
     request_tx: mpsc::Sender<FileContentsRequest>,
-    /// Mount point path
+    #[expect(dead_code, reason = "needed for cleanup/unmount logging")]
     mount_point: PathBuf,
 }
 
-impl FuseClipboardFs {
-    pub fn new(request_tx: mpsc::Sender<FileContentsRequest>, mount_point: PathBuf) -> Self {
-        Self {
-            files: Arc::new(RwLock::new(HashMap::new())),
-            name_to_inode: Arc::new(RwLock::new(HashMap::new())),
-            next_inode: AtomicU64::new(FIRST_FILE_INODE),
-            request_tx,
-            mount_point,
-        }
-    }
-
-    pub fn files(&self) -> Arc<RwLock<HashMap<u64, VirtualFile>>> {
-        Arc::clone(&self.files)
-    }
-
-    pub fn name_to_inode(&self) -> Arc<RwLock<HashMap<String, u64>>> {
-        Arc::clone(&self.name_to_inode)
-    }
-
-    pub fn add_file(
-        &self,
-        filename: String,
-        size: u64,
-        file_index: u32,
-        clip_data_id: Option<u32>,
-    ) -> u64 {
-        let inode = self.next_inode.fetch_add(1, Ordering::SeqCst);
-        let file = VirtualFile {
-            inode,
-            filename: filename.clone(),
-            size,
-            file_index,
-            clip_data_id,
-            created: SystemTime::now(),
-        };
-
-        {
-            let mut files = self.files.write();
-            files.insert(inode, file);
-        }
-        {
-            let mut names = self.name_to_inode.write();
-            names.insert(filename, inode);
-        }
-
-        inode
-    }
-
-    pub fn clear_files(&self) {
-        let mut files = self.files.write();
-        let mut names = self.name_to_inode.write();
-        files.clear();
-        names.clear();
-        // Reset inode counter
-        self.next_inode.store(FIRST_FILE_INODE, Ordering::SeqCst);
-    }
-
-    pub fn mount_point(&self) -> &PathBuf {
-        &self.mount_point
-    }
-
-    fn root_attr(&self) -> FileAttr {
-        let now = SystemTime::now();
-        FileAttr {
-            ino: ROOT_INODE,
-            size: 0,
-            blocks: 0,
-            atime: now,
-            mtime: now,
-            ctime: now,
-            crtime: now,
-            kind: FileType::Directory,
-            perm: 0o555, // Read + execute (list)
-            nlink: 2,
-            uid: unsafe { libc::getuid() },
-            gid: unsafe { libc::getgid() },
-            rdev: 0,
-            blksize: 512,
-            flags: 0,
-        }
-    }
-}
-
-impl Filesystem for FuseClipboardFs {
-    fn lookup(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEntry) {
-        if parent != ROOT_INODE {
-            reply.error(libc::ENOENT);
+impl Filesystem for ClipboardFs {
+    fn lookup(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEntry) {
+        if parent.0 != ROOT_INODE {
+            reply.error(Errno::ENOENT);
             return;
         }
 
         let name_str = match name.to_str() {
             Some(s) => s,
             None => {
-                reply.error(libc::ENOENT);
+                reply.error(Errno::ENOENT);
                 return;
             }
         };
@@ -242,68 +160,67 @@ impl Filesystem for FuseClipboardFs {
             let files = self.files.read();
             if let Some(file) = files.get(&inode) {
                 trace!("lookup: found '{}' -> inode {}", name_str, inode);
-                reply.entry(&TTL, &file.to_attr(), 0);
+                reply.entry(&TTL, &file.to_attr(), Generation(0));
                 return;
             }
         }
 
         trace!("lookup: '{}' not found", name_str);
-        reply.error(libc::ENOENT);
+        reply.error(Errno::ENOENT);
     }
 
-    fn getattr(&mut self, _req: &Request<'_>, ino: u64, _fh: Option<u64>, reply: ReplyAttr) {
-        if ino == ROOT_INODE {
-            reply.attr(&TTL, &self.root_attr());
+    fn getattr(&self, _req: &Request, ino: INodeNo, _fh: Option<FileHandle>, reply: ReplyAttr) {
+        if ino.0 == ROOT_INODE {
+            reply.attr(&TTL, &root_attr());
             return;
         }
 
         let files = self.files.read();
-        if let Some(file) = files.get(&ino) {
+        if let Some(file) = files.get(&ino.0) {
             reply.attr(&TTL, &file.to_attr());
         } else {
-            reply.error(libc::ENOENT);
+            reply.error(Errno::ENOENT);
         }
     }
 
-    fn open(&mut self, _req: &Request<'_>, ino: u64, flags: i32, reply: ReplyOpen) {
-        if flags & libc::O_WRONLY != 0 || flags & libc::O_RDWR != 0 {
-            reply.error(libc::EACCES);
+    fn open(&self, _req: &Request, ino: INodeNo, flags: OpenFlags, reply: ReplyOpen) {
+        if flags.0 & libc::O_WRONLY != 0 || flags.0 & libc::O_RDWR != 0 {
+            reply.error(Errno::EACCES);
             return;
         }
 
         let files = self.files.read();
-        if files.contains_key(&ino) {
-            reply.opened(ino, 0);
+        if files.contains_key(&ino.0) {
+            reply.opened(FileHandle(ino.0), FopenFlags::empty());
         } else {
-            reply.error(libc::ENOENT);
+            reply.error(Errno::ENOENT);
         }
     }
 
     fn read(
-        &mut self,
-        _req: &Request<'_>,
-        ino: u64,
-        _fh: u64,
-        offset: i64,
+        &self,
+        _req: &Request,
+        ino: INodeNo,
+        _fh: FileHandle,
+        offset: u64,
         size: u32,
-        _flags: i32,
-        _lock_owner: Option<u64>,
+        _flags: OpenFlags,
+        _lock_owner: Option<LockOwner>,
         reply: ReplyData,
     ) {
         let file = {
             let files = self.files.read();
-            files.get(&ino).cloned()
+            files.get(&ino.0).cloned()
         };
 
         let file = match file {
             Some(f) => f,
             None => {
-                reply.error(libc::ENOENT);
+                reply.error(Errno::ENOENT);
                 return;
             }
         };
 
-        let offset = offset as u64;
         if offset >= file.size {
             reply.data(&[]);
             return;
@@ -329,7 +246,7 @@ impl Filesystem for FuseClipboardFs {
 
         if self.request_tx.blocking_send(request).is_err() {
             error!("Failed to send file contents request - channel closed");
-            reply.error(libc::EIO);
+            reply.error(Errno::EIO);
             return;
         }
 
@@ -340,40 +257,40 @@ impl Filesystem for FuseClipboardFs {
             }
             Ok(FileContentsResponse::Error(e)) => {
                 error!("FUSE read: RDP error: {}", e);
-                reply.error(libc::EIO);
+                reply.error(Errno::EIO);
             }
             Err(_) => {
                 error!("FUSE read: response channel closed");
-                reply.error(libc::EIO);
+                reply.error(Errno::EIO);
             }
         }
     }
 
     fn readdir(
-        &mut self,
-        _req: &Request<'_>,
-        ino: u64,
-        _fh: u64,
-        offset: i64,
+        &self,
+        _req: &Request,
+        ino: INodeNo,
+        _fh: FileHandle,
+        offset: u64,
         mut reply: ReplyDirectory,
     ) {
-        if ino != ROOT_INODE {
-            reply.error(libc::ENOTDIR);
+        if ino.0 != ROOT_INODE {
+            reply.error(Errno::ENOTDIR);
             return;
         }
 
         let files = self.files.read();
-        let mut entries: Vec<(u64, FileType, &str)> = vec![
-            (ROOT_INODE, FileType::Directory, "."),
-            (ROOT_INODE, FileType::Directory, ".."),
+        let mut entries: Vec<(u64, FileType, String)> = vec![
+            (ROOT_INODE, FileType::Directory, ".".to_string()),
+            (ROOT_INODE, FileType::Directory, "..".to_string()),
         ];
 
         for file in files.values() {
-            entries.push((file.inode, FileType::RegularFile, &file.filename));
+            entries.push((file.inode, FileType::RegularFile, file.filename.clone()));
         }
 
         for (i, (inode, file_type, name)) in entries.iter().enumerate().skip(offset as usize) {
-            if reply.add(*inode, (i + 1) as i64, *file_type, name) {
+            if reply.add(INodeNo(*inode), (i + 1) as u64, *file_type, name) {
                 break;
             }
         }
@@ -381,32 +298,14 @@ impl Filesystem for FuseClipboardFs {
         reply.ok();
     }
 
-    fn opendir(&mut self, _req: &Request<'_>, ino: u64, _flags: i32, reply: ReplyOpen) {
-        if ino == ROOT_INODE {
-            reply.opened(0, 0);
+    fn opendir(&self, _req: &Request, ino: INodeNo, _flags: OpenFlags, reply: ReplyOpen) {
+        if ino.0 == ROOT_INODE {
+            reply.opened(FileHandle(0), FopenFlags::empty());
         } else {
-            reply.error(libc::ENOTDIR);
+            reply.error(Errno::ENOTDIR);
         }
     }
 }
-
-/// Wrapper for BackgroundSession that implements Send + Sync
-///
-/// fuser::BackgroundSession is thread-safe (it's a handle to a background thread),
-/// but doesn't implement Send + Sync because it contains internal raw pointers.
-/// This wrapper marks it as safe to send across threads.
-#[expect(
-    dead_code,
-    reason = "session field holds the FUSE background thread alive"
-)]
-struct SendableSession(fuser::BackgroundSession);
-
-// SAFETY: BackgroundSession is a handle to a FUSE background thread.
-// The background thread handles all FUSE operations. The session struct
-// itself only holds a JoinHandle and channel, which are thread-safe.
-// The raw pointers are to libfuse state managed by the background thread.
-unsafe impl Send for SendableSession {}
-unsafe impl Sync for SendableSession {}
 
 /// FUSE mount lifecycle manager
 ///
@@ -415,8 +314,8 @@ unsafe impl Sync for SendableSession {}
 pub struct FuseMount {
     /// Mount point path
     mount_point: PathBuf,
-    /// FUSE session (set after mount) - wrapped for Send + Sync
-    session: Option<SendableSession>,
+    /// FUSE session (set after mount)
+    session: Option<fuser::BackgroundSession>,
     /// Shared filesystem state
     files: Arc<RwLock<HashMap<u64, VirtualFile>>>,
     /// Shared name mapping
@@ -442,7 +341,7 @@ impl FuseMount {
 
     /// Mount the FUSE filesystem
     ///
-    /// Tries to mount with `allow_other` first (allows file managers to access),
+    /// Tries to mount with `AllowOther` first (allows file managers to access),
     /// falls back to user-only mount if that fails (requires /etc/fuse.conf config).
     pub fn mount(&mut self) -> Result<()> {
         if self.session.is_some() {
@@ -458,7 +357,7 @@ impl FuseMount {
             self.mount_point
         );
 
-        let create_fs = || FuseClipboardFsShared {
+        let create_fs = || ClipboardFs {
             files: Arc::clone(&self.files),
             name_to_inode: Arc::clone(&self.name_to_inode),
             next_inode: Arc::clone(&self.next_inode),
@@ -466,18 +365,19 @@ impl FuseMount {
             mount_point: self.mount_point.clone(),
         };
 
-        // Try with AllowOther first (allows file managers to access the mount)
-        // This requires 'user_allow_other' in /etc/fuse.conf
-        let options_with_allow_other = vec![
+        // Try with AllowOther first (allows file managers to access the mount).
+        // This requires 'user_allow_other' in /etc/fuse.conf.
+        let mut config_allow_other = Config::default();
+        config_allow_other.mount_options = vec![
             MountOption::RO,
             MountOption::FSName("lamco-clipboard".to_string()),
-            MountOption::AllowOther,
             MountOption::AutoUnmount,
         ];
+        config_allow_other.acl = SessionACL::All;
 
-        match fuser::spawn_mount2(create_fs(), &self.mount_point, &options_with_allow_other) {
+        match fuser::spawn_mount2(create_fs(), &self.mount_point, &config_allow_other) {
             Ok(session) => {
-                self.session = Some(SendableSession(session));
+                self.session = Some(session);
                 info!("FUSE clipboard filesystem mounted (allow_other enabled)");
                 return Ok(());
             }
@@ -489,17 +389,20 @@ impl FuseMount {
             }
         }
 
-        // Fallback: mount without AllowOther (only current user can access)
-        let options_user_only = vec![
+        // Fallback: mount without AllowOther (only current user can access).
+        // AutoUnmount requires allow_other or allow_root in fuser 0.17,
+        // so we drop it in user-only mode and rely on Drop for cleanup.
+        let mut config_user_only = Config::default();
+        config_user_only.mount_options = vec![
             MountOption::RO,
             MountOption::FSName("lamco-clipboard".to_string()),
-            MountOption::AutoUnmount,
         ];
+        config_user_only.acl = SessionACL::Owner;
 
-        let session = fuser::spawn_mount2(create_fs(), &self.mount_point, &options_user_only)
+        let session = fuser::spawn_mount2(create_fs(), &self.mount_point, &config_user_only)
             .map_err(|e| ClipboardError::FileIoError(format!("Failed to mount FUSE: {e}")))?;
 
-        self.session = Some(SendableSession(session));
+        self.session = Some(session);
         info!("FUSE clipboard filesystem mounted (user-only mode)");
 
         Ok(())
@@ -592,186 +495,6 @@ impl Drop for FuseMount {
     }
 }
 
-/// FUSE filesystem with shared state (for use with BackgroundSession)
-struct FuseClipboardFsShared {
-    files: Arc<RwLock<HashMap<u64, VirtualFile>>>,
-    name_to_inode: Arc<RwLock<HashMap<String, u64>>>,
-    #[expect(dead_code, reason = "inode allocation for dynamically added files")]
-    next_inode: Arc<AtomicU64>,
-    request_tx: mpsc::Sender<FileContentsRequest>,
-    #[expect(dead_code, reason = "needed for cleanup/unmount logging")]
-    mount_point: PathBuf,
-}
-
-impl Filesystem for FuseClipboardFsShared {
-    fn lookup(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEntry) {
-        if parent != ROOT_INODE {
-            reply.error(libc::ENOENT);
-            return;
-        }
-
-        let name_str = match name.to_str() {
-            Some(s) => s,
-            None => {
-                reply.error(libc::ENOENT);
-                return;
-            }
-        };
-
-        let names = self.name_to_inode.read();
-        if let Some(&inode) = names.get(name_str) {
-            drop(names);
-            let files = self.files.read();
-            if let Some(file) = files.get(&inode) {
-                trace!("lookup: found '{}' -> inode {}", name_str, inode);
-                reply.entry(&TTL, &file.to_attr(), 0);
-                return;
-            }
-        }
-
-        trace!("lookup: '{}' not found", name_str);
-        reply.error(libc::ENOENT);
-    }
-
-    fn getattr(&mut self, _req: &Request<'_>, ino: u64, _fh: Option<u64>, reply: ReplyAttr) {
-        if ino == ROOT_INODE {
-            reply.attr(&TTL, &root_attr());
-            return;
-        }
-
-        let files = self.files.read();
-        if let Some(file) = files.get(&ino) {
-            reply.attr(&TTL, &file.to_attr());
-        } else {
-            reply.error(libc::ENOENT);
-        }
-    }
-
-    fn open(&mut self, _req: &Request<'_>, ino: u64, flags: i32, reply: ReplyOpen) {
-        if flags & libc::O_WRONLY != 0 || flags & libc::O_RDWR != 0 {
-            reply.error(libc::EACCES);
-            return;
-        }
-
-        let files = self.files.read();
-        if files.contains_key(&ino) {
-            reply.opened(ino, 0);
-        } else {
-            reply.error(libc::ENOENT);
-        }
-    }
-
-    fn read(
-        &mut self,
-        _req: &Request<'_>,
-        ino: u64,
-        _fh: u64,
-        offset: i64,
-        size: u32,
-        _flags: i32,
-        _lock_owner: Option<u64>,
-        reply: ReplyData,
-    ) {
-        let file = {
-            let files = self.files.read();
-            files.get(&ino).cloned()
-        };
-
-        let file = match file {
-            Some(f) => f,
-            None => {
-                reply.error(libc::ENOENT);
-                return;
-            }
-        };
-
-        let offset = offset as u64;
-        if offset >= file.size {
-            reply.data(&[]);
-            return;
-        }
-
-        let remaining = file.size - offset;
-        let read_size = std::cmp::min(size as u64, remaining) as u32;
-
-        debug!(
-            "FUSE read: file='{}' offset={} size={} (file_index={})",
-            file.filename, offset, read_size, file.file_index
-        );
-
-        let (response_tx, response_rx) = oneshot::channel();
-
-        let request = FileContentsRequest {
-            file_index: file.file_index,
-            offset,
-            size: read_size,
-            clip_data_id: file.clip_data_id,
-            response_tx,
-        };
-
-        if self.request_tx.blocking_send(request).is_err() {
-            error!("Failed to send file contents request - channel closed");
-            reply.error(libc::EIO);
-            return;
-        }
-
-        match response_rx.blocking_recv() {
-            Ok(FileContentsResponse::Data(data)) => {
-                trace!("FUSE read: received {} bytes", data.len());
-                reply.data(&data);
-            }
-            Ok(FileContentsResponse::Error(e)) => {
-                error!("FUSE read: RDP error: {}", e);
-                reply.error(libc::EIO);
-            }
-            Err(_) => {
-                error!("FUSE read: response channel closed");
-                reply.error(libc::EIO);
-            }
-        }
-    }
-
-    fn readdir(
-        &mut self,
-        _req: &Request<'_>,
-        ino: u64,
-        _fh: u64,
-        offset: i64,
-        mut reply: ReplyDirectory,
-    ) {
-        if ino != ROOT_INODE {
-            reply.error(libc::ENOTDIR);
-            return;
-        }
-
-        let files = self.files.read();
-        let mut entries: Vec<(u64, FileType, String)> = vec![
-            (ROOT_INODE, FileType::Directory, ".".to_string()),
-            (ROOT_INODE, FileType::Directory, "..".to_string()),
-        ];
-
-        for file in files.values() {
-            entries.push((file.inode, FileType::RegularFile, file.filename.clone()));
-        }
-
-        for (i, (inode, file_type, name)) in entries.iter().enumerate().skip(offset as usize) {
-            if reply.add(*inode, (i + 1) as i64, *file_type, name) {
-                break;
-            }
-        }
-
-        reply.ok();
-    }
-
-    fn opendir(&mut self, _req: &Request<'_>, ino: u64, _flags: i32, reply: ReplyOpen) {
-        if ino == ROOT_INODE {
-            reply.opened(0, 0);
-        } else {
-            reply.error(libc::ENOTDIR);
-        }
-    }
-}
-
 pub fn get_mount_point() -> PathBuf {
     let uid = unsafe { libc::getuid() };
     let runtime_dir =
@@ -783,7 +506,7 @@ pub fn get_mount_point() -> PathBuf {
 fn root_attr() -> FileAttr {
     let now = SystemTime::now();
     FileAttr {
-        ino: ROOT_INODE,
+        ino: INodeNo(ROOT_INODE),
         size: 0,
         blocks: 0,
         atime: now,
@@ -899,7 +622,7 @@ mod tests {
             created: SystemTime::now(),
         };
         let attr = file.to_attr();
-        assert_eq!(attr.ino, 2);
+        assert_eq!(attr.ino, INodeNo(2));
         assert_eq!(attr.size, 1024);
         assert_eq!(attr.kind, FileType::RegularFile);
         assert_eq!(attr.perm, 0o444);

@@ -17,8 +17,8 @@ use std::{
     collections::{HashMap, HashSet},
     io::Read,
     sync::{
-        atomic::{AtomicBool, AtomicU32, Ordering},
         Arc, Mutex,
+        atomic::{AtomicBool, AtomicU32, Ordering},
     },
 };
 
@@ -113,13 +113,12 @@ mod monitor {
     use std::collections::HashMap;
 
     use wayland_client::{
-        event_created_child,
-        globals::{registry_queue_init, GlobalListContents},
+        Connection, Dispatch, EventQueue, Proxy, QueueHandle, event_created_child,
+        globals::{GlobalListContents, registry_queue_init},
         protocol::{
             wl_registry::WlRegistry,
             wl_seat::{self, WlSeat},
         },
-        Connection, Dispatch, EventQueue, Proxy, QueueHandle,
     };
     use wayland_protocols_wlr::data_control::v1::client::{
         zwlr_data_control_device_v1::{self, ZwlrDataControlDeviceV1},
@@ -127,7 +126,7 @@ mod monitor {
         zwlr_data_control_offer_v1::{self, ZwlrDataControlOfferV1},
     };
 
-    use super::{debug, warn, HashSet};
+    use super::{HashSet, debug, warn};
 
     /// State for the persistent clipboard monitor.
     pub(super) struct MonitorState {
@@ -227,7 +226,9 @@ mod monitor {
                     state.offers.retain(|_, _| false);
                 }
                 zwlr_data_control_device_v1::Event::Finished => {
-                    warn!("wl-clipboard monitor: data-control device finished (compositor restarted?)");
+                    warn!(
+                        "wl-clipboard monitor: data-control device finished (compositor restarted?)"
+                    );
                 }
                 _ => {}
             }
@@ -248,10 +249,10 @@ mod monitor {
             _conn: &Connection,
             _qh: &QueueHandle<Self>,
         ) {
-            if let zwlr_data_control_offer_v1::Event::Offer { mime_type } = event {
-                if let Some(types) = state.offers.get_mut(proxy) {
-                    types.push(mime_type);
-                }
+            if let zwlr_data_control_offer_v1::Event::Offer { mime_type } = event
+                && let Some(types) = state.offers.get_mut(proxy)
+            {
+                types.push(mime_type);
             }
         }
     }
@@ -324,89 +325,92 @@ fn clipboard_monitor_loop(
 ) {
     #[cfg(feature = "wayland")]
     {
-        if let Some((mut queue, mut state)) = monitor::create_monitor() {
-            info!("wl-clipboard: persistent data-control monitor started");
+        match monitor::create_monitor() {
+            Some((mut queue, mut state)) => {
+                info!("wl-clipboard: persistent data-control monitor started");
 
-            // Initial roundtrip to get current selection state
-            if let Err(e) = queue.roundtrip(&mut state) {
-                warn!("wl-clipboard monitor: initial roundtrip failed: {e}");
-                // Fall through to ephemeral polling
-            } else {
-                if !state.current_mime_types.is_empty() {
-                    debug!(
-                        "wl-clipboard monitor: initial clipboard has {} types",
-                        state.current_mime_types.len()
-                    );
+                // Initial roundtrip to get current selection state
+                if let Err(e) = queue.roundtrip(&mut state) {
+                    warn!("wl-clipboard monitor: initial roundtrip failed: {e}");
+                    // Fall through to ephemeral polling
                 } else {
-                    debug!("wl-clipboard monitor: initial clipboard empty");
-                }
-
-                // Persistent monitor loop
-                let mut last_emitted: HashSet<String> = HashSet::new();
-                while !shutdown.load(Ordering::Relaxed) {
-                    std::thread::sleep(POLL_INTERVAL);
-                    if shutdown.load(Ordering::Relaxed) {
-                        break;
+                    if !state.current_mime_types.is_empty() {
+                        debug!(
+                            "wl-clipboard monitor: initial clipboard has {} types",
+                            state.current_mime_types.len()
+                        );
+                    } else {
+                        debug!("wl-clipboard monitor: initial clipboard empty");
                     }
 
-                    match queue.roundtrip(&mut state) {
-                        Ok(_) => {}
-                        Err(e) => {
-                            error!("wl-clipboard monitor: roundtrip error: {e}");
+                    // Persistent monitor loop
+                    let mut last_emitted: HashSet<String> = HashSet::new();
+                    while !shutdown.load(Ordering::Relaxed) {
+                        std::thread::sleep(POLL_INTERVAL);
+                        if shutdown.load(Ordering::Relaxed) {
                             break;
                         }
+
+                        match queue.roundtrip(&mut state) {
+                            Ok(_) => {}
+                            Err(e) => {
+                                error!("wl-clipboard monitor: roundtrip error: {e}");
+                                break;
+                            }
+                        }
+
+                        if !state.selection_changed {
+                            continue;
+                        }
+                        state.selection_changed = false;
+
+                        let current = &state.current_mime_types;
+
+                        // Skip if unchanged from what we last emitted
+                        if *current == last_emitted {
+                            continue;
+                        }
+
+                        // Filter out our own clipboard changes
+                        let is_ours = {
+                            let guard = our_mime_types
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                            !guard.is_empty() && *current == *guard
+                        };
+
+                        if is_ours {
+                            debug!(
+                                "wl-clipboard monitor: selection change is ours (filtered), {} types",
+                                current.len()
+                            );
+                        } else if !current.is_empty() {
+                            info!(
+                                "wl-clipboard monitor: selection changed ({} types: {:?})",
+                                current.len(),
+                                current
+                            );
+                            let mime_list: Vec<String> = current.iter().cloned().collect();
+                            let _ = tx.send(ClipboardProviderEvent::SelectionChanged {
+                                mime_types: mime_list,
+                                force: true,
+                            });
+                        } else {
+                            debug!("wl-clipboard monitor: clipboard cleared");
+                        }
+
+                        last_emitted.clone_from(current);
                     }
 
-                    if !state.selection_changed {
-                        continue;
-                    }
-                    state.selection_changed = false;
-
-                    let current = &state.current_mime_types;
-
-                    // Skip if unchanged from what we last emitted
-                    if *current == last_emitted {
-                        continue;
-                    }
-
-                    // Filter out our own clipboard changes
-                    let is_ours = {
-                        let guard = our_mime_types
-                            .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner);
-                        !guard.is_empty() && *current == *guard
-                    };
-
-                    if is_ours {
-                        debug!(
-                            "wl-clipboard monitor: selection change is ours (filtered), {} types",
-                            current.len()
-                        );
-                    } else if !current.is_empty() {
-                        info!(
-                            "wl-clipboard monitor: selection changed ({} types: {:?})",
-                            current.len(),
-                            current
-                        );
-                        let mime_list: Vec<String> = current.iter().cloned().collect();
-                        let _ = tx.send(ClipboardProviderEvent::SelectionChanged {
-                            mime_types: mime_list,
-                            force: true,
-                        });
-                    } else {
-                        debug!("wl-clipboard monitor: clipboard cleared");
-                    }
-
-                    last_emitted.clone_from(current);
+                    debug!("wl-clipboard monitor thread exiting");
+                    return;
                 }
-
-                debug!("wl-clipboard monitor thread exiting");
-                return;
             }
-        } else {
-            info!(
-                "wl-clipboard: persistent monitor unavailable, falling back to ephemeral polling"
-            );
+            _ => {
+                info!(
+                    "wl-clipboard: persistent monitor unavailable, falling back to ephemeral polling"
+                );
+            }
         }
     }
 
@@ -454,7 +458,9 @@ fn clipboard_poll_loop_ephemeral(
             }
             Err(wl_paste::Error::ClipboardEmpty) => {
                 if !first_success {
-                    debug!("wl-clipboard poll: first query returned ClipboardEmpty (protocol works, no content)");
+                    debug!(
+                        "wl-clipboard poll: first query returned ClipboardEmpty (protocol works, no content)"
+                    );
                     first_success = true;
                 }
                 error_streak = 0;
@@ -462,7 +468,9 @@ fn clipboard_poll_loop_ephemeral(
             }
             Err(wl_paste::Error::NoSeats) => {
                 if !first_success {
-                    warn!("wl-clipboard poll: first query returned NoSeats (data-control seat binding failed)");
+                    warn!(
+                        "wl-clipboard poll: first query returned NoSeats (data-control seat binding failed)"
+                    );
                     first_success = true;
                 }
                 error_streak = 0;
@@ -779,10 +787,10 @@ impl ClipboardProvider for WlClipboardProvider {
         self.shutdown.store(true, Ordering::Relaxed);
 
         // Wait for the monitor thread to exit
-        if let Ok(mut guard) = self.poll_handle.lock() {
-            if let Some(handle) = guard.take() {
-                let _ = handle.join();
-            }
+        if let Ok(mut guard) = self.poll_handle.lock()
+            && let Some(handle) = guard.take()
+        {
+            let _ = handle.join();
         }
 
         debug!("wl-clipboard provider shut down");

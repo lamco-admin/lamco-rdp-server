@@ -6,7 +6,7 @@
 use std::{fs, path::Path};
 
 use anyhow::{Context, Result};
-use rcgen::{Certificate, CertificateParams, DistinguishedName, DnType, KeyPair};
+use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair};
 use tracing::{info, warn};
 
 /// Certificate generator
@@ -27,17 +27,15 @@ impl CertificateGenerator {
         params.not_after =
             time::OffsetDateTime::now_utc() + time::Duration::days(validity_days as i64);
 
-        // Generate key pair (use ECDSA P-256 algorithm)
-        let key_pair = KeyPair::generate(&rcgen::PKCS_ECDSA_P256_SHA256)
+        let key_pair = KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256)
             .context("Failed to generate key pair")?;
-        params.key_pair = Some(key_pair);
 
-        let cert = Certificate::from_params(params).context("Failed to generate certificate")?;
+        let cert = params
+            .self_signed(&key_pair)
+            .context("Failed to generate certificate")?;
 
-        let cert_pem = cert
-            .serialize_pem()
-            .context("Failed to serialize certificate")?;
-        let key_pem = cert.serialize_private_key_pem();
+        let cert_pem = cert.pem();
+        let key_pem = key_pair.serialize_pem();
 
         info!("Self-signed certificate generated successfully");
 

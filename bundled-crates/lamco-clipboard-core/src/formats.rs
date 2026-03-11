@@ -267,7 +267,7 @@ impl FormatConverter {
             });
         }
 
-        let mut result: Vec<u8> = text.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        let mut result: Vec<u8> = text.encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
 
         // Add null terminator (2 bytes for UTF-16)
         result.extend_from_slice(&[0, 0]);
@@ -427,10 +427,11 @@ impl FormatConverter {
 
         let header = format!(
             "Version:0.9\r\n\
-             StartHTML:{start_html:08}\r\n\
-             EndHTML:{end_html:08}\r\n\
-             StartFragment:{start_fragment:08}\r\n\
-             EndFragment:{end_fragment:08}\r\n"
+             StartHTML:{:08}\r\n\
+             EndHTML:{:08}\r\n\
+             StartFragment:{:08}\r\n\
+             EndFragment:{:08}\r\n",
+            start_html, end_html, start_fragment, end_fragment
         );
 
         let mut result = header;
@@ -462,7 +463,7 @@ impl FormatConverter {
         text.lines()
             .find(|line| line.starts_with(key))
             .and_then(|line| line[key.len()..].trim().parse().ok())
-            .ok_or_else(|| ClipboardError::FormatConversion(format!("missing {key} header")))
+            .ok_or_else(|| ClipboardError::FormatConversion(format!("missing {} header", key)))
     }
 
     // =========================================================================
@@ -1060,7 +1061,7 @@ impl FileDescriptor {
     /// The filename is sanitized for Windows compatibility.
     pub fn build(path: &std::path::Path) -> ClipboardResult<Vec<u8>> {
         let metadata = std::fs::metadata(path)
-            .map_err(|e| ClipboardError::FormatConversion(format!("Failed to get file metadata: {e}")))?;
+            .map_err(|e| ClipboardError::FormatConversion(format!("Failed to get file metadata: {}", e)))?;
 
         let raw_filename = path
             .file_name()

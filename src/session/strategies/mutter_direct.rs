@@ -11,11 +11,11 @@
 //! eliminating the need for a hybrid Portal session.
 
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc,
+    atomic::{AtomicBool, Ordering},
 };
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use async_trait::async_trait;
 use futures_util::StreamExt;
 #[cfg(feature = "libei")]
@@ -34,29 +34,10 @@ enum MutterInputMethod {
     /// EIS protocol via ConnectToEIS (GNOME 46+, lower latency)
     Eis {
         context: Arc<reis::ei::Context>,
-        keyboard_device: Arc<tokio::sync::Mutex<Option<reis::ei::Device>>>,
-        pointer_device: Arc<tokio::sync::Mutex<Option<reis::ei::Device>>>,
-        devices: Arc<tokio::sync::Mutex<std::collections::HashMap<reis::ei::Device, DeviceData>>>,
-        last_serial: Arc<tokio::sync::Mutex<u32>>,
+        devices: Arc<super::eis_common::EisDevices>,
     },
     /// D-Bus methods on RemoteDesktop.Session (universal fallback)
     Dbus,
-}
-
-/// Device data for EIS devices (shared with libei strategy)
-#[cfg(feature = "libei")]
-#[derive(Default)]
-struct DeviceData {
-    name: Option<String>,
-    device_type: Option<reis::ei::device::DeviceType>,
-    interfaces: std::collections::HashMap<String, reis::Object>,
-}
-
-#[cfg(feature = "libei")]
-impl DeviceData {
-    fn interface<T: reis::Interface>(&self) -> Option<T> {
-        self.interfaces.get(T::NAME)?.clone().downcast()
-    }
 }
 
 /// Mutter session handle wrapper
@@ -170,21 +151,11 @@ impl SessionHandle for MutterSessionHandleImpl {
         #[cfg(feature = "libei")]
         if let MutterInputMethod::Eis {
             ref context,
-            ref keyboard_device,
             ref devices,
-            ref last_serial,
-            ..
         } = self.input_method
         {
-            return eis_keyboard_keycode(
-                context,
-                keyboard_device,
-                devices,
-                last_serial,
-                keycode,
-                pressed,
-            )
-            .await;
+            return super::eis_common::eis_keyboard_keycode(context, devices, keycode, pressed)
+                .await;
         }
 
         // D-Bus fallback: Mutter expects u32 keycode
@@ -205,21 +176,10 @@ impl SessionHandle for MutterSessionHandleImpl {
         #[cfg(feature = "libei")]
         if let MutterInputMethod::Eis {
             ref context,
-            ref pointer_device,
             ref devices,
-            ref last_serial,
-            ..
         } = self.input_method
         {
-            return eis_pointer_motion_absolute(
-                context,
-                pointer_device,
-                devices,
-                last_serial,
-                x,
-                y,
-            )
-            .await;
+            return super::eis_common::eis_pointer_motion_absolute(context, devices, x, y).await;
         }
 
         // D-Bus fallback: use stream object path
@@ -246,21 +206,10 @@ impl SessionHandle for MutterSessionHandleImpl {
         #[cfg(feature = "libei")]
         if let MutterInputMethod::Eis {
             ref context,
-            ref pointer_device,
             ref devices,
-            ref last_serial,
-            ..
         } = self.input_method
         {
-            return eis_pointer_button(
-                context,
-                pointer_device,
-                devices,
-                last_serial,
-                button,
-                pressed,
-            )
-            .await;
+            return super::eis_common::eis_pointer_button(context, devices, button, pressed).await;
         }
 
         let rd_session = self.mutter_handle.remote_desktop_session().await?;
@@ -278,13 +227,10 @@ impl SessionHandle for MutterSessionHandleImpl {
         #[cfg(feature = "libei")]
         if let MutterInputMethod::Eis {
             ref context,
-            ref pointer_device,
             ref devices,
-            ref last_serial,
-            ..
         } = self.input_method
         {
-            return eis_pointer_axis(context, pointer_device, devices, last_serial, dx, dy).await;
+            return super::eis_common::eis_pointer_axis(context, devices, dx, dy).await;
         }
 
         let rd_session = self.mutter_handle.remote_desktop_session().await?;
@@ -292,6 +238,104 @@ impl SessionHandle for MutterSessionHandleImpl {
             .notify_pointer_axis(dx, dy)
             .await
             .context("Failed to inject pointer axis via Mutter D-Bus")
+    }
+
+    async fn notify_pointer_motion_relative(&self, dx: f64, dy: f64) -> Result<()> {
+        if !self.session_valid.load(Ordering::Acquire) {
+            return Err(anyhow!(
+                "Mutter session invalid — cannot send relative motion"
+            ));
+        }
+
+        #[cfg(feature = "libei")]
+        if let MutterInputMethod::Eis {
+            ref context,
+            ref devices,
+        } = self.input_method
+        {
+            return super::eis_common::eis_pointer_motion_relative(context, devices, dx, dy).await;
+        }
+
+        let rd_session = self.mutter_handle.remote_desktop_session().await?;
+        rd_session
+            .notify_pointer_motion_relative(dx, dy)
+            .await
+            .context("Failed to inject relative pointer motion via Mutter D-Bus")
+    }
+
+    async fn notify_touch_down(&self, _stream_id: u32, slot: u32, x: f64, y: f64) -> Result<()> {
+        if !self.session_valid.load(Ordering::Acquire) {
+            return Err(anyhow!("Mutter session invalid — cannot send touch down"));
+        }
+
+        #[cfg(feature = "libei")]
+        if let MutterInputMethod::Eis {
+            ref context,
+            ref devices,
+        } = self.input_method
+        {
+            return super::eis_common::eis_touch_down(context, devices, slot, x, y).await;
+        }
+
+        let stream_path = self
+            .mutter_handle
+            .streams
+            .first()
+            .ok_or_else(|| anyhow!("No streams available"))?;
+
+        let rd_session = self.mutter_handle.remote_desktop_session().await?;
+        rd_session
+            .notify_touch_down(stream_path, slot, x, y)
+            .await
+            .context("Failed to inject touch down via Mutter D-Bus")
+    }
+
+    async fn notify_touch_motion(&self, _stream_id: u32, slot: u32, x: f64, y: f64) -> Result<()> {
+        if !self.session_valid.load(Ordering::Acquire) {
+            return Err(anyhow!("Mutter session invalid — cannot send touch motion"));
+        }
+
+        #[cfg(feature = "libei")]
+        if let MutterInputMethod::Eis {
+            ref context,
+            ref devices,
+        } = self.input_method
+        {
+            return super::eis_common::eis_touch_motion(context, devices, slot, x, y).await;
+        }
+
+        let stream_path = self
+            .mutter_handle
+            .streams
+            .first()
+            .ok_or_else(|| anyhow!("No streams available"))?;
+
+        let rd_session = self.mutter_handle.remote_desktop_session().await?;
+        rd_session
+            .notify_touch_motion(stream_path, slot, x, y)
+            .await
+            .context("Failed to inject touch motion via Mutter D-Bus")
+    }
+
+    async fn notify_touch_up(&self, slot: u32) -> Result<()> {
+        if !self.session_valid.load(Ordering::Acquire) {
+            return Err(anyhow!("Mutter session invalid — cannot send touch up"));
+        }
+
+        #[cfg(feature = "libei")]
+        if let MutterInputMethod::Eis {
+            ref context,
+            ref devices,
+        } = self.input_method
+        {
+            return super::eis_common::eis_touch_up(context, devices, slot).await;
+        }
+
+        let rd_session = self.mutter_handle.remote_desktop_session().await?;
+        rd_session
+            .notify_touch_up(slot)
+            .await
+            .context("Failed to inject touch up via Mutter D-Bus")
     }
 
     fn clipboard_source(&self) -> crate::session::strategy::ClipboardSource {
@@ -383,26 +427,29 @@ impl SessionStrategy for MutterDirectStrategy {
 
         // Set up input method (take EIS FD before moving mutter_handle)
         #[cfg(feature = "libei")]
-        let input_method = if let Some(eis_fd) = mutter_handle.eis_fd.take() {
-            match setup_eis_input(
-                eis_fd,
-                Arc::clone(&session_valid),
-                Arc::clone(&health_reporter),
-            )
-            .await
-            {
-                Ok(method) => {
-                    info!("Using EIS for input (low-latency path)");
-                    method
-                }
-                Err(e) => {
-                    warn!("EIS setup failed, falling back to D-Bus input: {}", e);
-                    MutterInputMethod::Dbus
+        let input_method = match mutter_handle.eis_fd.take() {
+            Some(eis_fd) => {
+                match setup_eis_input(
+                    eis_fd,
+                    Arc::clone(&session_valid),
+                    Arc::clone(&health_reporter),
+                )
+                .await
+                {
+                    Ok(method) => {
+                        info!("Using EIS for input (low-latency path)");
+                        method
+                    }
+                    Err(e) => {
+                        warn!("EIS setup failed, falling back to D-Bus input: {}", e);
+                        MutterInputMethod::Dbus
+                    }
                 }
             }
-        } else {
-            info!("No EIS FD, using D-Bus input");
-            MutterInputMethod::Dbus
+            _ => {
+                info!("No EIS FD, using D-Bus input");
+                MutterInputMethod::Dbus
+            }
         };
 
         if mutter_handle.clipboard.is_some() {
@@ -441,7 +488,9 @@ async fn setup_eis_input(
     use std::os::unix::net::UnixStream;
 
     use futures::stream::StreamExt;
-    use reis::{ei, tokio::EiEventStream, PendingRequestResult};
+    use reis::{PendingRequestResult, ei, tokio::EiEventStream};
+
+    use super::eis_common::EisDevices;
 
     let stream = UnixStream::from(fd);
     let context = ei::Context::new(stream).context("Failed to create EIS context")?;
@@ -459,19 +508,12 @@ async fn setup_eis_input(
     info!("Mutter EIS handshake complete");
 
     let context = Arc::new(context);
-    let keyboard_device = Arc::new(tokio::sync::Mutex::new(None));
-    let pointer_device = Arc::new(tokio::sync::Mutex::new(None));
-    let devices: Arc<tokio::sync::Mutex<std::collections::HashMap<reis::ei::Device, DeviceData>>> =
-        Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
-    let last_serial = Arc::new(tokio::sync::Mutex::new(handshake_resp.serial));
+    let devices = Arc::new(EisDevices::new(handshake_resp.serial));
+    let connection = Arc::new(tokio::sync::Mutex::new(handshake_resp.connection));
 
     // Spawn event loop for device discovery
     let ctx_clone = context.clone();
-    let kbd_clone = keyboard_device.clone();
-    let ptr_clone = pointer_device.clone();
     let dev_clone = devices.clone();
-    let serial_clone = last_serial.clone();
-    let connection = Arc::new(tokio::sync::Mutex::new(handshake_resp.connection));
 
     tokio::spawn(async move {
         while let Some(result) = events.next().await {
@@ -494,17 +536,7 @@ async fn setup_eis_input(
                 }
             };
 
-            if let Err(e) = handle_eis_event(
-                event,
-                &ctx_clone,
-                &connection,
-                &kbd_clone,
-                &ptr_clone,
-                &dev_clone,
-                &serial_clone,
-            )
-            .await
-            {
+            if let Err(e) = handle_eis_event(event, &ctx_clone, &connection, &dev_clone).await {
                 tracing::error!("Mutter EIS event handler error: {}", e);
                 session_valid.store(false, Ordering::Release);
                 if let Some(r) = health_reporter.get() {
@@ -525,13 +557,7 @@ async fn setup_eis_input(
         }
     });
 
-    Ok(MutterInputMethod::Eis {
-        context,
-        keyboard_device,
-        pointer_device,
-        devices,
-        last_serial,
-    })
+    Ok(MutterInputMethod::Eis { context, devices })
 }
 
 #[cfg(feature = "libei")]
@@ -539,18 +565,16 @@ async fn handle_eis_event(
     event: reis::ei::Event,
     context: &reis::ei::Context,
     connection: &tokio::sync::Mutex<reis::ei::Connection>,
-    keyboard_device: &tokio::sync::Mutex<Option<reis::ei::Device>>,
-    pointer_device: &tokio::sync::Mutex<Option<reis::ei::Device>>,
-    devices: &tokio::sync::Mutex<std::collections::HashMap<reis::ei::Device, DeviceData>>,
-    last_serial: &tokio::sync::Mutex<u32>,
+    devices: &super::eis_common::EisDevices,
 ) -> Result<()> {
     use reis::ei;
+
+    use super::eis_common::DeviceData;
 
     match event {
         ei::Event::Connection(_connection, request) => match request {
             ei::connection::Event::Seat { seat: _ } => {
                 debug!("[mutter-eis] Seat added");
-                // We'll handle seat binding in the Done event
             }
             ei::connection::Event::Ping { ping } => {
                 ping.done(0);
@@ -567,7 +591,6 @@ async fn handle_eis_event(
                 );
             }
             ei::seat::Event::Done => {
-                // Bind all capabilities
                 seat.bind(u64::MAX);
                 let conn = connection.lock().await;
                 conn.sync(1);
@@ -576,14 +599,14 @@ async fn handle_eis_event(
                 info!("[mutter-eis] Seat bound");
             }
             ei::seat::Event::Device { device } => {
-                let mut devs = devices.lock().await;
+                let mut devs = devices.all.lock().await;
                 devs.insert(device, DeviceData::default());
             }
             _ => {}
         },
 
         ei::Event::Device(device, request) => {
-            let mut devs = devices.lock().await;
+            let mut devs = devices.all.lock().await;
             let data = devs.entry(device.clone()).or_default();
 
             match request {
@@ -598,21 +621,10 @@ async fn handle_eis_event(
                     data.interfaces.insert(iface_name, object);
                 }
                 ei::device::Event::Done => {
-                    if matches!(data.device_type, Some(ei::device::DeviceType::Virtual)) {
-                        if data.interface::<ei::Keyboard>().is_some() {
-                            *keyboard_device.lock().await = Some(device.clone());
-                            info!("[mutter-eis] Keyboard device ready");
-                        }
-                        if data.interface::<ei::Pointer>().is_some()
-                            || data.interface::<ei::PointerAbsolute>().is_some()
-                        {
-                            *pointer_device.lock().await = Some(device.clone());
-                            info!("[mutter-eis] Pointer device ready");
-                        }
-                    }
+                    super::eis_common::assign_device_roles(&device, data, devices).await;
                 }
                 ei::device::Event::Resumed { serial } => {
-                    *last_serial.lock().await = serial;
+                    *devices.last_serial.lock().await = serial;
                 }
                 _ => {}
             }
@@ -620,175 +632,6 @@ async fn handle_eis_event(
 
         _ => {}
     }
-
-    Ok(())
-}
-
-#[cfg(feature = "libei")]
-fn current_time_us() -> u64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_micros() as u64
-}
-
-#[cfg(feature = "libei")]
-async fn eis_keyboard_keycode(
-    context: &reis::ei::Context,
-    keyboard_device: &tokio::sync::Mutex<Option<reis::ei::Device>>,
-    devices: &tokio::sync::Mutex<std::collections::HashMap<reis::ei::Device, DeviceData>>,
-    last_serial: &tokio::sync::Mutex<u32>,
-    keycode: i32,
-    pressed: bool,
-) -> Result<()> {
-    use reis::ei;
-
-    let device = keyboard_device
-        .lock()
-        .await
-        .clone()
-        .ok_or_else(|| anyhow!("EIS keyboard not ready"))?;
-
-    let devs = devices.lock().await;
-    let data = devs
-        .get(&device)
-        .ok_or_else(|| anyhow!("Device data missing"))?;
-    let keyboard = data
-        .interface::<ei::Keyboard>()
-        .ok_or_else(|| anyhow!("Keyboard interface not found"))?;
-    drop(devs);
-
-    // EIS keycodes offset by 8 from evdev
-    let eis_keycode = (keycode - 8) as u32;
-    let state = if pressed {
-        ei::keyboard::KeyState::Press
-    } else {
-        ei::keyboard::KeyState::Released
-    };
-
-    keyboard.key(eis_keycode, state);
-
-    let serial = *last_serial.lock().await;
-    device.frame(serial, current_time_us());
-    context.flush()?;
-
-    Ok(())
-}
-
-#[cfg(feature = "libei")]
-async fn eis_pointer_motion_absolute(
-    context: &reis::ei::Context,
-    pointer_device: &tokio::sync::Mutex<Option<reis::ei::Device>>,
-    devices: &tokio::sync::Mutex<std::collections::HashMap<reis::ei::Device, DeviceData>>,
-    last_serial: &tokio::sync::Mutex<u32>,
-    x: f64,
-    y: f64,
-) -> Result<()> {
-    use reis::ei;
-
-    let device = pointer_device
-        .lock()
-        .await
-        .clone()
-        .ok_or_else(|| anyhow!("EIS pointer not ready"))?;
-
-    let devs = devices.lock().await;
-    let data = devs
-        .get(&device)
-        .ok_or_else(|| anyhow!("Device data missing"))?;
-    let pointer_abs = data
-        .interface::<ei::PointerAbsolute>()
-        .ok_or_else(|| anyhow!("PointerAbsolute interface not found"))?;
-    drop(devs);
-
-    pointer_abs.motion_absolute(x as f32, y as f32);
-
-    let serial = *last_serial.lock().await;
-    device.frame(serial, current_time_us());
-    context.flush()?;
-
-    Ok(())
-}
-
-#[cfg(feature = "libei")]
-async fn eis_pointer_button(
-    context: &reis::ei::Context,
-    pointer_device: &tokio::sync::Mutex<Option<reis::ei::Device>>,
-    devices: &tokio::sync::Mutex<std::collections::HashMap<reis::ei::Device, DeviceData>>,
-    last_serial: &tokio::sync::Mutex<u32>,
-    button: i32,
-    pressed: bool,
-) -> Result<()> {
-    use reis::ei;
-
-    let device = pointer_device
-        .lock()
-        .await
-        .clone()
-        .ok_or_else(|| anyhow!("EIS pointer not ready"))?;
-
-    let devs = devices.lock().await;
-    let data = devs
-        .get(&device)
-        .ok_or_else(|| anyhow!("Device data missing"))?;
-    let btn = data
-        .interface::<ei::Button>()
-        .ok_or_else(|| anyhow!("Button interface not found"))?;
-    drop(devs);
-
-    btn.button(
-        button as u32,
-        if pressed {
-            ei::button::ButtonState::Press
-        } else {
-            ei::button::ButtonState::Released
-        },
-    );
-
-    let serial = *last_serial.lock().await;
-    device.frame(serial, current_time_us());
-    context.flush()?;
-
-    Ok(())
-}
-
-#[cfg(feature = "libei")]
-async fn eis_pointer_axis(
-    context: &reis::ei::Context,
-    pointer_device: &tokio::sync::Mutex<Option<reis::ei::Device>>,
-    devices: &tokio::sync::Mutex<std::collections::HashMap<reis::ei::Device, DeviceData>>,
-    last_serial: &tokio::sync::Mutex<u32>,
-    dx: f64,
-    dy: f64,
-) -> Result<()> {
-    use reis::ei;
-
-    let device = pointer_device
-        .lock()
-        .await
-        .clone()
-        .ok_or_else(|| anyhow!("EIS pointer not ready"))?;
-
-    let devs = devices.lock().await;
-    let data = devs
-        .get(&device)
-        .ok_or_else(|| anyhow!("Device data missing"))?;
-    let scroll = data
-        .interface::<ei::Scroll>()
-        .ok_or_else(|| anyhow!("Scroll interface not found"))?;
-    drop(devs);
-
-    if dx.abs() > 0.01 {
-        scroll.scroll(dx as f32, 0.0);
-    }
-    if dy.abs() > 0.01 {
-        scroll.scroll(0.0, dy as f32);
-    }
-
-    let serial = *last_serial.lock().await;
-    device.frame(serial, current_time_us());
-    context.flush()?;
 
     Ok(())
 }

@@ -68,8 +68,8 @@ pub mod sync;
 pub use cooperation::{CooperationEvent, CooperationStats, KlipperCooperationCoordinator};
 pub use error::{ClipboardError, ErrorContext, ErrorType, RecoveryAction, Result, RetryConfig};
 pub use fuse::{
-    generate_gnome_copied_files_content, generate_uri_list_content, get_mount_point,
     FileContentsRequest, FileContentsResponse, FileDescriptor, FuseMount,
+    generate_gnome_copied_files_content, generate_uri_list_content, get_mount_point,
 };
 pub use ironrdp_backend::LamcoCliprdrFactory;
 pub use klipper::{KlipperInfo, KlipperMonitor};
@@ -171,8 +171,10 @@ impl FormatConverterExt for FormatConverter {
                 }
             }
         }
-        if mime_types.is_empty() {
-            // Fall back to text/plain if no mapping found
+        if mime_types.is_empty() && !formats.is_empty() {
+            // Fall back to text/plain if formats were provided but none could be mapped.
+            // An empty input list means the client has no clipboard content — don't
+            // fabricate a text/plain announcement (that would steal Wayland clipboard ownership).
             mime_types.push("text/plain".to_string());
         }
         Ok(mime_types)

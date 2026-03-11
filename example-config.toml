@@ -87,6 +87,27 @@ frame_ms = 20
 opus_bitrate = 64000
 
 # =============================================================================
+# Capture Protocol Configuration (portal-generic strategy)
+# =============================================================================
+# These settings control which Wayland capture protocol is used when the server
+# connects directly to the compositor (portal-generic strategy). They have no
+# effect when using XDG Desktop Portal-based capture.
+[capture]
+# Capture protocol preference: "auto", "ext", "wlr"
+# - "auto": Auto-detect best available (ext preferred, wlr fallback)
+# - "ext": Prefer ext-image-copy-capture-v1 (staging standard)
+# - "wlr": Prefer wlr-screencopy-unstable-v1 (wlroots)
+protocol = "auto"
+# Allow fallback to alternative capture protocol if preferred is unavailable
+allow_fallback = true
+# Ext-capture handshake timeout in milliseconds
+# How long to wait for the compositor to deliver constraint events after
+# requesting an ext-image-copy-capture session. Some compositors advertise
+# the protocol but don't fully implement it (e.g., Hyprland 0.54+).
+# Set to 0 to disable the timeout.
+handshake_timeout_ms = 5000
+
+# =============================================================================
 # Input Configuration
 # =============================================================================
 [input]
@@ -110,6 +131,14 @@ rate_limit_ms = 200
 # Allowed MIME types (empty = all types allowed)
 # Example: ["text/plain", "text/html", "image/png"]
 allowed_types = []
+# Clipboard protocol preference: "auto", "ext", "wlr"
+# - "auto": Auto-detect best available (ext preferred, wlr fallback)
+# - "ext": Prefer ext-data-control-v1 (staging standard)
+# - "wlr": Prefer wlr-data-control-v1 (wlroots)
+# Only relevant for portal-generic strategy (direct Wayland access).
+protocol = "auto"
+# Allow fallback to alternative clipboard protocol if preferred is unavailable
+allow_fallback = true
 
 # [EXPERIMENTAL] Include x-kde-syncselection hint for Klipper
 # When enabled on KDE Plasma, adds "application/x-kde-syncselection" to clipboard

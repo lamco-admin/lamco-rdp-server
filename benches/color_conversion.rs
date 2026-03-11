@@ -3,8 +3,8 @@
 //! Measures performance of BGRA→YUV444 conversion at various resolutions.
 //! Tests both scalar and SIMD (AVX2/NEON) code paths.
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use lamco_rdp_server::egfx::{bgra_to_yuv444, pack_dual_views, ColorMatrix};
+use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
+use lamco_rdp_server::egfx::{ColorMatrix, bgra_to_yuv444, pack_dual_views};
 
 /// Generate test BGRA data with a gradient pattern
 fn generate_bgra_data(width: usize, height: usize) -> Vec<u8> {
@@ -37,7 +37,10 @@ fn bench_bgra_to_yuv444(c: &mut Criterion) {
         let bgra_data = generate_bgra_data(width, height);
         let pixels = (width * height) as u64;
 
-        group.throughput(Throughput::Elements(pixels));
+        group.throughput(Throughput::ElementsAndBytes {
+            elements: pixels,
+            bytes: pixels * 4, // BGRA = 4 bytes per pixel
+        });
 
         // Benchmark with BT.709 (HD)
         group.bench_with_input(BenchmarkId::new("BT709", name), &bgra_data, |b, data| {
@@ -82,7 +85,10 @@ fn bench_chroma_subsample(c: &mut Criterion) {
         let yuv444 = bgra_to_yuv444(&bgra_data, width, height, ColorMatrix::BT709);
         let pixels = (width * height) as u64;
 
-        group.throughput(Throughput::Elements(pixels));
+        group.throughput(Throughput::ElementsAndBytes {
+            elements: pixels,
+            bytes: pixels * 3, // YUV444 = 3 bytes per pixel
+        });
 
         group.bench_with_input(
             BenchmarkId::new("pack_dual_views", name),
@@ -108,7 +114,10 @@ fn bench_full_color_pipeline(c: &mut Criterion) {
         let bgra_data = generate_bgra_data(width, height);
         let pixels = (width * height) as u64;
 
-        group.throughput(Throughput::Elements(pixels));
+        group.throughput(Throughput::ElementsAndBytes {
+            elements: pixels,
+            bytes: pixels * 4, // BGRA input = 4 bytes per pixel
+        });
 
         group.bench_with_input(
             BenchmarkId::new("bgra_to_dual_yuv420", name),

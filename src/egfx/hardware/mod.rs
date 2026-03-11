@@ -64,8 +64,6 @@ pub use error::{HardwareEncoderError, HardwareEncoderResult};
 pub use factory::create_hardware_encoder;
 pub use stats::{EncodeTimer, HardwareEncoderStats};
 
-use crate::config::HardwareEncodingConfig;
-
 /// Encoded H.264 frame from hardware encoder
 ///
 /// Contains the encoded bitstream in Annex B format, ready for

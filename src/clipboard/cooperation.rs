@@ -36,11 +36,11 @@ use std::{
 };
 
 use futures_util::StreamExt;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{RwLock, mpsc};
 use tracing::{debug, error, info, warn};
 use zbus::Connection;
 
-use crate::clipboard::{error::Result, ClipboardFormat};
+use crate::clipboard::{ClipboardFormat, error::Result};
 
 /// Klipper cooperation coordinator
 ///

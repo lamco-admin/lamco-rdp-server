@@ -7,8 +7,8 @@ use std::collections::HashMap;
 
 use anyhow::{Context, Result};
 use zbus::{
-    zvariant::{self, ObjectPath, OwnedObjectPath, Value},
     Connection,
+    zvariant::{self, ObjectPath, OwnedObjectPath, Value},
 };
 
 /// Main RemoteDesktop interface proxy
@@ -24,7 +24,7 @@ pub struct MutterRemoteDesktop<'a> {
 
 impl MutterRemoteDesktop<'_> {
     pub async fn new(connection: &Connection) -> Result<Self> {
-        let proxy = zbus::ProxyBuilder::new(connection)
+        let proxy = zbus::proxy::Builder::new(connection)
             .interface("org.gnome.Mutter.RemoteDesktop")?
             .path("/org/gnome/Mutter/RemoteDesktop")?
             .destination("org.gnome.Mutter.RemoteDesktop")?
@@ -82,7 +82,7 @@ pub struct MutterRemoteDesktopSession<'a> {
 
 impl MutterRemoteDesktopSession<'_> {
     pub async fn new(connection: &Connection, session_path: OwnedObjectPath) -> Result<Self> {
-        let proxy = zbus::ProxyBuilder::new(connection)
+        let proxy = zbus::proxy::Builder::new(connection)
             .interface("org.gnome.Mutter.RemoteDesktop.Session")?
             .path(session_path)?
             .destination("org.gnome.Mutter.RemoteDesktop")?
@@ -167,7 +167,7 @@ impl MutterRemoteDesktopSession<'_> {
     /// Subscribe to the Closed signal for unexpected session termination
     pub async fn subscribe_closed(
         &self,
-    ) -> Result<impl futures_util::Stream<Item = zbus::Message>> {
+    ) -> Result<impl futures_util::Stream<Item = zbus::Message> + use<>> {
         self.proxy
             .receive_signal("Closed")
             .await
@@ -402,7 +402,7 @@ impl MutterRemoteDesktopSession<'_> {
     /// Subscribe to SelectionOwnerChanged signal
     pub async fn subscribe_selection_owner_changed(
         &self,
-    ) -> Result<impl futures_util::Stream<Item = zbus::Message>> {
+    ) -> Result<impl futures_util::Stream<Item = zbus::Message> + use<>> {
         self.proxy
             .receive_signal("SelectionOwnerChanged")
             .await
@@ -412,7 +412,7 @@ impl MutterRemoteDesktopSession<'_> {
     /// Subscribe to SelectionTransfer signal
     pub async fn subscribe_selection_transfer(
         &self,
-    ) -> Result<impl futures_util::Stream<Item = zbus::Message>> {
+    ) -> Result<impl futures_util::Stream<Item = zbus::Message> + use<>> {
         self.proxy
             .receive_signal("SelectionTransfer")
             .await

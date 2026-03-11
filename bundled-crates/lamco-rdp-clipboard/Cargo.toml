@@ -6,7 +6,7 @@ rust-version = "1.77"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/lamco-admin/lamco-rdp"
 homepage = "https://lamco.ai"
-authors = ["Lamco <contact@lamco.ai>"]
+authors = ["Greg Lamberson <greg@lamco.io>"]
 description = "IronRDP clipboard integration - CliprdrBackend implementation for RDP clipboard sync"
 documentation = "https://docs.rs/lamco-rdp-clipboard"
 keywords = ["rdp", "clipboard", "ironrdp", "cliprdr"]
@@ -24,31 +24,15 @@ maintenance = { status = "actively-developed" }
 [features]
 default = []
 
-[dependencies]
-lamco-clipboard-core = { path = "../lamco-clipboard-core" }
-ironrdp-cliprdr = { git = "https://github.com/Devolutions/IronRDP", branch = "master" }
-ironrdp-core = { git = "https://github.com/Devolutions/IronRDP", branch = "master" }
-thiserror = "2"
-tracing = "0.1"
-
 [lints.rust]
 unsafe_code = "deny"
 unsafe_op_in_unsafe_fn = "deny"
 elided_lifetimes_in_paths = "warn"
 unreachable_pub = "warn"
 
-[lints.clippy]
-pedantic = { priority = -1, level = "deny" }
-allow_attributes = "deny"
-missing_errors_doc = "allow"
-module_name_repetitions = "allow"
-must_use_candidate = "allow"
-wildcard_imports = "deny"
-doc_markdown = "allow"
-unreadable_literal = "allow"
-similar_names = "allow"
-return_self_not_must_use = "allow"
-missing_panics_doc = "allow"
-struct_field_names = "allow"
-needless_pass_by_value = "allow"
-trivially_copy_pass_by_ref = "allow"
+[dependencies]
+lamco-clipboard-core = { path = "../lamco-clipboard-core" }
+ironrdp-cliprdr = "0.5"
+ironrdp-core = "0.1"
+thiserror = "2"
+tracing = "0.1"

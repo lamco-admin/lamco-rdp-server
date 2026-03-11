@@ -94,15 +94,37 @@ pub struct Args {
     /// by systemd as a system unit.
     #[arg(long)]
     pub system: bool,
+
+    /// Print a default config.toml to stdout and exit
+    ///
+    /// Generates a fully commented configuration file with all default
+    /// values. Redirect to a file to use as a starting point:
+    ///   lamco-rdp-server --generate-config > config.toml
+    #[arg(long)]
+    pub generate_config: bool,
 }
 
 #[tokio::main]
 #[expect(
     clippy::expect_used,
-    reason = "top-level entry point: panics on infallible config defaults"
+    reason = "top-level entry point: signal handler registration must succeed"
 )]
 async fn main() -> Result<()> {
     let args = Args::parse();
+
+    // Generate default config and exit (no logging, no config loading)
+    if args.generate_config {
+        match Config::generate_default_toml() {
+            Ok(toml) => {
+                print!("{toml}");
+                return Ok(());
+            }
+            Err(e) => {
+                eprintln!("Error generating config: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
 
     // Resolve config path: CLI flag, then Flatpak-aware default, then /etc fallback
     let config_path = args.config.clone().unwrap_or_else(|| {
@@ -115,10 +137,13 @@ async fn main() -> Result<()> {
         }
     });
 
-    // Load configuration first (needed for logging settings)
-    // Silently fall back to defaults if config doesn't exist yet
-    let config = Config::load(&config_path)
-        .unwrap_or_else(|_| Config::default_config().expect("Default config should always work"));
+    // Load configuration first (needed for logging settings).
+    // Figment merges defaults -> TOML file -> env vars, so a missing file
+    // just means all values come from defaults (no error, just a warning).
+    let config = Config::load(&config_path).unwrap_or_else(|e| {
+        eprintln!("WARNING: Config load failed, using defaults: {e:#}");
+        Config::default()
+    });
 
     // Machine-readable output modes: skip logging banner to keep stdout clean
     let quiet_mode = args.show_capabilities && args.format == "json";
@@ -174,6 +199,9 @@ async fn main() -> Result<()> {
     // Apply CLI overrides to config (config already loaded above for logging)
     let config = config.with_overrides(args.listen.clone(), args.port);
 
+    // Bridge config.toml protocol preferences → env vars for portal-generic
+    config.export_protocol_env_vars();
+
     info!("Configuration loaded successfully");
     tracing::debug!("Config: {:?}", config);
 
@@ -218,16 +246,14 @@ async fn main() -> Result<()> {
     };
 
     // Wire D-Bus signal relay if D-Bus service is active
-    if let Some(ref dbus_conn) = _dbus_connection {
-        if let Some(event_rx) = server.take_event_receiver() {
-            let dbus_state = lamco_rdp_server::dbus::new_shared_state();
-            let _relay_handle = lamco_rdp_server::dbus::events::start_signal_relay(
-                dbus_conn.clone(),
-                event_rx,
-                dbus_state,
-            );
-            info!("D-Bus signal relay started");
-        }
+    if let (Some(dbus_conn), Some(event_rx)) = (&_dbus_connection, server.take_event_receiver()) {
+        let dbus_state = lamco_rdp_server::dbus::new_shared_state();
+        let _relay_handle = lamco_rdp_server::dbus::events::start_signal_relay(
+            dbus_conn.clone(),
+            event_rx,
+            dbus_state,
+        );
+        info!("D-Bus signal relay started");
     }
 
     info!("Starting server");
@@ -242,7 +268,7 @@ async fn main() -> Result<()> {
         // Listen for both SIGINT (Ctrl-C) and SIGTERM (systemd, GUI stop button, kill)
         #[cfg(unix)]
         {
-            use tokio::signal::unix::{signal, SignalKind};
+            use tokio::signal::unix::{SignalKind, signal};
 
             let mut sigint =
                 signal(SignalKind::interrupt()).expect("failed to register SIGINT handler");

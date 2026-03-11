@@ -18,7 +18,7 @@ use tracing::{debug, info, warn};
 use super::{mutter_direct::MutterDirectStrategy, portal_token::PortalTokenStrategy};
 use crate::{
     services::{ServiceId, ServiceLevel, ServiceRegistry},
-    session::{strategy::SessionStrategy, Tokens},
+    session::{Tokens, strategy::SessionStrategy},
 };
 
 /// Session strategy selector
@@ -27,6 +27,7 @@ use crate::{
 /// - Deployment context (Flatpak, systemd, native)
 /// - Compositor type (GNOME, KDE, wlroots)
 /// - Available APIs (Portal, Mutter, wlr-screencopy)
+/// - Input protocol preference (auto, libei, wlr)
 /// - Session persistence support
 pub struct SessionStrategySelector {
     service_registry: Arc<ServiceRegistry>,
@@ -40,6 +41,8 @@ pub struct SessionStrategySelector {
         )
     )]
     keyboard_layout: String,
+    /// Resolved input protocol preference: true = libei, false = wlr
+    prefers_libei: bool,
 }
 
 impl SessionStrategySelector {
@@ -48,6 +51,7 @@ impl SessionStrategySelector {
             service_registry,
             token_manager,
             keyboard_layout: "auto".to_string(),
+            prefers_libei: true,
         }
     }
 
@@ -60,7 +64,13 @@ impl SessionStrategySelector {
             service_registry,
             token_manager,
             keyboard_layout,
+            prefers_libei: true,
         }
+    }
+
+    pub fn with_input_protocol(mut self, prefers_libei: bool) -> Self {
+        self.prefers_libei = prefers_libei;
+        self
     }
 
     /// Select the best available session strategy
@@ -222,14 +232,21 @@ impl SessionStrategySelector {
             }
         }
 
-        // PRIORITY 3: libei/EIS (wlroots via Portal RemoteDesktop, Flatpak-compatible)
+        // PRIORITY 3: libei/EIS (GNOME/KDE via Portal RemoteDesktop)
+        //
+        // Skip on wlroots/Smithay compositors — EIS input injection doesn't
+        // work reliably there. wlr-virtual-pointer + virtual-keyboard (tried
+        // above) is the correct path for those compositors.
         #[cfg(feature = "libei")]
-        if self.service_registry.service_level(ServiceId::LibeiInput) >= ServiceLevel::BestEffort {
+        if self.prefers_libei
+            && self.service_registry.service_level(ServiceId::LibeiInput)
+                >= ServiceLevel::BestEffort
+        {
             use super::libei::LibeiStrategy;
 
             if LibeiStrategy::is_available().await {
-                info!("✅ Selected: libei strategy");
-                info!("   Portal RemoteDesktop + EIS protocol for wlroots");
+                info!("Selected: libei strategy");
+                info!("   Portal RemoteDesktop + EIS protocol");
                 info!("   Compositor: {}", caps.compositor);
                 info!("   Flatpak-compatible: Yes");
                 info!("   Note: Input only (video via Portal ScreenCast)");
@@ -244,6 +261,16 @@ impl SessionStrategySelector {
                 warn!("Falling back to Portal strategy");
             }
         }
+        #[cfg(feature = "libei")]
+        if !self.prefers_libei
+            && self.service_registry.service_level(ServiceId::LibeiInput)
+                >= ServiceLevel::BestEffort
+        {
+            info!(
+                "Skipping libei strategy: input_protocol resolved to wlr for {} compositor",
+                caps.compositor
+            );
+        }
 
         // Check if Portal RemoteDesktop is available
         // PortalTokenStrategy and basic Portal both require RemoteDesktop
@@ -254,8 +281,13 @@ impl SessionStrategySelector {
         };
 
         // PRIORITY 4: Portal + Token (works on all DEs with portal v4+)
-        if self.service_registry.supports_session_persistence() && has_remote_desktop {
-            info!("✅ Selected: Portal + Token strategy");
+        // Portal RemoteDesktop uses EIS for input — skip on wlroots/Smithay
+        // unless the user explicitly configured libei.
+        if self.prefers_libei
+            && self.service_registry.supports_session_persistence()
+            && has_remote_desktop
+        {
+            info!("Selected: Portal + Token strategy");
             info!("   One-time permission dialog, then unattended operation");
 
             return Ok(Box::new(PortalTokenStrategy::new(
@@ -265,7 +297,7 @@ impl SessionStrategySelector {
         }
 
         // FALLBACK: Portal without tokens (portal v3 or below)
-        if has_remote_desktop {
+        if self.prefers_libei && has_remote_desktop {
             warn!("⚠️  No session persistence available");
             warn!("   Portal version: {}", caps.portal.version);
             warn!("   Falling back to Portal + Token strategy");
@@ -339,16 +371,16 @@ impl SessionStrategySelector {
             if name.starts_with("card") && name.contains('-') {
                 // Check if connector is connected
                 let status_path = entry.path().join("status");
-                if let Ok(status) = fs::read_to_string(&status_path).await {
-                    if status.trim() == "connected" {
-                        // Extract connector name (e.g., "HDMI-A-1" from "card0-HDMI-A-1")
-                        let parts: Vec<&str> = name.split('-').collect();
-                        if parts.len() >= 2 {
-                            let connector = parts[1..].join("-");
-                            if !connector.is_empty() {
-                                debug!("Found connected monitor: {} (from {})", connector, name);
-                                connectors.push(connector);
-                            }
+                if let Ok(status) = fs::read_to_string(&status_path).await
+                    && status.trim() == "connected"
+                {
+                    // Extract connector name (e.g., "HDMI-A-1" from "card0-HDMI-A-1")
+                    let parts: Vec<&str> = name.split('-').collect();
+                    if parts.len() >= 2 {
+                        let connector = parts[1..].join("-");
+                        if !connector.is_empty() {
+                            debug!("Found connected monitor: {} (from {})", connector, name);
+                            connectors.push(connector);
                         }
                     }
                 }

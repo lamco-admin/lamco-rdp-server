@@ -295,16 +295,16 @@ impl EgfxFrameSender {
         if dump_count < 3 {
             use std::io::Write;
             let filename = format!("/tmp/rdp-frame-{dump_count}.h264");
-            if let Ok(mut file) = std::fs::File::create(&filename) {
-                if file.write_all(h264_data).is_ok() {
-                    trace!(
-                        "🎬 Dumped frame {} to {} ({} bytes, timestamp={}ms)",
-                        dump_count,
-                        filename,
-                        h264_data.len(),
-                        timestamp_ms
-                    );
-                }
+            if let Ok(mut file) = std::fs::File::create(&filename)
+                && file.write_all(h264_data).is_ok()
+            {
+                trace!(
+                    "🎬 Dumped frame {} to {} ({} bytes, timestamp={}ms)",
+                    dump_count,
+                    filename,
+                    h264_data.len(),
+                    timestamp_ms
+                );
             }
         }
 

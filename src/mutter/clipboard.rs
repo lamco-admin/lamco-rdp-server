@@ -181,7 +181,7 @@ impl MutterClipboardManager {
     /// meaning new content is available for us to read and forward to the RDP client.
     pub(crate) async fn subscribe_selection_owner_changed(
         &self,
-    ) -> Result<impl futures_util::Stream<Item = zbus::Message>> {
+    ) -> Result<impl futures_util::Stream<Item = zbus::Message> + use<>> {
         let proxy = self.session_proxy().await?;
         proxy.subscribe_selection_owner_changed().await
     }
@@ -192,7 +192,7 @@ impl MutterClipboardManager {
     /// (i.e., a local application wants to paste RDP client content).
     pub(crate) async fn subscribe_selection_transfer(
         &self,
-    ) -> Result<impl futures_util::Stream<Item = zbus::Message>> {
+    ) -> Result<impl futures_util::Stream<Item = zbus::Message> + use<>> {
         let proxy = self.session_proxy().await?;
         proxy.subscribe_selection_transfer().await
     }

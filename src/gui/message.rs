@@ -101,8 +101,8 @@ pub enum Message {
     ConverterDamageThresholdChanged(f32),
     ConverterEnableStatisticsToggled(bool),
 
-    /// Use libei toggled
-    InputUseLibeiToggled(bool),
+    /// Input protocol changed (auto/libei/wlr)
+    InputProtocolChanged(String),
     /// Keyboard layout changed
     InputKeyboardLayoutChanged(String),
     /// Enable touch toggled

@@ -10,17 +10,17 @@ use async_trait::async_trait;
 use tracing::{debug, info, trace, warn};
 
 use super::{
+    SessionFactory, SessionFactoryCapabilities,
     quirks::{InitQuirk, InitQuirkRegistry, SessionStrategyType},
     state::SessionCreationFailure,
-    SessionFactory, SessionFactoryCapabilities,
 };
 use crate::{
     portal::PortalManager,
     services::{ServiceId, ServiceRegistry},
     session::{
+        DeploymentContext, Tokens,
         strategies::PortalSessionHandleImpl,
         strategy::{SessionHandle, SessionType, StreamInfo},
-        DeploymentContext, Tokens,
     },
 };
 
@@ -343,12 +343,10 @@ impl SessionFactory for PortalSessionFactory {
                 // Retry creates a fresh PortalManager AND fresh ClipboardManager
                 // Both in the same D-Bus context - this is the key fix
                 trace!("Starting retry attempt with fresh D-Bus state");
-                let retry_result = self
-                    .attempt_session(false)
-                    .await
-                    .context("Session creation failed (retry without persistence)")?;
 
-                retry_result
+                self.attempt_session(false)
+                    .await
+                    .context("Session creation failed (retry without persistence)")?
             }
         };
 

@@ -5,8 +5,8 @@
 //! to the `ClipboardProvider` trait.
 
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc,
+    atomic::{AtomicBool, Ordering},
 };
 
 use async_trait::async_trait;
@@ -50,8 +50,11 @@ impl MutterClipboardProvider {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let (shutdown_broadcast, _) = tokio::sync::broadcast::channel(16);
 
-        // Enable clipboard on the Mutter session
-        clipboard_mgr.enable().await?;
+        // Enable clipboard on the Mutter session (skip if already enabled
+        // by the session manager during setup — Mutter rejects duplicate calls)
+        if !clipboard_mgr.is_enabled().await {
+            clipboard_mgr.enable().await?;
+        }
 
         let provider = Self {
             clipboard_mgr,
@@ -165,27 +168,16 @@ impl MutterClipboardProvider {
 /// Parse MIME types from a Mutter SelectionOwnerChanged D-Bus message.
 ///
 /// The signal body contains options dict with "mime-types" key.
+/// Mutter wraps the string array in a tuple: the GVariant format is `(^as)`,
+/// so the value is a Structure containing an Array of strings.
 fn parse_selection_owner_changed(msg: &zbus::Message) -> Vec<String> {
-    // Mutter sends: SelectionOwnerChanged(options: a{sv})
-    // options["mime-types"] = as (array of strings)
     match msg
         .body()
         .deserialize::<std::collections::HashMap<String, zbus::zvariant::OwnedValue>>()
     {
         Ok(options) => {
             if let Some(value) = options.get("mime-types") {
-                // OwnedValue derefs to Value<'static>; extract array elements as strings
-                if let zbus::zvariant::Value::Array(arr) = &**value {
-                    let mut types = Vec::new();
-                    for item in arr.iter() {
-                        if let zbus::zvariant::Value::Str(s) = item {
-                            types.push(s.to_string());
-                        }
-                    }
-                    if !types.is_empty() {
-                        return types;
-                    }
-                }
+                return extract_string_array(value);
             }
             Vec::new()
         }
@@ -194,6 +186,42 @@ fn parse_selection_owner_changed(msg: &zbus::Message) -> Vec<String> {
             Vec::new()
         }
     }
+}
+
+/// Extract a string array from a zvariant Value.
+///
+/// Handles both bare arrays (`as`) and Mutter's tuple-wrapped format (`(as)`).
+fn extract_string_array(value: &zbus::zvariant::Value<'_>) -> Vec<String> {
+    use zbus::zvariant::Value;
+
+    // Try bare array first (as)
+    if let Value::Array(arr) = value {
+        let types: Vec<String> = arr
+            .iter()
+            .filter_map(|item| {
+                if let Value::Str(s) = item {
+                    Some(s.to_string())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        if !types.is_empty() {
+            return types;
+        }
+    }
+
+    // Mutter sends (^as) — a tuple wrapping the string array
+    if let Value::Structure(s) = value {
+        for field in s.fields() {
+            let types = extract_string_array(field);
+            if !types.is_empty() {
+                return types;
+            }
+        }
+    }
+
+    Vec::new()
 }
 
 /// Parse serial and MIME type from a Mutter SelectionTransfer D-Bus message.

@@ -38,10 +38,14 @@
 //! - P1-P3: Fast/low-latency
 //! - P4: Balanced (default)
 //! - P5-P7: Quality/slow
-#![allow(unsafe_code)]
+#![expect(
+    unsafe_code,
+    reason = "CUDA/NVENC FFI: buffer lifetime erasure, union access, Send impl"
+)]
 
 use cudarc::driver::CudaContext;
 use nvidia_video_codec_sdk::{
+    Bitstream, Buffer, EncodePictureParams, Encoder, EncoderInitParams, Session,
     sys::nvEncodeAPI::{
         GUID, NV_ENC_BUFFER_FORMAT, NV_ENC_CODEC_H264_GUID, NV_ENC_CONFIG_VER,
         NV_ENC_H264_PROFILE_HIGH_GUID, NV_ENC_PIC_TYPE, NV_ENC_PRESET_P1_GUID,
@@ -49,13 +53,12 @@ use nvidia_video_codec_sdk::{
         NV_ENC_PRESET_P6_GUID, NV_ENC_PRESET_P7_GUID, NV_ENC_TUNING_INFO,
         NV_ENC_VUI_COLOR_PRIMARIES, NV_ENC_VUI_MATRIX_COEFFS, NV_ENC_VUI_TRANSFER_CHARACTERISTIC,
     },
-    Bitstream, Buffer, EncodePictureParams, Encoder, EncoderInitParams, Session,
 };
 use tracing::{debug, info, warn};
 
 use super::{
-    error::NvencError, EncodeTimer, H264Frame, HardwareEncoder, HardwareEncoderError,
-    HardwareEncoderResult, HardwareEncoderStats, QualityPreset,
+    EncodeTimer, H264Frame, HardwareEncoder, HardwareEncoderError, HardwareEncoderResult,
+    HardwareEncoderStats, QualityPreset, error::NvencError,
 };
 use crate::{
     config::HardwareEncodingConfig,
@@ -479,7 +482,12 @@ impl NvencEncoder {
                     i, e
                 )))
             })?;
-            // SAFETY: buffer lifetime is tied to session which we own
+            // SAFETY: Buffer<'a> borrows the Session. We erase the lifetime to
+            // store it in the NvencEncoder struct alongside the Session it came
+            // from. The Session field is never dropped before the buffers because
+            // NvencEncoder::drop() releases buffers first (via input_buffers.clear()).
+            // This transmute is necessary because cudarc's Buffer type captures a
+            // lifetime parameter that prevents storing it next to its parent Session.
             let input: Buffer<'static> = unsafe { std::mem::transmute(input) };
             // Box to prevent move-invalidation
             input_buffers.push(Some(Box::new(input)));
@@ -490,7 +498,10 @@ impl NvencEncoder {
                     i, e
                 )))
             })?;
-            // SAFETY: bitstream lifetime is tied to session which we own
+            // SAFETY: Bitstream<'a> borrows the Session. Same lifetime erasure
+            // rationale as Buffer above: the Session outlives these bitstreams
+            // because NvencEncoder::drop() clears output_bitstreams before
+            // dropping the Session.
             let output: Bitstream<'static> = unsafe { std::mem::transmute(output) };
             // Box to prevent move-invalidation
             output_bitstreams.push(Some(Box::new(output)));

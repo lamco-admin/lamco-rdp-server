@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use secret_service::{EncryptionType, SecretService};
 use tracing::{debug, info};
 use zeroize::Zeroizing;
@@ -247,23 +247,22 @@ async fn check_unlocked_async() -> bool {
     };
 
     // Try default collection first
-    if let Ok(collection) = service.get_default_collection().await {
-        if let Ok(locked) = collection.is_locked().await {
-            if !locked {
-                return true;
-            }
-        }
+    if let Ok(collection) = service.get_default_collection().await
+        && let Ok(locked) = collection.is_locked().await
+        && !locked
+    {
+        return true;
     }
 
     // KWallet may not expose a "default" collection. Check all collections
     // for at least one unlocked wallet.
     if let Ok(collections) = service.get_all_collections().await {
         for collection in &collections {
-            if let Ok(locked) = collection.is_locked().await {
-                if !locked {
-                    debug!("Secret Service: found unlocked collection (non-default)");
-                    return true;
-                }
+            if let Ok(locked) = collection.is_locked().await
+                && !locked
+            {
+                debug!("Secret Service: found unlocked collection (non-default)");
+                return true;
             }
         }
     }

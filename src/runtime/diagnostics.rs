@@ -143,18 +143,48 @@ pub fn detect_compositor() -> Option<String> {
     None
 }
 
-/// Detect Portal backend
+/// Detect Portal backend by checking which portal process is running.
+///
+/// Multiple backends can be installed simultaneously (e.g., both
+/// xdg-desktop-portal-gnome and xdg-desktop-portal-wlr on Arch).
+/// Only the active process reflects the actual session backend.
+/// Falls back to file existence if no process is found.
 pub fn detect_portal_backend() -> Option<String> {
-    // Check which portal backend is installed
-    let backends = vec![
+    // Check running processes first — this is the authoritative signal
+    let process_names = [
+        ("xdg-desktop-portal-gnome", "GNOME"),
+        ("xdg-desktop-portal-kde", "KDE"),
+        ("xdg-desktop-portal-wlr", "wlroots"),
+        ("xdg-desktop-portal-hyprland", "Hyprland"),
+        ("xdg-desktop-portal-cosmic", "COSMIC"),
+        ("xdg-desktop-portal-gtk", "GTK"),
+    ];
+
+    if let Ok(output) = std::process::Command::new("ps")
+        .args(["-eo", "comm"])
+        .output()
+    {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for (proc_name, label) in &process_names {
+            if stdout.lines().any(|line| line.trim() == *proc_name) {
+                return Some(label.to_string());
+            }
+        }
+    }
+
+    // Fallback: check installed binaries (less reliable — multiple may exist)
+    let backends = [
         ("/usr/libexec/xdg-desktop-portal-gnome", "GNOME"),
         ("/usr/libexec/xdg-desktop-portal-kde", "KDE"),
         ("/usr/libexec/xdg-desktop-portal-wlr", "wlroots"),
+        ("/usr/libexec/xdg-desktop-portal-hyprland", "Hyprland"),
         ("/usr/lib/xdg-desktop-portal-gnome", "GNOME"),
         ("/usr/lib/xdg-desktop-portal-kde", "KDE"),
+        ("/usr/lib/xdg-desktop-portal-wlr", "wlroots"),
+        ("/usr/lib/xdg-desktop-portal-hyprland", "Hyprland"),
     ];
 
-    for (path, name) in backends {
+    for (path, name) in &backends {
         if std::path::Path::new(path).exists() {
             return Some(name.to_string());
         }

@@ -4,8 +4,8 @@
 
 pub use iced::widget::space;
 use iced::{
-    widget::{button, column, container, pick_list, row, slider, text, text_input, toggler},
     Alignment, Element, Length,
+    widget::{button, column, container, pick_list, row, slider, text, text_input, toggler},
 };
 
 use crate::gui::{message::Message, theme};

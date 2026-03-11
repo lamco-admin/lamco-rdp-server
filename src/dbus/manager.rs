@@ -443,7 +443,7 @@ impl RdpServerManager {
     /// Emitted when the server status changes (distinct from property change signal).
     #[zbus(signal)]
     pub async fn server_state_changed(
-        ctxt: &zbus::object_server::SignalContext<'_>,
+        ctxt: &zbus::object_server::SignalEmitter<'_>,
         old_status: &str,
         new_status: &str,
         message: &str,
@@ -452,7 +452,7 @@ impl RdpServerManager {
     /// Emitted when a new RDP client connects.
     #[zbus(signal)]
     pub async fn client_connected(
-        ctxt: &zbus::object_server::SignalContext<'_>,
+        ctxt: &zbus::object_server::SignalEmitter<'_>,
         client_id: &str,
         peer_address: &str,
         timestamp: u64,
@@ -461,7 +461,7 @@ impl RdpServerManager {
     /// Emitted when an RDP client disconnects.
     #[zbus(signal)]
     pub async fn client_disconnected(
-        ctxt: &zbus::object_server::SignalContext<'_>,
+        ctxt: &zbus::object_server::SignalEmitter<'_>,
         client_id: &str,
         reason: &str,
         duration_seconds: u64,
@@ -470,7 +470,7 @@ impl RdpServerManager {
     /// Emitted when configuration is reloaded.
     #[zbus(signal)]
     pub async fn config_reloaded(
-        ctxt: &zbus::object_server::SignalContext<'_>,
+        ctxt: &zbus::object_server::SignalEmitter<'_>,
         config_path: &str,
     ) -> zbus::Result<()>;
 }

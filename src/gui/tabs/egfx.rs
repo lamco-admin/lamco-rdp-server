@@ -3,8 +3,8 @@
 //! H.264 encoding settings, AVC444 configuration, and quality parameters.
 
 use iced::{
-    widget::{button, column, pick_list, row, slider, text},
     Alignment, Element, Length,
+    widget::{button, column, pick_list, row, slider, text},
 };
 
 use crate::gui::{

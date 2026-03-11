@@ -100,6 +100,20 @@
   </supports>
 
   <releases>
+    <release version="1.4.2" date="2026-03-10">
+      <url type="details">https://github.com/lamco-admin/lamco-rdp-server/releases/tag/v1.4.2</url>
+      <description>
+        <p>Bug fixes, codec pipeline improvements, and dependency upgrades.</p>
+        <ul>
+          <li>Unicode keyboard input now maps to evdev keycodes for rdpdo utype support</li>
+          <li>PipeWire DRIVER stream flag ensures frame delivery on static desktops</li>
+          <li>Wayland event loop handles WouldBlock errors gracefully</li>
+          <li>MIME charset fallback for clipboard interop across compositors</li>
+          <li>PipeWire format negotiation parses compositor-chosen resolution correctly</li>
+          <li>Upgraded to pipewire-rs 0.9.2, fixing RPM Fusion libspa 0.8.0 build failure</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.4.1" date="2026-03-03">
       <url type="details">https://github.com/lamco-admin/lamco-rdp-server/releases/tag/v1.4.1</url>
       <description>

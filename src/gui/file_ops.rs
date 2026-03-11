@@ -7,7 +7,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::config::{is_flatpak, Config};
+use crate::config::{Config, is_flatpak};
 
 /// Default configuration file paths for native installation
 const NATIVE_CONFIG_PATHS: &[&str] = &[
@@ -210,8 +210,9 @@ pub fn export_logs(logs: &[crate::gui::state::LogLine], path: &Path) -> Result<(
 pub fn validate_toml_syntax(path: &Path) -> Result<(), String> {
     let content = fs::read_to_string(path).map_err(|e| format!("Failed to read file: {}", e))?;
 
-    let _: toml::Value =
-        toml::from_str(&content).map_err(|e| format!("TOML syntax error: {}", e))?;
+    content
+        .parse::<toml::Table>()
+        .map_err(|e| format!("TOML syntax error: {e}"))?;
 
     Ok(())
 }

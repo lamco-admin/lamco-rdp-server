@@ -2,11 +2,11 @@
 //!
 //! Detects the deployment context (Flatpak, systemd, native, etc.) and
 //! determines the best available method for storing session tokens securely.
-#![allow(unsafe_code)]
+#![expect(unsafe_code, reason = "libc::getuid for systemd linger detection")]
 
 use std::{path::Path, process::Command};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use tracing::{debug, info};
 
 /// Deployment context affecting available strategies
@@ -176,16 +176,16 @@ pub async fn detect_credential_storage(
     // TPM 2.0 only available with systemd (not in Flatpak or initd)
     match deployment {
         DeploymentContext::SystemdUser { .. } | DeploymentContext::SystemdSystem => {
-            if let Ok(has_tpm) = check_tpm2_available() {
-                if has_tpm {
-                    let accessible = check_systemd_creds_accessible();
-                    info!("TPM 2.0 detected, will use systemd-creds for storage");
-                    return (
-                        CredentialStorageMethod::Tpm2,
-                        EncryptionType::TpmBound,
-                        accessible,
-                    );
-                }
+            if let Ok(has_tpm) = check_tpm2_available()
+                && has_tpm
+            {
+                let accessible = check_systemd_creds_accessible();
+                info!("TPM 2.0 detected, will use systemd-creds for storage");
+                return (
+                    CredentialStorageMethod::Tpm2,
+                    EncryptionType::TpmBound,
+                    accessible,
+                );
             }
         }
         _ => {} // TPM via systemd-creds not available
@@ -193,34 +193,34 @@ pub async fn detect_credential_storage(
 
     // Secret Service API (GNOME Keyring, KWallet, KeePassXC)
     // Not directly available in Flatpak (must use portal)
-    if !matches!(deployment, DeploymentContext::Flatpak) {
-        if let Ok(service) = detect_secret_service().await {
-            let (method, encryption) = match service {
-                SecretServiceBackend::GnomeKeyring => (
-                    CredentialStorageMethod::GnomeKeyring,
-                    EncryptionType::Aes256Gcm,
-                ),
-                SecretServiceBackend::KWallet => {
-                    (CredentialStorageMethod::KWallet, EncryptionType::Aes256Gcm)
-                }
-                SecretServiceBackend::KeePassXC => (
-                    CredentialStorageMethod::KeePassXC,
-                    EncryptionType::ChaCha20Poly1305,
-                ),
-            };
-
-            let accessible = check_secret_service_unlocked().await;
-            if accessible {
-                info!("Secret Service detected: {} (unlocked)", method);
-                return (method, encryption, true);
+    if !matches!(deployment, DeploymentContext::Flatpak)
+        && let Ok(service) = detect_secret_service().await
+    {
+        let (method, encryption) = match service {
+            SecretServiceBackend::GnomeKeyring => (
+                CredentialStorageMethod::GnomeKeyring,
+                EncryptionType::Aes256Gcm,
+            ),
+            SecretServiceBackend::KWallet => {
+                (CredentialStorageMethod::KWallet, EncryptionType::Aes256Gcm)
             }
-            // Secret Service exists but is locked (e.g. KWallet without PAM auto-unlock).
-            // Fall through to EncryptedFile rather than reporting Degraded.
-            info!(
-                "Secret Service detected ({}) but locked, using encrypted file fallback",
-                method
-            );
+            SecretServiceBackend::KeePassXC => (
+                CredentialStorageMethod::KeePassXC,
+                EncryptionType::ChaCha20Poly1305,
+            ),
+        };
+
+        let accessible = check_secret_service_unlocked().await;
+        if accessible {
+            info!("Secret Service detected: {} (unlocked)", method);
+            return (method, encryption, true);
         }
+        // Secret Service exists but is locked (e.g. KWallet without PAM auto-unlock).
+        // Fall through to EncryptedFile rather than reporting Degraded.
+        info!(
+            "Secret Service detected ({}) but locked, using encrypted file fallback",
+            method
+        );
     }
 
     // Encrypted file fallback (always available)

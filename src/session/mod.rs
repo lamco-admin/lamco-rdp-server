@@ -74,6 +74,8 @@ pub mod token_manager;
 pub mod tpm_store;
 
 pub mod strategies {
+    #[cfg(feature = "libei")]
+    pub mod eis_common;
     pub mod mutter_direct;
     pub mod portal_token;
     pub mod screencast_only;
@@ -101,13 +103,13 @@ pub mod strategies {
 }
 
 pub use credentials::{
-    detect_credential_storage, detect_deployment_context, CredentialStorageMethod,
-    DeploymentContext, EncryptionType,
+    CredentialStorageMethod, DeploymentContext, EncryptionType, detect_credential_storage,
+    detect_deployment_context,
 };
 pub use factory::{
-    select_session_factory, InitQuirk, InitQuirkRegistry, PortalSessionFactory,
-    SessionCreationError, SessionCreationFailure, SessionCreationState, SessionFactory,
-    SessionFactoryCapabilities, SessionStrategyType,
+    InitQuirk, InitQuirkRegistry, PortalSessionFactory, SessionCreationError,
+    SessionCreationFailure, SessionCreationState, SessionFactory, SessionFactoryCapabilities,
+    SessionStrategyType, select_session_factory,
 };
 pub use flatpak_secret::FlatpakSecrets;
 pub use secret_service::AsyncSecretServiceClient;

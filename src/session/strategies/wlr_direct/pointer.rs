@@ -30,7 +30,7 @@
 
 use anyhow::Result;
 use tracing::debug;
-use wayland_client::{protocol::wl_seat::WlSeat, QueueHandle};
+use wayland_client::{QueueHandle, protocol::wl_seat::WlSeat};
 use wayland_protocols_wlr::virtual_pointer::v1::client::{
     zwlr_virtual_pointer_manager_v1::ZwlrVirtualPointerManagerV1,
     zwlr_virtual_pointer_v1::ZwlrVirtualPointerV1,

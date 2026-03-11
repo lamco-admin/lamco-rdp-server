@@ -122,7 +122,7 @@ pub mod auth;
 pub mod certificates;
 pub mod tls;
 
-pub use auth::{AuthMethod, SessionToken, UserAuthenticator};
+pub use auth::{AuthMethod, PamValidator, SessionToken, UserAuthenticator};
 pub use certificates::CertificateGenerator;
 pub use tls::TlsConfig;
 
@@ -170,7 +170,7 @@ impl Security {
 
     /// Authenticate user
     pub async fn authenticate(&self, username: &str, password: &str) -> Result<SessionToken> {
-        UserAuthenticator::validate_username(username)?;
+        auth::validate_username(username)?;
 
         let authenticated = self.authenticator.authenticate(username, password)?;
 
