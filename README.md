@@ -20,7 +20,7 @@ Connect to your Linux desktop from any RDP client (Windows, macOS, Linux, iOS, A
 - **Graceful shutdown** -- SIGTERM/SIGINT handling with explicit PipeWire cleanup
 - **OpenH264 dynamic loading** -- patent-compliant runtime codec loading with dual ABI support
 - **GUI configuration** -- graphical settings tool built with iced
-- **378 tests passing** -- comprehensive test coverage across all modules
+- **415 tests passing** -- comprehensive test coverage across all modules
 
 ## Downloads
 
