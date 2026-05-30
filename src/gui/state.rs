@@ -300,13 +300,68 @@ impl EditStrings {
         }
     }
 
+    pub(crate) fn compose_listen_addr(host: &str, port: &str) -> String {
+        let host = host.trim();
+        let port = match port.trim() {
+            "" => "3389",
+            port => port,
+        };
+
+        let normalized_host = if host.is_empty() {
+            "0.0.0.0".to_string()
+        } else if host.starts_with('[') && host.ends_with(']') {
+            host.to_string()
+        } else if host.contains(':') {
+            format!("[{host}]")
+        } else {
+            host.to_string()
+        };
+
+        format!("{normalized_host}:{port}")
+    }
+
     fn parse_listen_addr(addr: &str) -> (String, String) {
+        if let Ok(socket_addr) = addr.parse::<std::net::SocketAddr>() {
+            return (socket_addr.ip().to_string(), socket_addr.port().to_string());
+        }
+
         let parts: Vec<&str> = addr.rsplitn(2, ':').collect();
         if parts.len() == 2 {
-            (parts[1].to_string(), parts[0].to_string())
+            (
+                parts[1]
+                    .trim_start_matches('[')
+                    .trim_end_matches(']')
+                    .to_string(),
+                parts[0].to_string(),
+            )
         } else {
             (addr.to_string(), "3389".to_string())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::EditStrings;
+    use crate::config::Config;
+
+    #[test]
+    fn edit_strings_from_config_strips_ipv6_brackets() {
+        let mut config = Config::default_config().expect("default config");
+        config.server.listen_addr = "[2001:db8::1]:3390".to_string();
+
+        let edit_strings = EditStrings::from_config(&config);
+
+        assert_eq!(edit_strings.server_ip, "2001:db8::1");
+        assert_eq!(edit_strings.server_port, "3390");
+    }
+
+    #[test]
+    fn compose_listen_addr_brackets_ipv6_hosts() {
+        assert_eq!(
+            EditStrings::compose_listen_addr("2001:db8::1", "3390"),
+            "[2001:db8::1]:3390"
+        );
     }
 }
 

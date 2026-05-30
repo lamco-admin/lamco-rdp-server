@@ -1646,7 +1646,8 @@ impl LamcoRdpServer {
         // Pre-bind check: detect if the port is already in use and identify the holder
         check_port_available(&listen_addr);
 
-        let socket = tokio::net::TcpSocket::new_v4().context("Failed to create TCP socket")?;
+        let socket =
+            create_tcp_socket_for_addr(listen_addr).context("Failed to create TCP socket")?;
         socket
             .set_reuseaddr(true)
             .context("Failed to set SO_REUSEADDR")?;
@@ -1984,6 +1985,14 @@ fn resolve_security_mode(security_mode: &str, effective_auth_method: &str) -> bo
     }
 }
 
+fn create_tcp_socket_for_addr(addr: SocketAddr) -> std::io::Result<tokio::net::TcpSocket> {
+    if addr.is_ipv4() {
+        tokio::net::TcpSocket::new_v4()
+    } else {
+        tokio::net::TcpSocket::new_v6()
+    }
+}
+
 /// Check if a port is available before attempting to bind.
 ///
 /// Uses a standard TCP connect probe and /proc/net/tcp inspection to detect
@@ -2124,6 +2133,25 @@ async fn send_portal_notification(id: &str, title: &str, body: &str, high_priori
 
 #[cfg(test)]
 mod tests {
+    use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+
+    use super::create_tcp_socket_for_addr;
+
+    #[test]
+    fn create_tcp_socket_for_addr_binds_ipv4() {
+        let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, 0));
+        let socket = create_tcp_socket_for_addr(addr).expect("create IPv4 socket");
+
+        socket.bind(addr).expect("bind IPv4 socket");
+    }
+
+    #[test]
+    fn create_tcp_socket_for_addr_binds_ipv6() {
+        let addr = SocketAddr::from((Ipv6Addr::LOCALHOST, 0));
+        let socket = create_tcp_socket_for_addr(addr).expect("create IPv6 socket");
+
+        socket.bind(addr).expect("bind IPv6 socket");
+    }
 
     #[tokio::test]
     #[ignore = "Requires D-Bus and portal access"]

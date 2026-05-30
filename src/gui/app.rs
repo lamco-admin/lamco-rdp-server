@@ -23,7 +23,7 @@ use crate::{
         message::{DamageTrackingPreset, EgfxPreset, Message, PerformancePreset},
         server_connection::{ConnectionMode, ServerConnection},
         server_process::ServerLogLine,
-        state::{AppState, CertGenState, LogLevel, LogLine, MessageLevel, Tab, TabCategory},
+        state::{AppState, CertGenState, EditStrings, LogLevel, LogLine, MessageLevel, Tab, TabCategory},
         tabs, theme as app_theme,
     },
 };
@@ -109,30 +109,20 @@ impl ConfigGuiApp {
             }
 
             Message::ServerListenAddrChanged(addr) => {
-                // Reconstruct full address with existing port
-                let port = self
-                    .state
-                    .config
-                    .server
-                    .listen_addr
-                    .rsplit(':')
-                    .next()
-                    .unwrap_or("3389");
-                self.state.config.server.listen_addr = format!("{}:{}", addr, port);
+                self.state.edit_strings.server_ip = addr;
+                self.state.config.server.listen_addr = EditStrings::compose_listen_addr(
+                    &self.state.edit_strings.server_ip,
+                    &self.state.edit_strings.server_port,
+                );
                 self.state.mark_dirty();
                 Task::none()
             }
             Message::ServerPortChanged(port) => {
-                // Reconstruct full address with existing IP
-                let ip = self
-                    .state
-                    .config
-                    .server
-                    .listen_addr
-                    .rsplit_once(':')
-                    .map(|(ip, _)| ip)
-                    .unwrap_or("0.0.0.0");
-                self.state.config.server.listen_addr = format!("{}:{}", ip, port);
+                self.state.edit_strings.server_port = port;
+                self.state.config.server.listen_addr = EditStrings::compose_listen_addr(
+                    &self.state.edit_strings.server_ip,
+                    &self.state.edit_strings.server_port,
+                );
                 self.state.mark_dirty();
                 Task::none()
             }
