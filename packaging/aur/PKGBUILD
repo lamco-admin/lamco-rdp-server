@@ -39,8 +39,18 @@ optdepends=(
 options=(!lto)
 backup=('etc/dbus-1/system.d/io.lamco.RdpServer.System.conf')
 install=lamco-rdp-server.install
-source=("$pkgname-$pkgver.tar.xz::https://github.com/lamco-admin/$pkgname/releases/download/v$pkgver/$pkgname-$pkgver.tar.xz")
-sha256sums=('bf8e481a655b0d69ad770949a31e840b0069166aa87a8f14d38221ef897aa8bd')
+source=("$pkgname-$pkgver.tar.xz::https://github.com/lamco-admin/$pkgname/releases/download/v$pkgver/$pkgname-$pkgver.tar.xz"
+        "cros-libva-vp9-compat.patch")
+sha256sums=('bf8e481a655b0d69ad770949a31e840b0069166aa87a8f14d38221ef897aa8bd'
+            '082ac1b7126c5106641db40790d34d97b573cc4995e47a54abeff84a21ca4bd2')
+
+prepare() {
+    cd "$pkgname-$pkgver"
+    # libva 2.23+ added fields to VAEncPictureParameterBufferVP9 that the
+    # vendored cros-libva 0.0.13 does not initialize; same patch OBS and
+    # RPM Fusion carry.
+    patch -Np1 -i "$srcdir/cros-libva-vp9-compat.patch"
+}
 
 build() {
     cd "$pkgname-$pkgver"

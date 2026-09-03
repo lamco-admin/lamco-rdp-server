@@ -139,6 +139,9 @@ parts:
       - libgl1-mesa-dri     # GL/GLES fallback ICD
       - libva2              # VA-API loader (cros-libva is a hard link-time dep once vaapi is enabled)
       - libva-drm2
-      - i965-va-driver                  # Intel VA-API driver (pre-Broadwell iGPUs)
-      - intel-media-va-driver-non-free  # Intel VA-API driver (Broadwell+, H.264 encode)
       - mesa-va-drivers                 # AMD (radeonsi) VA-API driver
+      # The Intel drivers exist only on amd64; staging them unconditionally
+      # failed the Launchpad arm64 build (2026-09-03).
+      - on amd64:
+        - i965-va-driver                  # Intel VA-API driver (pre-Broadwell iGPUs)
+        - intel-media-va-driver-non-free  # Intel VA-API driver (Broadwell+, H.264 encode)

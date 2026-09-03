@@ -1,14 +1,19 @@
 # Patch: cros-libva VP9 struct compatibility
 # Target: vendor/cros-libva/src/buffer/vp9.rs
-# Reason: Newer libva headers (openSUSE TW) add fields to VAEncPictureParameterBufferVP9
-# Remove when: cros-libva upstream updates to match libva >= 2.22
-# Applied to: OBS (openSUSE Tumbleweed target only)
+# Reason: libva 2.23+ headers add seg_id_block_size and va_reserved8 to VAEncPictureParameterBufferVP9
+# Remove when: cros-libva upstream updates to match libva >= 2.23
+# Applied to: every vendored tarball (the 1.4.5 tarball got the hunk in the wrong initializer; fixed 2026-09-03)
 # Upstream: https://github.com/nicira/cros-libva (dormant)
 # Added: 2026-02-09
 --- a/vendor/cros-libva/src/buffer/vp9.rs
 +++ b/vendor/cros-libva/src/buffer/vp9.rs
-@@ -1,4 +1,5 @@
+@@ -434,7 +434,8 @@
+             skip_frame_flag,
+             number_skip_frames,
              skip_frames_size,
-             va_reserved: Default::default(),
+-            va_reserved: Default::default(),
++            va_reserved: Default::default(),
 +            ..Default::default()
          }))
+     }
+ 
