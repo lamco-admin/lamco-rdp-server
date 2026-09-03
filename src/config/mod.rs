@@ -414,9 +414,9 @@ impl Config {
         }
 
         match self.security.security_mode.as_str() {
-            "tls" | "hybrid" | "auto" => {}
+            "tls" | "hybrid" | "auto" | "rdp" | "none" => {}
             _ => anyhow::bail!(
-                "Invalid security mode: {} (expected tls, hybrid, or auto)",
+                "Invalid security mode: {} (expected tls, hybrid, auto, or rdp)",
                 self.security.security_mode
             ),
         }
@@ -532,13 +532,30 @@ impl Config {
         }
     }
 
-    /// Override config with CLI arguments
-    pub fn with_overrides(mut self, listen: Option<String>, port: u16) -> Self {
-        if let Some(listen_addr) = listen {
-            self.server.listen_addr = format!("{listen_addr}:{port}");
-        } else if let Ok(mut addr) = self.server.listen_addr.parse::<SocketAddr>() {
-            addr.set_port(port);
-            self.server.listen_addr = addr.to_string();
+    /// Override config with CLI arguments. Only touches `server.listen_addr`
+    /// fields the caller actually passed — `None` must leave the value loaded
+    /// from `config.toml` untouched, since callers such as the GUI rely on
+    /// the file being authoritative when they don't pass `--listen`/`--port`.
+    pub fn with_overrides(mut self, listen: Option<String>, port: Option<u16>) -> Self {
+        match (listen, port) {
+            (Some(host), Some(port)) => {
+                self.server.listen_addr = format!("{host}:{port}");
+            }
+            (Some(host), None) => {
+                let existing_port = self
+                    .server
+                    .listen_addr
+                    .parse::<SocketAddr>()
+                    .map_or(3389, |addr| addr.port());
+                self.server.listen_addr = format!("{host}:{existing_port}");
+            }
+            (None, Some(port)) => {
+                if let Ok(mut addr) = self.server.listen_addr.parse::<SocketAddr>() {
+                    addr.set_port(port);
+                    self.server.listen_addr = addr.to_string();
+                }
+            }
+            (None, None) => {}
         }
 
         self
@@ -694,5 +711,74 @@ mod tests {
             infer_toml_value("127.0.0.1:3389"),
             toml::Value::String(_)
         ));
+    }
+
+    /// Paths whose default is computed from the runtime environment
+    /// (`dirs::config_dir()`) rather than a fixed literal, so the example
+    /// file's illustrative value is expected to differ from `Config::default()`.
+    const EXAMPLE_CONFIG_EXPECTED_DIVERGENCE: &[&str] =
+        &["security.cert_path", "security.key_path"];
+
+    /// Recursively assert that every key example-config.toml actually sets
+    /// (comments and omitted keys aren't part of the parsed table, so this
+    /// only checks what's genuinely active) exists in the current schema's
+    /// defaults and matches, unless explicitly allowlisted above. Catches
+    /// both stale values (schema default changed, example wasn't updated)
+    /// and stale keys (field renamed/removed, example still has the old name).
+    fn assert_table_matches_defaults(path: &str, example: &toml::Table, defaults: &toml::Table) {
+        for (key, example_value) in example {
+            let full_path = if path.is_empty() {
+                key.clone()
+            } else {
+                format!("{path}.{key}")
+            };
+
+            let Some(default_value) = defaults.get(key) else {
+                panic!(
+                    "example-config.toml sets `{full_path}` but it doesn't exist in the \
+                     current Config schema — field renamed or removed upstream, example \
+                     needs updating"
+                );
+            };
+
+            match (example_value, default_value) {
+                (toml::Value::Table(ex_sub), toml::Value::Table(def_sub)) => {
+                    assert_table_matches_defaults(&full_path, ex_sub, def_sub);
+                }
+                _ if EXAMPLE_CONFIG_EXPECTED_DIVERGENCE.contains(&full_path.as_str()) => {}
+                _ => {
+                    assert_eq!(
+                        example_value, default_value,
+                        "example-config.toml's `{full_path}` = {example_value} has drifted \
+                         from the current default {default_value} — update the example (or \
+                         add `{full_path}` to EXAMPLE_CONFIG_EXPECTED_DIVERGENCE if the \
+                         divergence is intentional)"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn example_config_matches_current_schema() {
+        let example_toml = include_str!("../../example-config.toml");
+
+        let example: toml::Table = example_toml
+            .parse()
+            .expect("example-config.toml must be valid TOML");
+
+        let parsed: Config = toml::from_str(example_toml)
+            .expect("example-config.toml must deserialize against the current Config schema");
+        parsed
+            .validate()
+            .expect("example-config.toml must pass Config::validate()");
+
+        let defaults_toml =
+            toml::to_string(&Config::default()).expect("Config::default() must serialize");
+        let defaults: toml::Table = defaults_toml
+            .parse()
+            .expect("serialized Config::default() must be valid TOML");
+
+        assert_table_matches_defaults("", &example, &defaults);
     }
 }

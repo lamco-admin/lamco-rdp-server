@@ -3,7 +3,9 @@
 //! Measures performance of BGRA→YUV444 conversion at various resolutions.
 //! Tests both scalar and SIMD (AVX2/NEON) code paths.
 
-use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
+use std::hint::black_box;
+
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use lamco_rdp_server::egfx::{ColorMatrix, bgra_to_yuv444, pack_dual_views};
 
 /// Generate test BGRA data with a gradient pattern

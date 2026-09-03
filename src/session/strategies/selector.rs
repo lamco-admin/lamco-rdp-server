@@ -43,6 +43,16 @@ pub struct SessionStrategySelector {
     keyboard_layout: String,
     /// Resolved input protocol preference: true = libei, false = wlr
     prefers_libei: bool,
+    /// Capture-request pacing ceiling (fps) for the portal-generic
+    /// strategy, from `config.video.target_fps`/`config.performance
+    /// .adaptive_fps.max_fps`. `None` leaves capture-request pacing
+    /// disabled (the crate's conservative default).
+    capture_pacing_fps: Option<u32>,
+    /// How to record a monitor on GNOME, from `config.capture.gnome_record_mode`.
+    record_mode: crate::mutter::session_manager::RecordMode,
+    /// Whether a headless GNOME virtual monitor is marked as part of the platform,
+    /// from `config.capture.gnome_virtual_is_platform`.
+    virtual_is_platform: bool,
 }
 
 impl SessionStrategySelector {
@@ -52,6 +62,9 @@ impl SessionStrategySelector {
             token_manager,
             keyboard_layout: "auto".to_string(),
             prefers_libei: true,
+            capture_pacing_fps: None,
+            record_mode: crate::mutter::session_manager::RecordMode::default(),
+            virtual_is_platform: false,
         }
     }
 
@@ -65,11 +78,38 @@ impl SessionStrategySelector {
             token_manager,
             keyboard_layout,
             prefers_libei: true,
+            capture_pacing_fps: None,
+            record_mode: crate::mutter::session_manager::RecordMode::default(),
+            virtual_is_platform: false,
         }
     }
 
     pub fn with_input_protocol(mut self, prefers_libei: bool) -> Self {
         self.prefers_libei = prefers_libei;
+        self
+    }
+
+    /// Set the capture-request pacing ceiling (fps) passed to the
+    /// portal-generic strategy. See `PortalGenericStrategy::new`.
+    /// Set how a GNOME monitor is recorded (see `RecordMode`).
+    #[must_use]
+    pub fn with_record_mode(
+        mut self,
+        record_mode: crate::mutter::session_manager::RecordMode,
+    ) -> Self {
+        self.record_mode = record_mode;
+        self
+    }
+
+    /// Mark a headless GNOME virtual monitor as part of the platform.
+    #[must_use]
+    pub fn with_virtual_is_platform(mut self, is_platform: bool) -> Self {
+        self.virtual_is_platform = is_platform;
+        self
+    }
+
+    pub fn with_capture_pacing_fps(mut self, fps: u32) -> Self {
+        self.capture_pacing_fps = Some(fps);
         self
     }
 
@@ -183,7 +223,11 @@ impl SessionStrategySelector {
 
                 let monitor_connector = self.detect_primary_monitor().await;
 
-                return Ok(Box::new(MutterDirectStrategy::new(monitor_connector)));
+                return Ok(Box::new(
+                    MutterDirectStrategy::new(monitor_connector)
+                        .with_record_mode(self.record_mode)
+                        .with_virtual_is_platform(self.virtual_is_platform),
+                ));
             } else {
                 warn!("Service Registry reports Mutter API available, but connection failed");
                 warn!("Falling back to next available strategy");
@@ -221,7 +265,9 @@ impl SessionStrategySelector {
                 info!("   Compositor: {}", caps.compositor);
                 info!("   Video + Input + Clipboard (no external portal daemon)");
 
-                return Ok(Box::new(PortalGenericStrategy::new()));
+                return Ok(Box::new(PortalGenericStrategy::new(
+                    self.capture_pacing_fps,
+                )));
             } else {
                 warn!(
                     "portal-generic: protocol check failed (missing screencopy or virtual input)"

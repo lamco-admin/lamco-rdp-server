@@ -7,6 +7,24 @@
 //! **Clipboard:** Client ↔ IronRDP ↔ Clipboard Orchestrator ↔ Portal ↔ Compositor
 
 #![warn(clippy::all)]
+// Test-only lint relaxations. Each of these is either meaningless or actively
+// misleading in a test, and all of them stay in force for production code:
+//
+// - unwrap/expect: a panic IS the failure signal in a test. Rewriting every
+//   assertion to propagate errors would obscure what is being asserted.
+// - field_reassign_with_default: building a config by mutating a default is the
+//   clearest way to show which single field a test case varies.
+// - approx_constant: tests use values like 3.14 as arbitrary sample data, not
+//   as an approximation of PI.
+#![cfg_attr(
+    test,
+    allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::field_reassign_with_default,
+        clippy::approx_constant
+    )
+)]
 
 pub mod audio;
 pub mod capabilities;
@@ -86,6 +104,7 @@ pub mod input {
     pub use lamco_rdp_input::{
         CoordinateTransformer, InputError, InputTranslator, KeyModifiers, KeyboardEvent,
         KeyboardEventType, KeyboardHandler, LinuxInputEvent, MonitorInfo, MouseButton, MouseEvent,
-        MouseHandler, RdpInputEvent, Result as InputResult,
+        MouseHandler, RdpInputEvent, Result as InputResult, TouchContactFlags, TouchEvent,
+        TouchHandler,
     };
 }

@@ -16,6 +16,16 @@
 //! - RFC 6716 (OPUS Codec)
 //! - https://opus-codec.org
 
+#[cfg(all(feature = "opus-libopus", feature = "opus-pure-rust"))]
+compile_error!(
+    "Enable only ONE Opus backend: `opus-libopus` (default) or `opus-pure-rust`. \
+     For the pure-Rust path, build with --no-default-features and add opus-pure-rust \
+     alongside the other features you want."
+);
+
+#[cfg(not(any(feature = "opus-libopus", feature = "opus-pure-rust")))]
+compile_error!("An Opus backend is required: enable `opus-libopus` (default) or `opus-pure-rust`.");
+
 use anyhow::{Context, Result};
 use tracing::debug;
 

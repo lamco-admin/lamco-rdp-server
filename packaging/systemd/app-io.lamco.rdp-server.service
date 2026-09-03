@@ -5,10 +5,15 @@
 #
 # Installation:
 #   mkdir -p ~/.config/systemd/user
-#   cp lamco-rdp-server.service ~/.config/systemd/user/
+#   cp app-io.lamco.rdp-server.service ~/.config/systemd/user/
 #   systemctl --user daemon-reload
-#   systemctl --user enable lamco-rdp-server
-#   systemctl --user start lamco-rdp-server
+#   systemctl --user enable app-io.lamco.rdp-server
+#   systemctl --user start app-io.lamco.rdp-server
+#
+# The unit is named app-<app-id> rather than the package name so that
+# xdg-desktop-portal's sd_pid_get_user_unit()-based app-id derivation
+# resolves us to io.lamco.rdp-server instead of the empty string, which
+# is what portal restore-token scoping keys on.
 #
 # For linger (start on boot without login):
 #   sudo loginctl enable-linger $USER
@@ -85,3 +90,4 @@ SystemCallArchitectures=native
 
 [Install]
 WantedBy=graphical-session.target
+Alias=lamco-rdp-server.service

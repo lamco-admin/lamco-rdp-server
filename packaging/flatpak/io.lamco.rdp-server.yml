@@ -16,6 +16,10 @@ finish-args:
   - --share=network
   - --socket=pulseaudio
   - --filesystem=xdg-run/pipewire-0
+  # The GUI starts the server with --dbus-service; the server owns this name on
+  # the session bus so the GUI can reconnect to it. Without the grant the sandbox
+  # D-Bus proxy refuses the name (found 2026-09-02, present since 1.4.4).
+  - --own-name=io.lamco.RdpServer
 
 modules:
   - name: libfuse3
@@ -39,7 +43,7 @@ modules:
         RUST_BACKTRACE: '1'
         LIBCLANG_PATH: /usr/lib/sdk/llvm20/lib
     build-commands:
-      - cargo --offline build --release --no-default-features --features "h264,libei,gui"
+      - cargo --offline build --release --no-default-features --features "h264,vaapi,opus-libopus,libei,gui"
       - install -Dm755 target/release/lamco-rdp-server /app/bin/lamco-rdp-server
       - install -Dm755 target/release/lamco-rdp-server-gui /app/bin/lamco-rdp-server-gui
       - install -Dm644 licenses/OpenH264-BINARY_LICENSE.txt /app/share/licenses/io.lamco.rdp-server/OpenH264-BINARY_LICENSE.txt
@@ -54,5 +58,5 @@ modules:
 
     sources:
       - type: archive
-        url: https://github.com/lamco-admin/lamco-rdp-server/releases/download/v1.4.4/lamco-rdp-server-1.4.4.tar.xz
-        sha256: 6246e10b6ea6e24b712fc3f812431446c7792d04593ae8426682b12e3e83a51d
+        url: https://github.com/lamco-admin/lamco-rdp-server/releases/download/v1.4.5/lamco-rdp-server-1.4.5.tar.xz
+        sha256: bf8e481a655b0d69ad770949a31e840b0069166aa87a8f14d38221ef897aa8bd

@@ -74,6 +74,7 @@ mod input_handler;
 #[expect(dead_code, reason = "WIP: not yet integrated into the server pipeline")]
 mod multiplexer_loop;
 mod pipeline_decisions;
+mod rdpei_factory;
 
 use std::{net::SocketAddr, sync::Arc};
 
@@ -81,10 +82,46 @@ use anyhow::{Context, Result};
 pub use display_handler::LamcoDisplayHandler;
 pub use egfx_sender::{EgfxFrameSender, SendError};
 pub use gfx_factory::{LamcoGfxFactory, SharedHandlerState};
-pub use input_handler::LamcoInputHandler;
+
+/// Interval between server-side NetworkAutoDetect RTT probes.
+const AUTODETECT_RTT_PROBE_INTERVAL_MS: u64 = 250;
+
+/// Drive server-side NetworkAutoDetect for the desktop path: fire an RTT probe
+/// every [`AUTODETECT_RTT_PROBE_INTERVAL_MS`] while a client session is ready.
+/// The server measures RTT from the client's responses and reports it back via a
+/// Network Characteristics Result (upstream PR #1470). Gated on EGFX readiness so
+/// probes are not queued between connections; the task exits when the server
+/// event loop is gone or shutdown fires.
+fn spawn_autodetect_probe(
+    event_sender: tokio::sync::mpsc::UnboundedSender<ironrdp_server::ServerEvent>,
+    handler_state: Arc<SharedHandlerState>,
+    mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
+) {
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_millis(
+            AUTODETECT_RTT_PROBE_INTERVAL_MS,
+        ));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {
+                _ = tick.tick() => {
+                    if handler_state.is_ready.load(std::sync::atomic::Ordering::Acquire)
+                        && event_sender.send(ironrdp_server::ServerEvent::AutoDetectRttRequest).is_err()
+                    {
+                        break; // server event loop gone — connection ended
+                    }
+                }
+                _ = shutdown_rx.recv() => break,
+            }
+        }
+    });
+}
+pub use input_handler::{KeyboardLayoutConnectionHandler, LamcoInputHandler};
 use ironrdp_graphics::zgfx::CompressionMode;
 use ironrdp_pdu::rdp::capability_sets::server_codecs_capabilities;
 use ironrdp_server::RdpServer;
+pub use rdpei_factory::LamcoRdpeiFactory;
+use rdpei_factory::create_rdpei_factory;
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
 
@@ -213,6 +250,21 @@ impl LamcoRdpServer {
             capabilities.profile.recommended_capture,
             capabilities.profile.recommended_buffer_type
         );
+
+        // Wayland observers: color-management (per-output HDR/color state) and
+        // output-management (wlroots heads/modes + resolution control). Each
+        // returns None when its protocol is absent, so they are no-ops off the
+        // relevant compositors.
+        #[cfg(feature = "wayland")]
+        let color_observer = (config.display.color_management
+            && capabilities.has_color_management())
+        .then(crate::compositor::ColorObserver::spawn)
+        .flatten();
+        #[cfg(feature = "wayland")]
+        let output_observer = (config.display.output_management
+            && capabilities.compositor.is_wlroots_based())
+        .then(crate::compositor::OutputObserver::spawn)
+        .flatten();
 
         info!("Detecting deployment context and credential storage...");
 
@@ -408,12 +460,26 @@ impl LamcoRdpServer {
                 capabilities.compositor,
             );
 
+            // Capture-request pacing ceiling for the portal-generic strategy:
+            // the higher of the two fps knobs the GUI exposes, so capture
+            // pacing never becomes the bottleneck below whichever one the
+            // downstream frame-rate regulation actually wants to use.
+            let capture_pacing_fps = config
+                .video
+                .target_fps
+                .max(config.performance.adaptive_fps.max_fps);
+
             let strategy_selector = SessionStrategySelector::with_keyboard_layout(
                 service_registry.clone(),
                 Arc::new(token_manager),
                 config.input.keyboard_layout.clone(),
             )
-            .with_input_protocol(prefers_libei);
+            .with_input_protocol(prefers_libei)
+            .with_capture_pacing_fps(capture_pacing_fps)
+            .with_record_mode(crate::mutter::session_manager::RecordMode::from_config(
+                &config.capture.gnome_record_mode,
+            ))
+            .with_virtual_is_platform(config.capture.gnome_virtual_is_platform);
 
             strategy_selector
                 .select_strategy()
@@ -482,170 +548,178 @@ impl LamcoRdpServer {
             Direct(std::sync::mpsc::Receiver<lamco_pipewire::frame::RawFrameData>),
         }
 
-        // Input-only strategies (libei, wlr-direct): acquire video via standalone Portal ScreenCast.
-        // These strategies handle input injection but don't provide video capture.
-        let (pipewire_source, stream_info) = if matches!(
-            session_handle.session_type(),
-            SessionType::WlrDirect | SessionType::Libei
-        ) {
-            info!(
-                "{}: acquiring video via standalone Portal ScreenCast",
-                session_handle.session_type()
-            );
-
-            use ashpd::desktop::{
-                PersistMode,
-                screencast::{CursorMode, Screencast, SourceType as ScSourceType},
-            };
-
-            let screencast = Screencast::new()
-                .await
-                .context("Failed to connect to ScreenCast portal for input-only video")?;
-
-            let sc_session = screencast
-                .create_session(ashpd::desktop::CreateSessionOptions::default())
-                .await
-                .context("Failed to create ScreenCast session for input-only video")?;
-
-            // Pick best available cursor mode from what the portal actually supports.
-            // Hyprland's portal only offers Hidden+Embedded (no Metadata).
-            let cursor_mode = if capabilities
-                .portal
-                .available_cursor_modes
-                .contains(&crate::compositor::CursorMode::Metadata)
-            {
-                CursorMode::Metadata
-            } else if capabilities
-                .portal
-                .available_cursor_modes
-                .contains(&crate::compositor::CursorMode::Embedded)
-            {
-                CursorMode::Embedded
-            } else {
-                CursorMode::Hidden
-            };
-            debug!("Using cursor mode {:?} for ScreenCast", cursor_mode);
-
-            use ashpd::desktop::screencast::SelectSourcesOptions;
-            screencast
-                .select_sources(
-                    &sc_session,
-                    SelectSourcesOptions::default()
-                        .set_cursor_mode(cursor_mode)
-                        .set_sources(enumflags2::BitFlags::from(ScSourceType::Monitor))
-                        .set_multiple(false)
-                        .set_persist_mode(PersistMode::DoNot),
-                )
-                .await
-                .context("Failed to select ScreenCast sources for input-only video")?;
-
-            let response = screencast
-                .start(
-                    &sc_session,
-                    None,
-                    ashpd::desktop::screencast::StartCastOptions::default(),
-                )
-                .await
-                .context("Failed to start ScreenCast for input-only video")?
-                .response()
-                .context("ScreenCast start rejected by user")?;
-
-            let portal_streams = response.streams();
-            if portal_streams.is_empty() {
-                return Err(anyhow::anyhow!(
-                    "No streams from ScreenCast for input-only video"
-                ));
-            }
-
-            let streams: Vec<crate::portal::StreamInfo> = portal_streams
-                .iter()
-                .map(|s| {
-                    let (width, height) = s.size().unwrap_or((0, 0));
-                    let (x, y) = s.position().unwrap_or((0, 0));
-                    crate::portal::StreamInfo {
-                        node_id: s.pipe_wire_node_id(),
-                        position: (x, y),
-                        size: (width as u32, height as u32),
-                        source_type: crate::portal::SourceType::Monitor,
-                    }
-                })
-                .collect();
-
-            info!("ScreenCast started with {} stream(s)", streams.len());
-            for stream in &streams {
+        // wlr-direct (virtual pointer/keyboard, no RemoteDesktop portal session):
+        // acquire video via a standalone Portal ScreenCast. The libei strategy now
+        // attaches ScreenCast to its own RemoteDesktop session (#51) and reports the
+        // FD via pipewire_access(), so it uses the shared path below.
+        let (pipewire_source, stream_info) =
+            if matches!(session_handle.session_type(), SessionType::WlrDirect) {
                 info!(
-                    "  Stream: node_id={}, {}x{} at ({},{})",
-                    stream.node_id,
-                    stream.size.0,
-                    stream.size.1,
-                    stream.position.0,
-                    stream.position.1
+                    "{}: acquiring video via standalone Portal ScreenCast",
+                    session_handle.session_type()
                 );
-            }
 
-            let fd = screencast
-                .open_pipe_wire_remote(
-                    &sc_session,
-                    ashpd::desktop::screencast::OpenPipeWireRemoteOptions::default(),
-                )
-                .await
-                .context("Failed to open PipeWire remote for input-only video")?;
+                use ashpd::desktop::{
+                    PersistMode,
+                    screencast::{CursorMode, Screencast, SourceType as ScSourceType},
+                };
 
-            use std::os::fd::AsRawFd;
-            let raw_fd = fd.as_raw_fd();
-            // Leak the OwnedFd so the PipeWire connection stays alive for the session.
-            // Cleaned up when the server process exits.
-            std::mem::forget(fd);
+                let screencast = Screencast::new()
+                    .await
+                    .context("Failed to connect to ScreenCast portal for input-only video")?;
 
-            info!("PipeWire FD: {}", raw_fd);
+                let sc_session = screencast
+                    .create_session(ashpd::desktop::CreateSessionOptions::default())
+                    .await
+                    .context("Failed to create ScreenCast session for input-only video")?;
 
-            // Provide stream dimensions to the session handle so pointer
-            // coordinate transformation uses the real resolution.
-            let handle_streams: Vec<_> = streams
-                .iter()
-                .map(|s| crate::session::strategy::StreamInfo {
-                    node_id: s.node_id,
-                    width: s.size.0,
-                    height: s.size.1,
-                    position_x: s.position.0,
-                    position_y: s.position.1,
-                })
-                .collect();
-            session_handle.set_streams(handle_streams);
+                // Pick best available cursor mode from what the portal actually supports.
+                // Hyprland's portal only offers Hidden+Embedded (no Metadata).
+                let cursor_mode = if capabilities
+                    .portal
+                    .available_cursor_modes
+                    .contains(&crate::compositor::CursorMode::Metadata)
+                {
+                    CursorMode::Metadata
+                } else if capabilities
+                    .portal
+                    .available_cursor_modes
+                    .contains(&crate::compositor::CursorMode::Embedded)
+                {
+                    CursorMode::Embedded
+                } else {
+                    CursorMode::Hidden
+                };
+                debug!("Using cursor mode {:?} for ScreenCast", cursor_mode);
 
-            (PipeWireSource::Fd(raw_fd), streams)
-        } else {
-            let strategy_streams = session_handle.streams();
-            let portal_streams: Vec<crate::portal::StreamInfo> = strategy_streams
-                .iter()
-                .map(|s| crate::portal::StreamInfo {
-                    node_id: s.node_id,
-                    position: (s.position_x, s.position_y),
-                    size: (s.width, s.height),
-                    source_type: crate::portal::SourceType::Monitor,
-                })
-                .collect();
+                use ashpd::desktop::screencast::SelectSourcesOptions;
+                screencast
+                    .select_sources(
+                        &sc_session,
+                        SelectSourcesOptions::default()
+                            .set_cursor_mode(cursor_mode)
+                            .set_sources(enumflags2::BitFlags::from(ScSourceType::Monitor))
+                            .set_multiple(false)
+                            .set_persist_mode(PersistMode::DoNot),
+                    )
+                    .await
+                    .context("Failed to select ScreenCast sources for input-only video")?;
 
-            match session_handle.pipewire_access() {
-                PipeWireAccess::FileDescriptor(fd) => {
-                    info!("Using Portal-provided PipeWire file descriptor: {}", fd);
-                    (PipeWireSource::Fd(fd), portal_streams)
+                let response = screencast
+                    .start(
+                        &sc_session,
+                        None,
+                        ashpd::desktop::screencast::StartCastOptions::default(),
+                    )
+                    .await
+                    .context("Failed to start ScreenCast for input-only video")?
+                    .response()
+                    .context("ScreenCast start rejected by user")?;
+
+                let portal_streams = response.streams();
+                if portal_streams.is_empty() {
+                    return Err(anyhow::anyhow!(
+                        "No streams from ScreenCast for input-only video"
+                    ));
                 }
-                PipeWireAccess::NodeId(node_id) => {
-                    info!("Using Mutter-provided PipeWire node ID: {}", node_id);
 
-                    let fd = crate::mutter::get_pipewire_fd_for_mutter()
-                        .context("Failed to connect to PipeWire daemon for Mutter")?;
+                let streams: Vec<crate::portal::StreamInfo> = portal_streams
+                    .iter()
+                    .map(|s| {
+                        let (width, height) = s.size().unwrap_or((0, 0));
+                        let (x, y) = s.position().unwrap_or((0, 0));
+                        crate::portal::StreamInfo {
+                            node_id: s.pipe_wire_node_id(),
+                            position: (x, y),
+                            size: (width as u32, height as u32),
+                            source_type: crate::portal::SourceType::Monitor,
+                            // Portal ScreenCast >= 5 only. Carried through so a
+                            // stream can later be matched to the EIS device for
+                            // the same monitor; nothing consumes it yet.
+                            mapping_id: s.mapping_id().map(ToOwned::to_owned),
+                        }
+                    })
+                    .collect();
 
-                    info!("Connected to PipeWire daemon, FD: {}", fd);
-                    (PipeWireSource::Fd(fd), portal_streams)
+                info!("ScreenCast started with {} stream(s)", streams.len());
+                for stream in &streams {
+                    info!(
+                        "  Stream: node_id={}, {}x{} at ({},{})",
+                        stream.node_id,
+                        stream.size.0,
+                        stream.size.1,
+                        stream.position.0,
+                        stream.position.1
+                    );
                 }
-                PipeWireAccess::DirectChannel(rx) => {
-                    info!("Using direct frame channel (bypassing PipeWire transport)");
-                    (PipeWireSource::Direct(rx), portal_streams)
+
+                let fd = screencast
+                    .open_pipe_wire_remote(
+                        &sc_session,
+                        ashpd::desktop::screencast::OpenPipeWireRemoteOptions::default(),
+                    )
+                    .await
+                    .context("Failed to open PipeWire remote for input-only video")?;
+
+                use std::os::fd::AsRawFd;
+                let raw_fd = fd.as_raw_fd();
+                // Leak the OwnedFd so the PipeWire connection stays alive for the session.
+                // Cleaned up when the server process exits.
+                std::mem::forget(fd);
+
+                info!("PipeWire FD: {}", raw_fd);
+
+                // Provide stream dimensions to the session handle so pointer
+                // coordinate transformation uses the real resolution.
+                let handle_streams: Vec<_> = streams
+                    .iter()
+                    .map(|s| crate::session::strategy::StreamInfo {
+                        node_id: s.node_id,
+                        width: s.size.0,
+                        height: s.size.1,
+                        position_x: s.position.0,
+                        position_y: s.position.1,
+                    })
+                    .collect();
+                session_handle.set_streams(handle_streams);
+
+                (PipeWireSource::Fd(raw_fd), streams)
+            } else {
+                let strategy_streams = session_handle.streams();
+                let portal_streams: Vec<crate::portal::StreamInfo> = strategy_streams
+                    .iter()
+                    .map(|s| crate::portal::StreamInfo {
+                        node_id: s.node_id,
+                        position: (s.position_x, s.position_y),
+                        size: (s.width, s.height),
+                        source_type: crate::portal::SourceType::Monitor,
+                        // The strategy-level StreamInfo these come from does not
+                        // carry a mapping id: the non-portal backends (Mutter
+                        // direct, wlr) have no portal stream to read one from.
+                        mapping_id: None,
+                    })
+                    .collect();
+
+                match session_handle.pipewire_access() {
+                    PipeWireAccess::FileDescriptor(fd) => {
+                        info!("Using Portal-provided PipeWire file descriptor: {}", fd);
+                        (PipeWireSource::Fd(fd), portal_streams)
+                    }
+                    PipeWireAccess::NodeId(node_id) => {
+                        info!("Using Mutter-provided PipeWire node ID: {}", node_id);
+
+                        let fd = crate::mutter::get_pipewire_fd_for_mutter()
+                            .context("Failed to connect to PipeWire daemon for Mutter")?;
+
+                        info!("Connected to PipeWire daemon, FD: {}", fd);
+                        (PipeWireSource::Fd(fd), portal_streams)
+                    }
+                    PipeWireAccess::DirectChannel(rx) => {
+                        info!("Using direct frame channel (bypassing PipeWire transport)");
+                        (PipeWireSource::Direct(rx), portal_streams)
+                    }
                 }
-            }
-        };
+            };
 
         // Self-sufficient strategies: skip Portal RemoteDesktop entirely.
         // ScreenCast-only = view-only (no input). WlrDirect = input via native Wayland protocols.
@@ -724,6 +798,15 @@ impl LamcoRdpServer {
             let gfx_handler_state = gfx_factory.handler_state();
             let gfx_server_handle = gfx_factory.server_handle();
 
+            // Server-side NetworkAutoDetect: the RDP server writes measured RTT
+            // here; the EGFX FlowController reads it as a freshness floor, and the
+            // server reports it to the client via a Network Characteristics Result.
+            let autodetect_rtt = Arc::new(std::sync::atomic::AtomicU32::new(u32::MAX));
+            if let Ok(mut fc) = gfx_handler_state.flow_controller.lock() {
+                fc.set_autodetect_rtt_handle(Arc::clone(&autodetect_rtt));
+            }
+            let autodetect_probe_state = Arc::clone(&gfx_handler_state);
+
             let display_handler = Arc::new(match pipewire_source {
                 PipeWireSource::Fd(raw_fd) => {
                     // SAFETY: fd from XDG Desktop Portal or PipeWire daemon.
@@ -734,17 +817,23 @@ impl LamcoRdpServer {
                     };
                     // Request DMA-BUF only when compositor recommends it AND
                     // the GPU can actually provide CPU-readable DMA-BUF data.
-                    // Virtual GPUs (virtio-gl) return all-zero mmap data because
-                    // GPU memory uses non-linear tiling that CPU can't read.
+                    // Non-Venus virtio-gpu (plain 2D, or virgl-3D without
+                    // blob) returns all-zero mmap data because GPU memory
+                    // uses non-linear tiling that CPU can't read. Venus-
+                    // capable virtio-gpu (venus=on,blob=on on the host) can
+                    // genuinely back CPU-readable DMA-BUF, so only force
+                    // MemFd when the actual capset query says Venus is
+                    // absent, not on driver name alone.
                     let rendering_recommends_software =
-                        crate::capabilities::probes::rendering::is_display_gpu_virgl();
+                        crate::capabilities::probes::rendering::is_display_gpu_virgl()
+                            && !crate::capabilities::probes::rendering::is_display_gpu_venus_capable();
                     let use_dmabuf = !matches!(
                         capabilities.profile.recommended_buffer_type,
                         crate::compositor::BufferType::MemFd
                     ) && !rendering_recommends_software;
                     if rendering_recommends_software {
                         info!(
-                            "Virtual GPU detected — forcing MemFd buffers (DMA-BUF mmap returns zeros)"
+                            "Virtual GPU without Venus detected — forcing MemFd buffers (DMA-BUF mmap returns zeros)"
                         );
                     }
                     info!(
@@ -787,6 +876,9 @@ impl LamcoRdpServer {
             display_handler
                 .set_health_reporter(health_reporter.clone())
                 .await;
+            display_handler
+                .set_autodetect_rtt_handle(Arc::clone(&autodetect_rtt))
+                .await;
 
             // Wire PipeWire sensor for version-adaptive health monitoring
             let pw_version = crate::runtime::diagnostics::get_pipewire_version()
@@ -820,6 +912,12 @@ impl LamcoRdpServer {
                 .set_fps_state(snapshot_collector.fps_state())
                 .await;
 
+            // Wire encoder-state sink so telemetry reports the active backend
+            // (openh264/vaapi) once the pipeline creates the encoder.
+            display_handler
+                .set_encoder_state(snapshot_collector.encoder_state())
+                .await;
+
             // Wire stream active flag for Portal input coupling
             if let Some(ref flag) = stream_active_flag {
                 display_handler.set_stream_active_flag(Arc::clone(flag));
@@ -850,20 +948,18 @@ impl LamcoRdpServer {
                 config.security.require_tls_13,
             )
             .context("Failed to load TLS certificates")?;
-            let tls_acceptor =
-                ironrdp_server::tokio_rustls::TlsAcceptor::from(tls_config.server_config());
+            let tls_acceptor = tokio_rustls::TlsAcceptor::from(tls_config.server_config());
             let tls_pub_key = tls_config.public_key().ok();
 
             let codecs = server_codecs_capabilities(&["remotefx"])
                 .map_err(|e| anyhow::anyhow!("Failed to create codec capabilities: {e}"))?;
 
             let primary_stream_id = stream_info.first().map_or(0, |s| s.node_id);
-            let audio_node_id = if primary_stream_id > 0 {
-                Some(primary_stream_id)
-            } else {
-                None
-            };
-            let sound_factory = create_sound_factory(&config.audio, audio_node_id);
+            // Audio capture targets the default sink monitor (desktop output),
+            // which lamco-pipewire selects via stream.capture.sink=true when no
+            // node is given. The ScreenCast video node is not an audio node, so
+            // it must not be passed here.
+            let sound_factory = create_sound_factory(&config.audio, None);
 
             let listen_addr: SocketAddr = config
                 .server
@@ -937,7 +1033,7 @@ impl LamcoRdpServer {
                 });
             }
 
-            let rdp_server = if is_wlr_direct || is_portal_generic {
+            let mut rdp_server = if is_wlr_direct || is_portal_generic {
                 // wlr-direct/portal-generic: input via session handle (native Wayland protocols)
                 let monitors: Vec<InputMonitorInfo> = stream_info
                     .iter()
@@ -974,12 +1070,27 @@ impl LamcoRdpServer {
                     .set_input_handler(Arc::new(input_handler.clone()))
                     .await;
 
+                let keyboard_layout_handler = KeyboardLayoutConnectionHandler::new(Arc::clone(
+                    &input_handler.keyboard_handler,
+                ));
+                type RdpeiFactory = Box<dyn ironrdp_server::RdpeiServerFactory>;
+                let rdpei_factory: Option<RdpeiFactory> = config.input.enable_touch.then(|| {
+                    Box::new(create_rdpei_factory(input_handler.input_sender())) as RdpeiFactory
+                });
+
                 info!("wlr-direct input handler created (virtual keyboard + pointer)");
 
-                // Resolve security: hybrid if config says so and pub key available
-                let use_hybrid = config.security.security_mode == "hybrid";
+                // Resolve security. Standard RDP Security (no TLS) is required by
+                // Hyper-V Enhanced Session Mode; otherwise Hybrid if configured and a
+                // public key is available, else TLS.
                 let addr_builder = RdpServer::builder().with_addr(listen_addr);
-                let handler_builder = if use_hybrid {
+                let handler_builder = if is_standard_rdp_security(&config.security.security_mode) {
+                    warn!(
+                        "Security: Standard RDP Security (no TLS, no encryption) — accept only \
+                         over hypervisor-isolated transports (vsock / Hyper-V ESM)"
+                    );
+                    addr_builder.with_no_security()
+                } else if config.security.security_mode == "hybrid" {
                     if let Some(pub_key) = tls_pub_key {
                         info!("Configuring Hybrid security (NLA/CredSSP)");
                         addr_builder.with_hybrid(tls_acceptor, pub_key)
@@ -998,12 +1109,20 @@ impl LamcoRdpServer {
                     .with_cliprdr_factory(wlr_clipboard_factory)
                     .with_gfx_factory(Some(Box::new(gfx_factory)))
                     .with_sound_factory(Some(Box::new(sound_factory)))
+                    .with_rdpei_factory(rdpei_factory)
+                    .with_autodetect_rtt_handle(Arc::clone(&autodetect_rtt))
+                    .with_connection_handler(Some(Box::new(keyboard_layout_handler)))
                     .build()
             } else {
                 // ScreenCast-only: view-only, no input
-                let use_hybrid = config.security.security_mode == "hybrid";
                 let addr_builder = RdpServer::builder().with_addr(listen_addr);
-                let handler_builder = if use_hybrid {
+                let handler_builder = if is_standard_rdp_security(&config.security.security_mode) {
+                    warn!(
+                        "Security: Standard RDP Security (no TLS, no encryption) — accept only \
+                         over hypervisor-isolated transports (vsock / Hyper-V ESM)"
+                    );
+                    addr_builder.with_no_security()
+                } else if config.security.security_mode == "hybrid" {
                     if let Some(pub_key) = tls_pub_key {
                         info!("Configuring Hybrid security (NLA/CredSSP)");
                         addr_builder.with_hybrid(tls_acceptor, pub_key)
@@ -1022,12 +1141,21 @@ impl LamcoRdpServer {
                     .with_cliprdr_factory(None)
                     .with_gfx_factory(Some(Box::new(gfx_factory)))
                     .with_sound_factory(Some(Box::new(sound_factory)))
+                    .with_autodetect_rtt_handle(Arc::clone(&autodetect_rtt))
                     .build()
             };
 
             display_handler
                 .set_server_event_sender(rdp_server.event_sender().clone())
                 .await;
+
+            // Phase 3: drive server-side auto-detect for this session.
+            rdp_server.enable_autodetect();
+            spawn_autodetect_probe(
+                rdp_server.event_sender().clone(),
+                autodetect_probe_state,
+                shutdown_broadcast.subscribe(),
+            );
 
             let _ = event_tx.send(ServerEvent::SessionTypeChanged {
                 session_type: session_handle.session_type().to_string(),
@@ -1041,6 +1169,9 @@ impl LamcoRdpServer {
                 "view-only"
             };
             info!("{} server initialized successfully", mode_name);
+
+            #[cfg(feature = "wayland")]
+            display_handler.set_wayland_observers(color_observer.clone(), output_observer.clone());
 
             return Ok(Self {
                 config,
@@ -1180,6 +1311,16 @@ impl LamcoRdpServer {
 
         let gfx_handler_state = gfx_factory.handler_state();
         let gfx_server_handle = gfx_factory.server_handle();
+
+        // Server-side NetworkAutoDetect: the RDP server writes measured RTT here;
+        // the EGFX FlowController reads it as a freshness floor, and the server
+        // reports it to the client via a Network Characteristics Result.
+        let autodetect_rtt = Arc::new(std::sync::atomic::AtomicU32::new(u32::MAX));
+        if let Ok(mut fc) = gfx_handler_state.flow_controller.lock() {
+            fc.set_autodetect_rtt_handle(Arc::clone(&autodetect_rtt));
+        }
+        let autodetect_probe_state = Arc::clone(&gfx_handler_state);
+
         if force_avc420_only {
             info!(
                 "EGFX factory created for H.264/AVC420 streaming (AVC444 disabled by platform quirk)"
@@ -1189,7 +1330,8 @@ impl LamcoRdpServer {
         }
 
         let rendering_recommends_software =
-            crate::capabilities::probes::rendering::is_display_gpu_virgl();
+            crate::capabilities::probes::rendering::is_display_gpu_virgl()
+                && !crate::capabilities::probes::rendering::is_display_gpu_venus_capable();
         let use_dmabuf = !matches!(
             capabilities.profile.recommended_buffer_type,
             crate::compositor::BufferType::MemFd
@@ -1214,6 +1356,9 @@ impl LamcoRdpServer {
 
         display_handler
             .set_health_reporter(health_reporter.clone())
+            .await;
+        display_handler
+            .set_autodetect_rtt_handle(Arc::clone(&autodetect_rtt))
             .await;
 
         // Wire PipeWire sensor for Mutter direct path
@@ -1247,6 +1392,12 @@ impl LamcoRdpServer {
             // Wire FPS snapshot for D-Bus/GUI live-metrics reporting
             display_handler
                 .set_fps_state(snapshot_collector.fps_state())
+                .await;
+
+            // Wire encoder-state sink so telemetry reports the active backend
+            // (openh264/vaapi) once the pipeline creates the encoder.
+            display_handler
+                .set_encoder_state(snapshot_collector.encoder_state())
                 .await;
         }
 
@@ -1303,6 +1454,14 @@ impl LamcoRdpServer {
         )
         .context("Failed to create input handler")?;
 
+        let keyboard_layout_handler =
+            KeyboardLayoutConnectionHandler::new(Arc::clone(&input_handler.keyboard_handler));
+        type RdpeiFactory = Box<dyn ironrdp_server::RdpeiServerFactory>;
+        let rdpei_factory: Option<RdpeiFactory> = config
+            .input
+            .enable_touch
+            .then(|| Box::new(create_rdpei_factory(input_handler.input_sender())) as RdpeiFactory);
+
         info!("Input handler created successfully");
 
         display_handler
@@ -1325,8 +1484,7 @@ impl LamcoRdpServer {
         )
         .context("Failed to load TLS certificates")?;
 
-        let tls_acceptor =
-            ironrdp_server::tokio_rustls::TlsAcceptor::from(tls_config.server_config());
+        let tls_acceptor = tokio_rustls::TlsAcceptor::from(tls_config.server_config());
         let tls_pub_key = tls_config.public_key().ok();
 
         let codecs = server_codecs_capabilities(&["remotefx"])
@@ -1486,15 +1644,11 @@ impl LamcoRdpServer {
 
         let clipboard_factory = LamcoCliprdrFactory::new(Arc::clone(&clipboard_manager));
 
-        // Use the primary video stream's PipeWire node ID for audio capture targeting.
-        // This connects audio capture to the same session as the screen capture,
-        // ensuring we get the correct desktop audio output.
-        let audio_node_id = if primary_stream_id > 0 {
-            Some(primary_stream_id)
-        } else {
-            None
-        };
-        let sound_factory = create_sound_factory(&config.audio, audio_node_id);
+        // Audio capture targets the default sink monitor (desktop output),
+        // which lamco-pipewire selects via stream.capture.sink=true when no node
+        // is given. The ScreenCast video node is not an audio node, so it must
+        // not be passed here.
+        let sound_factory = create_sound_factory(&config.audio, None);
         if config.audio.enabled {
             info!(
                 "Audio support enabled: codec={}, sample_rate={}, channels={}",
@@ -1511,9 +1665,14 @@ impl LamcoRdpServer {
             .parse()
             .context("Invalid listen address")?;
 
-        let use_hybrid = config.security.security_mode == "hybrid";
         let addr_builder = RdpServer::builder().with_addr(listen_addr);
-        let handler_builder = if use_hybrid {
+        let handler_builder = if is_standard_rdp_security(&config.security.security_mode) {
+            warn!(
+                "Security: Standard RDP Security (no TLS, no encryption) — accept only \
+                 over hypervisor-isolated transports (vsock / Hyper-V ESM)"
+            );
+            addr_builder.with_no_security()
+        } else if config.security.security_mode == "hybrid" {
             if let Some(pub_key) = tls_pub_key {
                 info!("Configuring Hybrid security (NLA/CredSSP)");
                 addr_builder.with_hybrid(tls_acceptor, pub_key)
@@ -1525,13 +1684,16 @@ impl LamcoRdpServer {
             addr_builder.with_tls(tls_acceptor)
         };
 
-        let rdp_server = handler_builder
+        let mut rdp_server = handler_builder
             .with_input_handler(input_handler)
             .with_display_handler((*display_handler).clone())
             .with_bitmap_codecs(codecs)
             .with_cliprdr_factory(Some(Box::new(clipboard_factory)))
             .with_gfx_factory(Some(Box::new(gfx_factory)))
             .with_sound_factory(Some(Box::new(sound_factory)))
+            .with_rdpei_factory(rdpei_factory)
+            .with_autodetect_rtt_handle(Arc::clone(&autodetect_rtt))
+            .with_connection_handler(Some(Box::new(keyboard_layout_handler)))
             .build();
 
         display_handler
@@ -1539,11 +1701,22 @@ impl LamcoRdpServer {
             .await;
         info!("Server event sender configured in display handler");
 
+        // Phase 3: drive server-side auto-detect for this session.
+        rdp_server.enable_autodetect();
+        spawn_autodetect_probe(
+            rdp_server.event_sender().clone(),
+            autodetect_probe_state,
+            shutdown_broadcast.subscribe(),
+        );
+
         let _ = event_tx.send(ServerEvent::SessionTypeChanged {
             session_type: session_handle_for_clipboard.session_type().to_string(),
         });
 
         info!("Server initialized successfully");
+
+        #[cfg(feature = "wayland")]
+        display_handler.set_wayland_observers(color_observer.clone(), output_observer.clone());
 
         Ok(Self {
             config,
@@ -1588,6 +1761,7 @@ impl LamcoRdpServer {
         let security_label = match self.config.security.security_mode.as_str() {
             "hybrid" => "Hybrid (NLA/CredSSP)",
             "auto" => "Auto",
+            "rdp" | "none" => "Standard RDP (no TLS/encryption)",
             _ => "TLS",
         };
 
@@ -1603,7 +1777,12 @@ impl LamcoRdpServer {
         info!("╚════════════════════════════════════════════════════════════╝");
         info!("  Listen Address: {}", self.config.server.listen_addr);
         info!("  Security: {} (rustls 0.23)", security_label);
-        info!("  Codec: RemoteFX");
+        let codec_label = if self.config.egfx.enabled {
+            "EGFX (H.264 AVC420/AVC444) + RemoteFX fallback"
+        } else {
+            "RemoteFX"
+        };
+        info!("  Codec: {codec_label}");
         info!("  Max Connections: {}", self.config.server.max_connections);
         info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
@@ -1683,6 +1862,8 @@ impl LamcoRdpServer {
                      to set credentials before clients connect."
                 );
             }
+        } else if is_standard_rdp_security(&self.config.security.security_mode) {
+            info!("Security mode: Standard RDP Security (no TLS/encryption)");
         } else {
             info!("Security mode: TLS");
         }
@@ -1982,6 +2163,15 @@ impl Drop for LamcoRdpServer {
             }
         }
     }
+}
+
+/// Standard RDP Security ("rdp"/"none"): no TLS and no RDP-layer encryption.
+///
+/// Hyper-V Enhanced Session Mode requires this — VMConnect speaks plaintext RDP
+/// (`PROTOCOL_RDP`) over the hypervisor-isolated vsock transport and never sends a
+/// TLS ClientHello. Only safe on isolated transports (vsock) or loopback.
+pub(crate) fn is_standard_rdp_security(security_mode: &str) -> bool {
+    matches!(security_mode, "rdp" | "none")
 }
 
 /// Resolve the effective security mode from config.

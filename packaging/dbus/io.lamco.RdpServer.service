@@ -12,3 +12,4 @@
 [D-BUS Service]
 Name=io.lamco.RdpServer
 Exec=/usr/bin/lamco-rdp-server --dbus-service
+SystemdService=app-io.lamco.rdp-server.service

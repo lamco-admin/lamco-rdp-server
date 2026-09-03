@@ -80,13 +80,16 @@ use std::{
 };
 
 use ironrdp_server::{
-    KeyboardEvent as IronKeyboardEvent, MouseEvent as IronMouseEvent, RdpServerInputHandler,
+    KeyboardEvent as IronKeyboardEvent, MouseButton as IronMouseButton,
+    MouseEvent as IronMouseEvent, RdpServerInputHandler, TouchContactFlags as IronTouchFlags,
+    TouchEventPdu,
 };
 use tokio::sync::{Mutex, mpsc};
 use tracing::{debug, error, info, trace, warn};
 
 use crate::input::{
     CoordinateTransformer, InputError, KeyboardHandler, MonitorInfo, MouseButton, MouseHandler,
+    TouchContactFlags, TouchEvent as LamcoTouchEvent, TouchHandler,
 };
 
 /// Map a Unicode code point to an evdev keycode and whether Shift is needed.
@@ -263,6 +266,25 @@ fn input_injection_err(e: impl std::fmt::Display) -> InputError {
     InputError::PortalError(format!("Input injection error: {e}"))
 }
 
+/// Map an IronRDP mouse button to the evdev `BTN_*` code the session
+/// backends expect and to our own [`MouseButton`] for handler state tracking.
+fn map_iron_button(button: IronMouseButton) -> (MouseButton, i32) {
+    match button {
+        IronMouseButton::Left => (MouseButton::Left, 272), // BTN_LEFT
+        IronMouseButton::Right => (MouseButton::Right, 273), // BTN_RIGHT
+        IronMouseButton::Middle => (MouseButton::Middle, 274), // BTN_MIDDLE
+        IronMouseButton::X1 => (MouseButton::Extra1, 275), // BTN_SIDE
+        IronMouseButton::X2 => (MouseButton::Extra2, 276), // BTN_EXTRA
+        other => {
+            warn!(
+                "Unhandled MouseButton variant {:?}, treating as Left",
+                other
+            );
+            (MouseButton::Left, 272)
+        }
+    }
+}
+
 /// Lamco RDP Input Handler
 ///
 /// Bridges IronRDP input events to our Portal-based input injection system.
@@ -278,6 +300,10 @@ pub enum InputEvent {
     Keyboard(IronKeyboardEvent),
     /// Mouse event from RDP client
     Mouse(IronMouseEvent),
+    /// MS-RDPEI touch frame from RDP client. Never coalesced or dropped:
+    /// unlike a mouse Move, a touch frame can carry a DOWN or UP transition
+    /// whose loss would desync the per-contact state machine.
+    Touch(TouchEventPdu),
 }
 
 /// Coalesce consecutive Move and RelMove events in a mouse-event batch.
@@ -364,6 +390,9 @@ pub struct LamcoInputHandler {
     /// Coordinate transformer for multi-monitor support (pub for multiplexer access)
     pub coordinate_transformer: Arc<Mutex<CoordinateTransformer>>,
 
+    /// Touch contact state tracker (MS-RDPEI), shared with the RDPEI DVC handler
+    pub touch_handler: Arc<Mutex<TouchHandler>>,
+
     /// Primary stream node ID for input injection (PipeWire node ID)
     primary_stream_id: u32,
 
@@ -382,6 +411,7 @@ impl LamcoInputHandler {
     ) -> Result<Self, InputError> {
         let keyboard_handler = Arc::new(Mutex::new(KeyboardHandler::new()));
         let mouse_handler = Arc::new(Mutex::new(MouseHandler::new()));
+        let touch_handler = Arc::new(Mutex::new(TouchHandler::new()));
 
         let coordinate_transformer = Arc::new(Mutex::new(CoordinateTransformer::new(monitors)?));
 
@@ -396,10 +426,12 @@ impl LamcoInputHandler {
         let keyboard_clone = Arc::clone(&keyboard_handler);
         let mouse_clone = Arc::clone(&mouse_handler);
         let coord_clone = Arc::clone(&coordinate_transformer);
+        let touch_clone = Arc::clone(&touch_handler);
 
         tokio::spawn(async move {
             let mut keyboard_batch = Vec::with_capacity(16);
             let mut mouse_batch = Vec::with_capacity(16);
+            let mut touch_batch = Vec::with_capacity(16);
             let mut last_flush = Instant::now();
             let batch_interval = tokio::time::Duration::from_millis(10);
 
@@ -407,6 +439,7 @@ impl LamcoInputHandler {
             // portal session becomes unresponsive (e.g. PipeWire stream pauses)
             let consecutive_mouse_errors = AtomicU64::new(0);
             let consecutive_kbd_errors = AtomicU64::new(0);
+            let consecutive_touch_errors = AtomicU64::new(0);
 
             loop {
                 tokio::select! {
@@ -420,10 +453,34 @@ impl LamcoInputHandler {
                                 trace!("📥 Input queue: received mouse event");
                                 mouse_batch.push(mouse);
                             }
+                            InputEvent::Touch(pdu) => {
+                                trace!("📥 Input queue: received touch frame");
+                                touch_batch.push(pdu);
+                            }
                         }
                     }
 
                     () = tokio::time::sleep_until(tokio::time::Instant::from_std(last_flush + batch_interval)) => {
+                        // Discard a queued batch instead of attempting it against a
+                        // session the compositor has already torn down (PerConnection
+                        // backends re-establish per client; there's a window between
+                        // teardown and the next client's establish where input can
+                        // still be queued here).
+                        if !session_handle_clone.is_session_valid() {
+                            let discarded = keyboard_batch.len() + mouse_batch.len() + touch_batch.len();
+                            if discarded > 0 {
+                                trace!(
+                                    "🔄 Input batching: discarding {} queued events — session invalid",
+                                    discarded
+                                );
+                                keyboard_batch.clear();
+                                mouse_batch.clear();
+                                touch_batch.clear();
+                            }
+                            last_flush = Instant::now();
+                            continue;
+                        }
+
                         // Process keyboard batch
                         if !keyboard_batch.is_empty() {
                             trace!("🔄 Input batching: flushing {} keyboard events", keyboard_batch.len());
@@ -453,7 +510,8 @@ impl LamcoInputHandler {
                         // bursts (see coalesce_mouse_batch for rules).
                         let coalesced: Vec<IronMouseEvent> =
                             coalesce_mouse_batch(std::mem::take(&mut mouse_batch));
-                        if !coalesced.is_empty() {
+                        let coalesced_nonempty = !coalesced.is_empty();
+                        if coalesced_nonempty {
                             trace!(
                                 "🔄 Input batching: flushing {} mouse events (after coalesce)",
                                 coalesced.len()
@@ -480,6 +538,42 @@ impl LamcoInputHandler {
                                 }
                             }
                         }
+                        // Commit any pointer-device (button/scroll) events staged
+                        // above as one atomic EIS frame. No-op for non-EIS
+                        // strategies (each stage_* call already committed
+                        // immediately via the trait's default passthrough).
+                        if coalesced_nonempty
+                            && let Err(e) = session_handle_clone.commit_input_batch().await {
+                                warn!("Mouse input batch commit failed: {e}");
+                            }
+
+                        // Process touch batch. Never coalesced: each PDU can
+                        // carry DOWN/UP transitions the per-contact state
+                        // machine must see in order.
+                        if !touch_batch.is_empty() {
+                            trace!("🔄 Input batching: flushing {} touch frames", touch_batch.len());
+                        }
+                        for touch_pdu in touch_batch.drain(..) {
+                            if let Err(e) = Self::handle_touch_event_impl(
+                                &session_handle_clone,
+                                &touch_clone,
+                                &coord_clone,
+                                touch_pdu,
+                                primary_stream_id
+                            ).await {
+                                let count = consecutive_touch_errors.fetch_add(1, Ordering::Relaxed) + 1;
+                                if count == 1 {
+                                    warn!("Touch injection failed: {e}");
+                                } else if count.is_power_of_two() {
+                                    warn!("Touch injection failed ({count} consecutive): {e}");
+                                }
+                            } else {
+                                let prev = consecutive_touch_errors.swap(0, Ordering::Relaxed);
+                                if prev > 1 {
+                                    info!("Portal touch injection recovered after {prev} failures");
+                                }
+                            }
+                        }
 
                         last_flush = Instant::now();
                     }
@@ -493,9 +587,10 @@ impl LamcoInputHandler {
 
             let mouse_errs = consecutive_mouse_errors.load(Ordering::Relaxed);
             let kbd_errs = consecutive_kbd_errors.load(Ordering::Relaxed);
-            if mouse_errs > 0 || kbd_errs > 0 {
+            let touch_errs = consecutive_touch_errors.load(Ordering::Relaxed);
+            if mouse_errs > 0 || kbd_errs > 0 || touch_errs > 0 {
                 info!(
-                    "Input batching task stopped (pending errors: mouse={mouse_errs}, kbd={kbd_errs})"
+                    "Input batching task stopped (pending errors: mouse={mouse_errs}, kbd={kbd_errs}, touch={touch_errs})"
                 );
             } else {
                 info!("Input batching task stopped");
@@ -509,9 +604,17 @@ impl LamcoInputHandler {
             keyboard_handler,
             mouse_handler,
             coordinate_transformer,
+            touch_handler,
             primary_stream_id,
             input_tx,
         })
+    }
+
+    /// Clone of the input event queue sender, for feeding events into the
+    /// same batching pipeline from outside the mouse/keyboard callbacks
+    /// (currently used by the RDPEI DVC handler for touch frames).
+    pub fn input_sender(&self) -> mpsc::Sender<InputEvent> {
+        self.input_tx.clone()
     }
 
     /// Activate the input subsystem (deferred EIS creation).
@@ -540,6 +643,12 @@ impl LamcoInputHandler {
             let mut mouse = self.mouse_handler.lock().await;
             *mouse = MouseHandler::new();
             debug!("Mouse handler state reset");
+        }
+
+        {
+            let mut touch = self.touch_handler.lock().await;
+            touch.reset();
+            debug!("Touch handler state reset");
         }
 
         info!("✅ Input handler ready for reconnected client");
@@ -779,108 +888,214 @@ impl LamcoInputHandler {
                     .map_err(input_injection_err)?;
             }
 
-            IronMouseEvent::LeftPressed => {
-                mouse.handle_button_down(MouseButton::Left)?;
+            IronMouseEvent::Button {
+                x,
+                y,
+                button,
+                pressed,
+            } => {
+                let (local_button, evdev_code) = map_iron_button(button);
+                trace!(
+                    "Mouse button: {:?} pressed={} at x={}, y={}",
+                    local_button, pressed, x, y
+                );
+
+                let mouse_event = if pressed {
+                    mouse.handle_button_down(
+                        local_button,
+                        Some((x as u32, y as u32)),
+                        &mut transformer,
+                    )?
+                } else {
+                    mouse.handle_button_up(
+                        local_button,
+                        Some((x as u32, y as u32)),
+                        &mut transformer,
+                    )?
+                };
+
+                // Position a touch/tap-style client never sent a preceding
+                // Move for must be applied before the click, or the click
+                // lands at the last stale cursor position instead of where
+                // the client actually pressed (IronRDP#1466).
+                let position = match mouse_event {
+                    crate::input::MouseEvent::ButtonDown { position, .. }
+                    | crate::input::MouseEvent::ButtonUp { position, .. } => position,
+                    _ => {
+                        return Err(InputError::InvalidMouseEvent(
+                            "Unexpected event type".to_string(),
+                        ));
+                    }
+                };
+                if let Some((stream_x, stream_y)) = position {
+                    session_handle
+                        .notify_pointer_motion_absolute(stream_id, stream_x, stream_y)
+                        .await
+                        .map_err(input_injection_err)?;
+                }
+
+                // Staged, not committed here -- flushed as one atomic frame
+                // with any other pointer-device (button/scroll) event from
+                // this same coalesced batch once the caller's loop finishes
+                // and calls commit_input_batch(). The MotionAbsolute reposition
+                // above is a *different* EIS device (pointer_absolute), so it
+                // is not part of this batch and still commits its own frame
+                // immediately -- EIS `frame()` is per-device, so a
+                // cross-device sequence can't be made atomic this way
+                // regardless; sending the reposition first (as above) is
+                // already the best available mitigation for that case.
                 session_handle
-                    .notify_pointer_button(272, true) // BTN_LEFT
+                    .stage_pointer_button(evdev_code, pressed)
                     .await
                     .map_err(input_injection_err)?;
             }
 
-            IronMouseEvent::LeftReleased => {
-                mouse.handle_button_up(MouseButton::Left)?;
-                session_handle
-                    .notify_pointer_button(272, false)
-                    .await
-                    .map_err(input_injection_err)?;
-            }
+            IronMouseEvent::ButtonRel {
+                x,
+                y,
+                button,
+                pressed,
+            } => {
+                let (local_button, evdev_code) = map_iron_button(button);
+                trace!(
+                    "Mouse button (relative source): {:?} pressed={} at x={}, y={}",
+                    local_button, pressed, x, y
+                );
 
-            IronMouseEvent::RightPressed => {
-                mouse.handle_button_down(MouseButton::Right)?;
-                session_handle
-                    .notify_pointer_button(273, true) // BTN_RIGHT
-                    .await
-                    .map_err(input_injection_err)?;
-            }
+                // x/y are the accumulated position MS-RDPBCGR 2.2.8.1.1.3.1.1.7
+                // reports the delta was applied at; saturate rather than cast, since
+                // a client's cumulative deltas going negative shouldn't wrap into a
+                // huge position far off-screen.
+                let position = Some((u32::try_from(x).unwrap_or(0), u32::try_from(y).unwrap_or(0)));
 
-            IronMouseEvent::RightReleased => {
-                mouse.handle_button_up(MouseButton::Right)?;
-                session_handle
-                    .notify_pointer_button(273, false)
-                    .await
-                    .map_err(input_injection_err)?;
-            }
+                let mouse_event = if pressed {
+                    mouse.handle_button_down(local_button, position, &mut transformer)?
+                } else {
+                    mouse.handle_button_up(local_button, position, &mut transformer)?
+                };
 
-            IronMouseEvent::MiddlePressed => {
-                mouse.handle_button_down(MouseButton::Middle)?;
-                session_handle
-                    .notify_pointer_button(274, true) // BTN_MIDDLE
-                    .await
-                    .map_err(input_injection_err)?;
-            }
+                // Same reasoning as the absolute Button case above: reposition
+                // before the click so it doesn't land at a stale cursor position.
+                let position = match mouse_event {
+                    crate::input::MouseEvent::ButtonDown { position, .. }
+                    | crate::input::MouseEvent::ButtonUp { position, .. } => position,
+                    _ => {
+                        return Err(InputError::InvalidMouseEvent(
+                            "Unexpected event type".to_string(),
+                        ));
+                    }
+                };
+                if let Some((stream_x, stream_y)) = position {
+                    session_handle
+                        .notify_pointer_motion_absolute(stream_id, stream_x, stream_y)
+                        .await
+                        .map_err(input_injection_err)?;
+                }
 
-            IronMouseEvent::MiddleReleased => {
-                mouse.handle_button_up(MouseButton::Middle)?;
                 session_handle
-                    .notify_pointer_button(274, false)
-                    .await
-                    .map_err(input_injection_err)?;
-            }
-
-            IronMouseEvent::Button4Pressed => {
-                mouse.handle_button_down(MouseButton::Extra1)?;
-                session_handle
-                    .notify_pointer_button(275, true) // BTN_SIDE
-                    .await
-                    .map_err(input_injection_err)?;
-            }
-
-            IronMouseEvent::Button4Released => {
-                mouse.handle_button_up(MouseButton::Extra1)?;
-                session_handle
-                    .notify_pointer_button(275, false)
-                    .await
-                    .map_err(input_injection_err)?;
-            }
-
-            IronMouseEvent::Button5Pressed => {
-                mouse.handle_button_down(MouseButton::Extra2)?;
-                session_handle
-                    .notify_pointer_button(276, true) // BTN_EXTRA
-                    .await
-                    .map_err(input_injection_err)?;
-            }
-
-            IronMouseEvent::Button5Released => {
-                mouse.handle_button_up(MouseButton::Extra2)?;
-                session_handle
-                    .notify_pointer_button(276, false)
+                    .stage_pointer_button(evdev_code, pressed)
                     .await
                     .map_err(input_injection_err)?;
             }
 
             IronMouseEvent::VerticalScroll { value } => {
-                // RDP scroll units are in 120ths
+                // RDP wheel is 120-units per notch. Forward as discrete detents:
+                // EIS strategies emit true scroll_discrete, others fall back to
+                // the continuous conversion in the trait default. Staged, not
+                // committed -- see the Button arm's comment above.
                 mouse.handle_scroll(0, value as i32)?;
-                let delta_y = (value as f64 / 120.0) * 15.0;
                 session_handle
-                    .notify_pointer_axis(0.0, delta_y)
+                    .stage_pointer_axis_discrete(0, value as i32)
+                    .await
+                    .map_err(input_injection_err)?;
+            }
+
+            IronMouseEvent::HorizontalScroll { value } => {
+                mouse.handle_scroll(value as i32, 0)?;
+                session_handle
+                    .stage_pointer_axis_discrete(value as i32, 0)
                     .await
                     .map_err(input_injection_err)?;
             }
 
             IronMouseEvent::Scroll { x, y } => {
                 mouse.handle_scroll(x, y)?;
-                let delta_x = (x as f64 / 120.0) * 15.0;
-                let delta_y = (y as f64 / 120.0) * 15.0;
                 session_handle
-                    .notify_pointer_axis(delta_x, delta_y)
+                    .stage_pointer_axis_discrete(x, y)
                     .await
                     .map_err(input_injection_err)?;
+            }
+
+            other => {
+                warn!("Unhandled mouse event variant: {:?}", other);
             }
         }
 
         Ok(())
+    }
+
+    /// Handle an MS-RDPEI touch frame (static for batching task).
+    async fn handle_touch_event_impl(
+        session_handle: &Arc<dyn crate::session::SessionHandle>,
+        touch_handler: &Arc<Mutex<TouchHandler>>,
+        coordinate_transformer: &Arc<Mutex<CoordinateTransformer>>,
+        pdu: TouchEventPdu,
+        stream_id: u32,
+    ) -> Result<(), InputError> {
+        let mut touch = touch_handler.lock().await;
+        let mut transformer = coordinate_transformer.lock().await;
+
+        for frame in pdu.frames {
+            for contact in frame.contacts {
+                let flags = touch_contact_flags_from_iron(contact.contact_flags);
+                let event = touch.handle_contact(
+                    contact.contact_id,
+                    contact.x,
+                    contact.y,
+                    flags,
+                    &mut transformer,
+                )?;
+
+                match event {
+                    Some(LamcoTouchEvent::Down { slot, x, y }) => {
+                        session_handle
+                            .notify_touch_down(stream_id, slot, x, y)
+                            .await
+                            .map_err(input_injection_err)?;
+                    }
+                    Some(LamcoTouchEvent::Motion { slot, x, y }) => {
+                        session_handle
+                            .notify_touch_motion(stream_id, slot, x, y)
+                            .await
+                            .map_err(input_injection_err)?;
+                    }
+                    Some(LamcoTouchEvent::Up { slot }) => {
+                        session_handle
+                            .notify_touch_up(slot)
+                            .await
+                            .map_err(input_injection_err)?;
+                    }
+                    None => {}
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+/// Decode the MS-RDPEI wire `contactFlags` bit field into the plain booleans
+/// [`TouchHandler::handle_contact`] expects — kept decoupled from any
+/// IronRDP crate type, matching how mouse button decoding takes raw wire
+/// values rather than a foreign PDU type.
+fn touch_contact_flags_from_iron(flags: IronTouchFlags) -> TouchContactFlags {
+    TouchContactFlags {
+        down: flags.contains(IronTouchFlags::DOWN),
+        update: flags.contains(IronTouchFlags::UPDATE),
+        up: flags.contains(IronTouchFlags::UP),
+        in_range: flags.contains(IronTouchFlags::INRANGE),
+        in_contact: flags.contains(IronTouchFlags::INCONTACT),
+        canceled: flags.contains(IronTouchFlags::CANCELED),
     }
 }
 
@@ -920,8 +1135,75 @@ impl Clone for LamcoInputHandler {
             keyboard_handler: Arc::clone(&self.keyboard_handler),
             mouse_handler: Arc::clone(&self.mouse_handler),
             coordinate_transformer: Arc::clone(&self.coordinate_transformer),
+            touch_handler: Arc::clone(&self.touch_handler),
             primary_stream_id: self.primary_stream_id,
             input_tx: self.input_tx.clone(),
+        }
+    }
+}
+
+/// Maps a client-negotiated keyboard layout identifier (KLID, the low word of
+/// a Windows locale identifier; MS-RDPBCGR 2.2.1.3.2 `keyboardLayout`) to a
+/// layout string understood by `lamco_rdp_input::KeyboardHandler::set_layout`.
+///
+/// Only locales with a real (non-empty) override table in `ScancodeMapper`
+/// are mapped; anything else falls back to `"us"`, matching the pre-existing
+/// default. CJK and Indic-phonetic input arrive as Unicode keyboard events
+/// (`IronKeyboardEvent::UnicodePressed`/`UnicodeReleased`, handled separately
+/// below) and are unaffected by this mapping either way.
+fn klid_to_layout_str(klid: u32) -> &'static str {
+    match klid {
+        0x0409 => "us",
+        0x0809 => "uk",
+        0x0407 => "de",
+        0x040c => "fr",
+        0x080c => "be",
+        0x0410 => "it",
+        0x040a => "es",
+        0x0816 => "pt",
+        _ => "us",
+    }
+}
+
+/// Applies the client's negotiated keyboard layout to the session's
+/// [`KeyboardHandler`] as soon as it is known.
+///
+/// IronRDP surfaces the negotiated layout via
+/// [`ironrdp_server::ConnectionHandler::on_connection_info`], fired once per
+/// connection before the session loop starts. This handler is built fresh
+/// per connection (mirroring the fresh [`LamcoInputHandler`] each connection
+/// already gets), so it needs no connection-identity bookkeeping of its own.
+pub struct KeyboardLayoutConnectionHandler {
+    keyboard_handler: Arc<Mutex<KeyboardHandler>>,
+}
+
+impl KeyboardLayoutConnectionHandler {
+    pub fn new(keyboard_handler: Arc<Mutex<KeyboardHandler>>) -> Self {
+        Self { keyboard_handler }
+    }
+}
+
+impl ironrdp_server::ConnectionHandler for KeyboardLayoutConnectionHandler {
+    fn on_connection_info(&mut self, info: &ironrdp_server::ConnectionInfo) {
+        let layout = klid_to_layout_str(info.keyboard_layout);
+        match self.keyboard_handler.try_lock() {
+            Ok(mut kbd) => {
+                kbd.set_layout(layout);
+                debug!(
+                    keyboard_layout = info.keyboard_layout,
+                    layout, "Applied negotiated keyboard layout"
+                );
+            }
+            Err(_) => {
+                // Fires once at connection setup, before any keystroke could
+                // possibly be in flight; contention here would indicate a bug
+                // elsewhere, not a real race. Fail open to the "us" default
+                // already set at construction rather than blocking.
+                warn!(
+                    keyboard_layout = info.keyboard_layout,
+                    layout, "Could not acquire keyboard handler lock to apply negotiated layout"
+                );
+            }
         }
     }
 }
@@ -933,6 +1215,77 @@ mod tests {
     fn test_input_handler_clone() {
         // Verify clone compiles and works
         // Full tests require portal mocking
+    }
+
+    #[test]
+    fn test_touch_contact_flags_from_iron_decodes_down_inrange_incontact() {
+        use super::{IronTouchFlags, touch_contact_flags_from_iron};
+        use crate::input::TouchContactFlags;
+
+        let iron = IronTouchFlags::DOWN | IronTouchFlags::INRANGE | IronTouchFlags::INCONTACT;
+        let decoded = touch_contact_flags_from_iron(iron);
+        assert_eq!(
+            decoded,
+            TouchContactFlags {
+                down: true,
+                update: false,
+                up: false,
+                in_range: true,
+                in_contact: true,
+                canceled: false,
+            }
+        );
+    }
+
+    #[test]
+    fn test_map_iron_button_matches_evdev_codes() {
+        use super::{IronMouseButton, MouseButton, map_iron_button};
+
+        assert_eq!(
+            map_iron_button(IronMouseButton::Left),
+            (MouseButton::Left, 272)
+        );
+        assert_eq!(
+            map_iron_button(IronMouseButton::Right),
+            (MouseButton::Right, 273)
+        );
+        assert_eq!(
+            map_iron_button(IronMouseButton::Middle),
+            (MouseButton::Middle, 274)
+        );
+        // X1/X2 are the extended side buttons (button 4/5), not Left/Right.
+        assert_eq!(
+            map_iron_button(IronMouseButton::X1),
+            (MouseButton::Extra1, 275)
+        );
+        assert_eq!(
+            map_iron_button(IronMouseButton::X2),
+            (MouseButton::Extra2, 276)
+        );
+    }
+
+    #[test]
+    fn test_klid_to_layout_str_known_locales() {
+        use super::klid_to_layout_str;
+
+        assert_eq!(klid_to_layout_str(0x0409), "us");
+        assert_eq!(klid_to_layout_str(0x0809), "uk");
+        assert_eq!(klid_to_layout_str(0x0407), "de");
+        assert_eq!(klid_to_layout_str(0x040c), "fr");
+        assert_eq!(klid_to_layout_str(0x080c), "be");
+        assert_eq!(klid_to_layout_str(0x0410), "it");
+        assert_eq!(klid_to_layout_str(0x040a), "es");
+        assert_eq!(klid_to_layout_str(0x0816), "pt");
+    }
+
+    #[test]
+    fn test_klid_to_layout_str_unknown_falls_back_to_us() {
+        use super::klid_to_layout_str;
+
+        // 0x0412 (Korean) has no scancode-remap table; Korean input arrives as
+        // Unicode keyboard events instead, so falling back to "us" is correct.
+        assert_eq!(klid_to_layout_str(0x0412), "us");
+        assert_eq!(klid_to_layout_str(0), "us");
     }
 
     #[test]

@@ -3,7 +3,13 @@
 //! Measures AVC444 H.264 encoding performance at various resolutions.
 //! Requires the `h264` feature to be enabled.
 
-use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
+#![expect(
+    clippy::unwrap_used,
+    reason = "a panic is the failure signal here, same as in a unit test"
+)]
+use std::hint::black_box;
+
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 #[cfg(feature = "h264")]
 use lamco_rdp_server::egfx::{Avc444Encoder, EncoderConfig};
 

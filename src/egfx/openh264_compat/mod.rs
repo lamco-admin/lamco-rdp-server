@@ -16,5 +16,5 @@ pub(super) mod ffi_types;
 pub(super) mod loader;
 
 pub(super) use encoder_core::{EncoderConfig, VersionedEncoder, VuiConfig};
-pub(super) use ffi_types::{EncodedFrameData, HIGH_COMPLEXITY};
+pub(super) use ffi_types::HIGH_COMPLEXITY;
 pub(super) use loader::{AbiGeneration, OpenH264Api, load_openh264};

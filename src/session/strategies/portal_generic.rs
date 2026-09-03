@@ -96,11 +96,16 @@ fn swap_rb_in_place(data: &mut [u8]) {
 ///
 /// Connects directly to the Wayland compositor as a client and provides
 /// video capture, input injection, and clipboard via native protocols.
-pub struct PortalGenericStrategy;
+pub struct PortalGenericStrategy {
+    /// Capture-request pacing ceiling (fps), forwarded to
+    /// `WaylandConnection::set_min_frame_interval`. `None` leaves the
+    /// portal-generic crate's capture loop unpaced (its default).
+    target_fps: Option<u32>,
+}
 
 impl PortalGenericStrategy {
-    pub fn new() -> Self {
-        Self
+    pub fn new(target_fps: Option<u32>) -> Self {
+        Self { target_fps }
     }
 
     /// Check if the compositor supports the required protocols.
@@ -183,7 +188,7 @@ impl PortalGenericStrategy {
 
 impl Default for PortalGenericStrategy {
     fn default() -> Self {
-        Self::new()
+        Self::new(None)
     }
 }
 
@@ -206,8 +211,10 @@ impl SessionStrategy for PortalGenericStrategy {
     async fn create_session(&self) -> Result<Arc<dyn SessionHandle>> {
         info!("portal-generic: Creating session with embedded portal backend");
 
+        let target_fps = self.target_fps;
+
         // All Wayland and PipeWire setup is synchronous; run on blocking thread
-        let (handle, wayland_stop) = tokio::task::spawn_blocking(|| -> Result<_> {
+        let (handle, wayland_stop) = tokio::task::spawn_blocking(move || -> Result<_> {
             // Connect to compositor and discover protocols
             let mut wayland = WaylandConnection::connect()
                 .context("Failed to connect to Wayland display")?;
@@ -237,6 +244,18 @@ impl SessionStrategy for PortalGenericStrategy {
                 wayland.set_ext_capture_handshake_timeout(
                     std::time::Duration::from_millis(capture_prefs.handshake_timeout_ms),
                 );
+            }
+
+            // Pace capture requests to the configured fps ceiling. Without
+            // this, wlr-screencopy/ext-image-copy-capture's capture_output
+            // request has no rate limiting of its own — compositors that
+            // don't throttle fulfillment to their repaint cycle (observed:
+            // wayfire) get asked to render+copy a frame the instant the
+            // previous one lands, wasting compositor-side work on frames a
+            // downstream bounded channel has no room for and will drop.
+            if let Some(fps) = target_fps {
+                let interval = std::time::Duration::from_secs_f64(1.0 / f64::from(fps.max(1)));
+                wayland.set_min_frame_interval(interval);
             }
 
             // When wlr-screencopy is preferred (or ext is broken), tell the Wayland
@@ -369,7 +388,7 @@ impl SessionStrategy for PortalGenericStrategy {
             // wlr-virtual-pointer, so the wlr backend comes up keyboard-only.
             // Inject the pointer at the kernel (/dev/uinput) as a trusted
             // application; fall back to keyboard-only if /dev/uinput is unusable.
-            let uinput_pointer = if !protocols.wlr_virtual_pointer
+            let (uinput_pointer, pointer_backend) = if !protocols.wlr_virtual_pointer
                 && protocols.zwp_virtual_keyboard
             {
                 match super::uinput_pointer::UinputPointer::new() {
@@ -377,21 +396,24 @@ impl SessionStrategy for PortalGenericStrategy {
                         info!(
                             "COSMIC-class compositor: pointer via /dev/uinput (no wlr-virtual-pointer)"
                         );
-                        Some(Mutex::new(p))
+                        (Some(Mutex::new(p)), "uinput")
                     }
                     Err(e) => {
                         warn!("uinput pointer unavailable ({e:#}); session will be keyboard-only");
-                        None
+                        (None, "none")
                     }
                 }
+            } else if protocols.wlr_virtual_pointer {
+                (None, "wlr-virtual-pointer")
             } else {
-                None
+                (None, "none")
             };
 
             let handle = PortalGenericSessionHandle {
                 session_id,
                 input_backend: Arc::new(Mutex::new(input_backend)),
                 uinput_pointer,
+                pointer_backend,
                 _capture_backend: Arc::new(Mutex::new(capture_backend)),
                 clipboard_backend: clipboard_backend.map(|cb| Arc::new(Mutex::new(cb))),
                 _pipewire_manager: pipewire_manager,
@@ -451,6 +473,10 @@ impl Drop for PortalGenericSessionWithStop {
 impl SessionHandle for PortalGenericSessionWithStop {
     fn set_health_reporter(&self, reporter: HealthReporter) {
         let _ = self.health_reporter.set(reporter.clone());
+
+        reporter.report(crate::health::HealthEvent::InputBackendSelected {
+            backend: self.handle.pointer_backend.to_string(),
+        });
 
         // Spawn portal health bridge: PortalHealthEvent → server HealthEvent
         let health_rx_opt: Option<portal_health::HealthReceiver> =
@@ -659,6 +685,10 @@ pub struct PortalGenericSessionHandle {
     /// present, pointer events route here instead of the (pointer-less) wlr
     /// backend; keyboard always stays on `input_backend`.
     uinput_pointer: Option<Mutex<super::uinput_pointer::UinputPointer>>,
+    /// Which pointer backend this session settled on ("uinput",
+    /// "wlr-virtual-pointer", or "none") -- reported once via
+    /// `HealthEvent::InputBackendSelected` when the health reporter attaches.
+    pointer_backend: &'static str,
     _capture_backend: Arc<Mutex<Box<dyn xdg_desktop_portal_generic::CaptureBackend>>>,
     clipboard_backend: Option<Arc<Mutex<Box<dyn xdg_desktop_portal_generic::ClipboardBackend>>>>,
     _pipewire_manager: Arc<PipeWireManager>,
@@ -792,6 +822,35 @@ impl SessionHandle for PortalGenericSessionHandle {
         Ok(())
     }
 
+    async fn notify_keyboard_keysym(&self, keysym: u32, pressed: bool) -> Result<()> {
+        let mut backend = self
+            .input_backend
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Input backend lock poisoned: {e}"))?;
+
+        // Same resolution xdg_desktop_portal_generic's own NotifyKeyboardKeysym
+        // D-Bus handler performs; InputBackend::keysym_to_keycode is public API
+        // for exactly this purpose, so no change to that crate is needed here.
+        let keycode = backend.keysym_to_keycode(keysym).ok_or_else(|| {
+            anyhow::anyhow!("No keycode found for keysym 0x{keysym:04x} in current keymap")
+        })?;
+
+        let event = InputEvent::Keyboard(KeyboardEvent {
+            keycode,
+            state: if pressed {
+                KeyState::Pressed
+            } else {
+                KeyState::Released
+            },
+            time_usec: current_time_usec(),
+        });
+        backend
+            .inject_event(&self.session_id, event)
+            .map_err(|e| anyhow::anyhow!("Keyboard inject: {e}"))?;
+
+        Ok(())
+    }
+
     async fn notify_pointer_motion_absolute(&self, stream_id: u32, x: f64, y: f64) -> Result<()> {
         // Caller (input_handler) passes pixel coordinates in the stream's frame.
         // Look up that stream's dimensions so the backend can normalize.
@@ -916,7 +975,7 @@ mod tests {
 
     #[test]
     fn test_strategy_name() {
-        let strategy = PortalGenericStrategy::new();
+        let strategy = PortalGenericStrategy::new(None);
         assert_eq!(strategy.name(), "portal-generic");
         assert!(!strategy.requires_initial_setup());
         assert!(strategy.supports_unattended_restore());

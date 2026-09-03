@@ -18,6 +18,7 @@ const ZGFX_OPTIONS: &[&str] = &["never", "auto", "always"];
 const CODEC_OPTIONS: &[&str] = &["auto", "avc420", "avc444"];
 const COLOR_MATRIX_OPTIONS: &[&str] = &["auto", "openh264", "bt709", "bt601", "srgb"];
 const COLOR_RANGE_OPTIONS: &[&str] = &["auto", "limited", "full"];
+const HW_QUALITY_PRESETS: &[&str] = &["speed", "balanced", "quality"];
 
 pub fn view_egfx_tab(state: &AppState) -> Element<'_, Message> {
     let egfx = &state.config.egfx;
@@ -338,6 +339,110 @@ fn view_egfx_expert_settings(state: &AppState) -> Element<'_, Message> {
         ),
         space().height(4.0),
         widgets::warning_box("Must be OFF for single encoder to allow Main P-frames (PRODUCTION)"),
+        space().height(20.0),
+        // Hardware Encoding section
+        widgets::collapsible_header(
+            "Hardware Encoding",
+            state.hardware_encoding_expanded,
+            Message::HardwareEncodingToggleExpanded,
+        ),
+        if state.hardware_encoding_expanded {
+            view_hardware_encoding_config(state)
+        } else {
+            column![].into()
+        },
     ]
+    .into()
+}
+
+/// Hardware encoding configuration view
+fn view_hardware_encoding_config(state: &AppState) -> Element<'_, Message> {
+    let hw = &state.config.hardware_encoding;
+
+    column![
+        space().height(8.0),
+        text("Uses the VA-API GPU H.264 encoder for AVC444 when enabled; falls back to software OpenH264 if unavailable. Takes effect on the next connection.")
+            .size(12)
+            .style(|_theme| text::Style {
+                color: Some(theme::colors::TEXT_MUTED),
+            }),
+        space().height(12.0),
+        widgets::toggle_pending_with_note(
+            "Enable Hardware Acceleration",
+            hw.enabled,
+            Message::HardwareEncodingEnabledToggled,
+            "Needs a VA-API driver with H.264 encode (Fedora: mesa-va-drivers-freeworld) and libva-utils",
+        ),
+        space().height(12.0),
+        // Display detected GPUs
+        if !state.detected_gpus.is_empty() {
+            let gpu_text: Vec<_> = state
+                .detected_gpus
+                .iter()
+                .map(|gpu| {
+                    format!(
+                        "{} {} ({})",
+                        gpu.vendor,
+                        gpu.model,
+                        gpu.driver
+                    )
+                })
+                .collect();
+            Element::from(column![
+                text("Detected GPUs:").size(13),
+                text(gpu_text.join("\n")).size(12),
+                space().height(12.0),
+            ])
+        } else {
+            Element::from(space().height(0.0))
+        },
+        widgets::labeled_row_pending_with_note(
+            "VA-API Device:",
+            150.0,
+            pick_list(
+                vec!["/dev/dri/renderD128", "/dev/dri/renderD129"],
+                Some(state.edit_strings.vaapi_device.as_str()),
+                |s| Message::HardwareEncodingVaapiDeviceChanged(s.to_string()),
+            )
+            .width(Length::Fixed(200.0))
+            .into(),
+            "Encoder factory supports device selection; awaiting pipeline integration",
+        ),
+        space().height(12.0),
+        widgets::toggle_pending_with_note(
+            "Enable DMA-BUF Zero-Copy",
+            hw.enable_dmabuf_zerocopy,
+            Message::HardwareEncodingDmabufZerocopyToggled,
+            "Requires VA-API encoder to be active for zero-copy buffer path",
+        ),
+        space().height(8.0),
+        widgets::toggle_pending_with_note(
+            "Fallback to Software",
+            hw.fallback_to_software,
+            Message::HardwareEncodingFallbackToSoftwareToggled,
+            "Active once hardware encoding is integrated; falls back to OpenH264",
+        ),
+        space().height(8.0),
+        widgets::toggle_pending_with_note(
+            "Prefer NVENC over VA-API",
+            hw.prefer_nvenc,
+            Message::HardwareEncodingPreferNvencToggled,
+            "Encoder factory supports NVENC; awaiting pipeline integration",
+        ),
+        space().height(12.0),
+        widgets::labeled_row_pending_with_note(
+            "Quality Preset:",
+            150.0,
+            pick_list(
+                HW_QUALITY_PRESETS.to_vec(),
+                Some(hw.quality_preset.as_str()),
+                |s| Message::HardwareEncodingQualityPresetChanged(s.to_string()),
+            )
+            .width(Length::Fixed(150.0))
+            .into(),
+            "Maps to VA-API/NVENC quality levels; awaiting pipeline integration",
+        ),
+    ]
+    .padding([0, 16])
     .into()
 }

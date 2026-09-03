@@ -25,12 +25,9 @@
 //! H.264 NAL units (Annex B)
 //! ```
 
-use std::sync::Arc;
-
-use tracing::{debug, info, warn};
+use tracing::info;
 use vk_video::{
-    BytesEncoder, EncodedOutputChunk, InputFrame, RawFrameData, VulkanAdapter, VulkanDevice,
-    VulkanEncoderError, VulkanInstance,
+    BytesEncoder, InputFrame, RawFrameData, VulkanInstance,
     parameters::{
         ColorRange, ColorSpace, EncoderParameters, EncoderTuningMode, H264Profile, RateControl,
         Rational, VideoParameters, VulkanAdapterDescriptor, VulkanDeviceDescriptor,
@@ -52,10 +49,22 @@ pub struct VulkanVideoEncoder {
     encoder: BytesEncoder,
 
     /// Frame dimensions
+    #[expect(
+        dead_code,
+        reason = "captured at setup; the reconfigure path is not wired yet"
+    )]
     width: u32,
+    #[expect(
+        dead_code,
+        reason = "captured at setup; the reconfigure path is not wired yet"
+    )]
     height: u32,
 
     /// Quality preset
+    #[expect(
+        dead_code,
+        reason = "captured at setup; the reconfigure path is not wired yet"
+    )]
     preset: QualityPreset,
 
     /// Frame counter
@@ -95,7 +104,7 @@ impl VulkanVideoEncoder {
 
         let adapter = instance
             .create_adapter(&adapter_desc)
-            .map_err(|e| VulkanVideoError::NoDevice)?;
+            .map_err(|_| VulkanVideoError::NoDevice)?;
 
         let adapter_info = adapter.info();
         info!(
@@ -201,6 +210,10 @@ impl VulkanVideoEncoder {
     ///
     /// Uses fixed-point BT.709 coefficients for performance (no float ops).
     /// Processes Y for every pixel and UV for every 2x2 block (4:2:0 subsampling).
+    #[expect(
+        clippy::many_single_char_names,
+        reason = "r/g/b and y/u/v are the colour-conversion domain's own names; spelling them out would obscure the formulas"
+    )]
     fn bgra_to_nv12(bgra: &[u8], width: u32, height: u32) -> Vec<u8> {
         let w = width as usize;
         let h = height as usize;
@@ -215,7 +228,6 @@ impl VulkanVideoEncoder {
         const YR: i32 = 3483; // 0.2126 * 16384
         const YG: i32 = 11718; // 0.7152 * 16384
         const YB: i32 = 1183; // 0.0722 * 16384
-        const CR: i32 = 8192; // 0.5000 * 16384
         const CG_CB: i32 = -6316; // -0.3854 * 16384
         const CB_B: i32 = 8192; // 0.5000 * 16384
         const CR_R: i32 = 8192;
@@ -278,8 +290,8 @@ impl HardwareEncoder for VulkanVideoEncoder {
             pts: Some(timestamp_ms),
         };
 
-        let force_keyframe =
-            self.force_idr || (self.gop_size > 0 && self.frame_count % self.gop_size as u64 == 0);
+        let force_keyframe = self.force_idr
+            || (self.gop_size > 0 && self.frame_count.is_multiple_of(self.gop_size as u64));
 
         let chunk = self
             .encoder

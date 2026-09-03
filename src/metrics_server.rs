@@ -56,8 +56,7 @@ impl MetricsServer {
                 .name("metrics-http".into())
                 .spawn(move || {
                     serve_loop(server, metrics, snapshot_collector, health_state);
-                })
-                .expect("failed to spawn metrics-http thread")
+                })?
         };
 
         Ok(Self { thread_handle })
@@ -97,12 +96,16 @@ fn serve_loop(
             _ => ("Not Found\n".into(), "text/plain", 404),
         };
 
-        let response = tiny_http::Response::from_string(&response_body)
-            .with_status_code(status_code)
-            .with_header(
-                tiny_http::Header::from_bytes(b"Content-Type", content_type.as_bytes())
-                    .expect("valid header"),
-            );
+        // from_bytes rejects only malformed header names or values, and both
+        // arguments here are compile-time constants, so this cannot fail in
+        // practice. Serve the body without the header rather than panic on a
+        // request thread if it ever does.
+        let mut response =
+            tiny_http::Response::from_string(&response_body).with_status_code(status_code);
+        match tiny_http::Header::from_bytes(b"Content-Type", content_type.as_bytes()) {
+            Ok(header) => response = response.with_header(header),
+            Err(()) => warn!("Could not build the Content-Type header for {url}"),
+        }
 
         if let Err(e) = request.respond(response) {
             warn!("Failed to respond to {url}: {e}");

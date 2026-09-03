@@ -32,7 +32,6 @@ use std::{
 use anyhow::{Context as _, Result, anyhow};
 use futures::{Sink, SinkExt, Stream, StreamExt};
 use ironrdp_rdcleanpath::{RDCleanPath, RDCleanPathPdu};
-use ironrdp_server::tokio_rustls::TlsAcceptor;
 use serde::{Deserialize, Serialize};
 use tokio::{
     io::{AsyncRead, AsyncWrite, ReadBuf},
@@ -40,6 +39,7 @@ use tokio::{
     sync::mpsc,
     task::JoinHandle,
 };
+use tokio_rustls::TlsAcceptor;
 use tokio_tungstenite::{WebSocketStream, tungstenite::Message};
 use tracing::{debug, info};
 
@@ -106,7 +106,7 @@ where
                     return Poll::Ready(Ok(()));
                 }
                 Poll::Ready(Some(Err(e))) => {
-                    return Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, e)));
+                    return Poll::Ready(Err(io::Error::other(e)));
                 }
                 Poll::Ready(Some(Ok(Message::Binary(bytes)))) => {
                     self.read_buf = bytes.into();
@@ -139,14 +139,14 @@ where
         match Pin::new(&mut self.inner).poll_ready(cx) {
             Poll::Pending => return Poll::Pending,
             Poll::Ready(Err(e)) => {
-                return Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, e)));
+                return Poll::Ready(Err(io::Error::other(e)));
             }
             Poll::Ready(Ok(())) => {}
         }
         let msg = Message::Binary(buf.to_vec().into());
         match Pin::new(&mut self.inner).start_send(msg) {
             Ok(()) => Poll::Ready(Ok(buf.len())),
-            Err(e) => Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, e))),
+            Err(e) => Poll::Ready(Err(io::Error::other(e))),
         }
     }
 
@@ -154,7 +154,7 @@ where
         match Pin::new(&mut self.inner).poll_flush(cx) {
             Poll::Pending => Poll::Pending,
             Poll::Ready(Ok(())) => Poll::Ready(Ok(())),
-            Poll::Ready(Err(e)) => Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, e))),
+            Poll::Ready(Err(e)) => Poll::Ready(Err(io::Error::other(e))),
         }
     }
 
@@ -162,7 +162,7 @@ where
         match Pin::new(&mut self.inner).poll_close(cx) {
             Poll::Pending => Poll::Pending,
             Poll::Ready(Ok(())) => Poll::Ready(Ok(())),
-            Poll::Ready(Err(e)) => Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, e))),
+            Poll::Ready(Err(e)) => Poll::Ready(Err(io::Error::other(e))),
         }
     }
 }
@@ -244,43 +244,39 @@ where
         if buf.is_empty() {
             return Poll::Ready(Ok(0));
         }
-        loop {
-            match &mut self.swallow {
-                SwallowState::PassThrough => {
-                    return Pin::new(&mut self.inner).poll_write(cx, buf);
-                }
-                SwallowState::Header(header_buf) => {
-                    let needed = 4 - header_buf.len();
-                    let take = buf.len().min(needed);
-                    header_buf.extend_from_slice(&buf[..take]);
-                    if header_buf.len() < 4 {
-                        // Still need more for the header; consume what we got, report progress.
-                        return Poll::Ready(Ok(take));
-                    }
-                    // Full TPKT header collected. Parse length (bytes 2-3, big-endian, total PDU length including header).
-                    let total_len = u16::from_be_bytes([header_buf[2], header_buf[3]]) as usize;
-                    if total_len < 4 {
-                        return Poll::Ready(Err(io::Error::new(
-                            io::ErrorKind::InvalidData,
-                            format!("invalid TPKT length {total_len}"),
-                        )));
-                    }
-                    let body_remaining = total_len - 4;
-                    self.swallow = if body_remaining == 0 {
-                        SwallowState::PassThrough
-                    } else {
-                        SwallowState::Body(body_remaining)
-                    };
+        match &mut self.swallow {
+            SwallowState::PassThrough => Pin::new(&mut self.inner).poll_write(cx, buf),
+            SwallowState::Header(header_buf) => {
+                let needed = 4 - header_buf.len();
+                let take = buf.len().min(needed);
+                header_buf.extend_from_slice(&buf[..take]);
+                if header_buf.len() < 4 {
+                    // Still need more for the header; consume what we got, report progress.
                     return Poll::Ready(Ok(take));
                 }
-                SwallowState::Body(remaining) => {
-                    let take = buf.len().min(*remaining);
-                    *remaining -= take;
-                    if *remaining == 0 {
-                        self.swallow = SwallowState::PassThrough;
-                    }
-                    return Poll::Ready(Ok(take));
+                // Full TPKT header collected. Parse length (bytes 2-3, big-endian, total PDU length including header).
+                let total_len = u16::from_be_bytes([header_buf[2], header_buf[3]]) as usize;
+                if total_len < 4 {
+                    return Poll::Ready(Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("invalid TPKT length {total_len}"),
+                    )));
                 }
+                let body_remaining = total_len - 4;
+                self.swallow = if body_remaining == 0 {
+                    SwallowState::PassThrough
+                } else {
+                    SwallowState::Body(body_remaining)
+                };
+                Poll::Ready(Ok(take))
+            }
+            SwallowState::Body(remaining) => {
+                let take = buf.len().min(*remaining);
+                *remaining -= take;
+                if *remaining == 0 {
+                    self.swallow = SwallowState::PassThrough;
+                }
+                Poll::Ready(Ok(take))
             }
         }
     }
@@ -445,6 +441,12 @@ async fn accept_one(
 
     // 2. WebSocket handshake. Capture Origin header for diagnostics.
     let mut origin: Option<String> = None;
+    // The callback's Result shape is fixed by tokio-tungstenite's accept_hdr_async
+    // signature, so the size of its Err variant is not ours to change.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Err type is imposed by tokio-tungstenite's handshake callback signature"
+    )]
     let ws = tokio_tungstenite::accept_hdr_async(
         tls_stream,
         |req: &tokio_tungstenite::tungstenite::http::Request<()>,

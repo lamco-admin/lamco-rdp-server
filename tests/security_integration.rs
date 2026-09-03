@@ -1,3 +1,7 @@
+#![expect(
+    clippy::unwrap_used,
+    reason = "a panic is the failure signal here, same as in a unit test"
+)]
 use lamco_rdp_server::security::{AuthMethod, CertificateGenerator, TlsConfig, UserAuthenticator};
 use tempfile::TempDir;
 

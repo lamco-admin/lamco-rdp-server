@@ -33,7 +33,7 @@ packaging/
 ├── snap/                          # Snap Store packaging
 │   └── snapcraft.yaml                     # Snapcraft manifest
 └── systemd/                       # Systemd service units
-    ├── lamco-rdp-server.service           # User service
+    ├── app-io.lamco.rdp-server.service    # User service
     └── lamco-rdp-server-system.service    # System service
 ```
 
@@ -90,12 +90,12 @@ Run as a user service (starts with your session):
 ```bash
 # Install user service
 mkdir -p ~/.config/systemd/user
-cp packaging/systemd/lamco-rdp-server.service ~/.config/systemd/user/
+cp packaging/systemd/app-io.lamco.rdp-server.service ~/.config/systemd/user/
 
 # Enable and start
 systemctl --user daemon-reload
-systemctl --user enable lamco-rdp-server
-systemctl --user start lamco-rdp-server
+systemctl --user enable app-io.lamco.rdp-server
+systemctl --user start app-io.lamco.rdp-server
 
 # View logs
 journalctl --user -u lamco-rdp-server -f

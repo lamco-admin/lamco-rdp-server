@@ -21,9 +21,9 @@ pub struct Args {
     #[arg(short, long, env = "LAMCO_RDP_LISTEN_ADDR")]
     pub listen: Option<String>,
 
-    /// Listen port
-    #[arg(short, long, env = "LAMCO_RDP_PORT", default_value = "3389")]
-    pub port: u16,
+    /// Listen port (overrides config.toml only when explicitly set)
+    #[arg(short, long, env = "LAMCO_RDP_PORT")]
+    pub port: Option<u16>,
 
     /// Verbose logging (can be specified multiple times)
     #[arg(short, long, action = clap::ArgAction::Count)]
@@ -169,8 +169,10 @@ async fn main() -> Result<()> {
     // Machine-readable output modes: skip logging banner to keep stdout clean
     let quiet_mode = args.show_capabilities && args.format == "json";
 
-    // Initialize logging (uses config.logging, CLI args override)
-    init_logging(&args, &config.logging, quiet_mode)?;
+    // Initialize logging (uses config.logging, CLI args override). The returned
+    // guard must live for the whole process: dropping it flushes and stops the
+    // non-blocking log writer thread, so it is held here in main until exit.
+    let _log_guard = init_logging(&args, &config.logging, quiet_mode)?;
 
     if !quiet_mode {
         info!("════════════════════════════════════════════════════════");
@@ -261,8 +263,15 @@ async fn main() -> Result<()> {
                 Some(conn)
             }
             Err(e) => {
-                tracing::error!("Failed to start D-Bus service: {}", e);
-                return Err(anyhow::anyhow!("D-Bus service failed: {e}"));
+                // A sandbox that refuses the bus name (Flatpak's D-Bus proxy, Snap's
+                // AppArmor policy) must not take the server down with it. The GUI
+                // that asked for the interface still holds the child handle and the
+                // PID file, so it can stop the server without it.
+                tracing::warn!(
+                    "D-Bus management interface unavailable, continuing without it: {}",
+                    e
+                );
+                None
             }
         }
     } else {
@@ -690,7 +699,7 @@ async fn grant_permission_flow() -> Result<()> {
     println!();
     println!("✅ Permission granted and token stored!");
     println!("   Server can now start unattended via:");
-    println!("   • systemctl --user start lamco-rdp-server");
+    println!("   • systemctl --user start app-io.lamco.rdp-server");
     println!("   • Or just: lamco-rdp-server");
 
     Ok(())
@@ -789,7 +798,7 @@ fn init_logging(
     args: &Args,
     logging_config: &lamco_rdp_server::config::types::LoggingConfig,
     quiet_mode: bool,
-) -> Result<()> {
+) -> Result<Option<tracing_appender::non_blocking::WorkerGuard>> {
     use std::fs::{self, File};
 
     // Quiet mode: suppress all logs so stdout stays clean for machine-readable output
@@ -880,7 +889,14 @@ fn init_logging(
             }
         });
 
+    // Offload file writes to a dedicated thread so no application thread ever
+    // blocks on log I/O. At trace volume on a slow disk, the kernel's periodic
+    // dirty-page writeback would otherwise stall every thread mid-write(),
+    // freezing capture and dispatch together for hundreds of milliseconds.
+    let log_guard;
     if let Some((file, ref log_file_path)) = log_file {
+        let (file_writer, guard) = tracing_appender::non_blocking(file);
+        log_guard = Some(guard);
         match args.log_format.as_str() {
             "json" => {
                 tracing_subscriber::registry()
@@ -893,7 +909,7 @@ fn init_logging(
                     .with(
                         tracing_subscriber::fmt::layer()
                             .json()
-                            .with_writer(file)
+                            .with_writer(file_writer.clone())
                             .with_ansi(false),
                     )
                     .init();
@@ -909,7 +925,7 @@ fn init_logging(
                     .with(
                         tracing_subscriber::fmt::layer()
                             .compact()
-                            .with_writer(file)
+                            .with_writer(file_writer.clone())
                             .with_ansi(false),
                     )
                     .init();
@@ -924,7 +940,7 @@ fn init_logging(
                     )
                     .with(
                         tracing_subscriber::fmt::layer()
-                            .with_writer(file)
+                            .with_writer(file_writer.clone())
                             .with_ansi(false),
                     )
                     .init();
@@ -932,6 +948,7 @@ fn init_logging(
         }
         info!("Logging to file: {}", log_file_path);
     } else {
+        log_guard = None;
         match args.log_format.as_str() {
             "json" => {
                 tracing_subscriber::registry()
@@ -960,5 +977,5 @@ fn init_logging(
         warn!("{msg}");
     }
 
-    Ok(())
+    Ok(log_guard)
 }

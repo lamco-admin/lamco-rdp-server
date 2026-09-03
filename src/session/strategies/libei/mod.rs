@@ -44,14 +44,18 @@ use anyhow::{Context as AnyhowContext, Result};
 use ashpd::desktop::{
     PersistMode,
     remote_desktop::{DeviceType, RemoteDesktop},
+    screencast::{CursorMode, Screencast, SourceType as ScSourceType},
 };
 use async_trait::async_trait;
 use futures::stream::StreamExt;
-use reis::{PendingRequestResult, ei, tokio::EiEventStream};
+use reis::{PendingRequestResult, ei};
 use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, error, info, warn};
 
-use super::eis_common::{self, DeviceData, EisDevices};
+use super::{
+    eis_common::{self, DeviceData, EisDevices},
+    eis_stream::{EisEventStream, HANDSHAKE_TIMEOUT, ei_handshake},
+};
 use crate::{
     health::{HealthEvent, HealthReporter},
     session::{
@@ -171,6 +175,58 @@ impl SessionStrategy for LibeiStrategy {
 
         info!("libei: Selected keyboard, pointer, and touchscreen devices");
 
+        // Attach ScreenCast video to the SAME RemoteDesktop session (issue #51):
+        // one portal session, one permission dialog, and the video grant persists
+        // under the same restore token as input. Replaces the former standalone
+        // ScreenCast session (server/mod.rs) that hardcoded PersistMode::DoNot and
+        // re-prompted for screen sharing on every start.
+        let screencast = Screencast::new()
+            .await
+            .context("Failed to create ScreenCast proxy for libei video")?;
+        let cursor_mode = {
+            let available = screencast
+                .available_cursor_modes()
+                .await
+                .context("Failed to query ScreenCast cursor modes")?;
+            if available.contains(CursorMode::Metadata) {
+                CursorMode::Metadata
+            } else if available.contains(CursorMode::Embedded) {
+                CursorMode::Embedded
+            } else {
+                CursorMode::Hidden
+            }
+        };
+        // Persistence for the combined session is owned once, at the
+        // RemoteDesktop::select_devices() call above — this attached
+        // ScreenCast inherits it and must not set its own persist_mode.
+        // Newer xdg-desktop-portal-kde builds (6.6.4, Fedora 44 beta) reject
+        // a redundant persist_mode here with "Remote desktop sessions cannot
+        // persist"; 6.6.3 (the version #51 was fixed against) tolerated it.
+        use ashpd::desktop::screencast::SelectSourcesOptions;
+        screencast
+            .select_sources(
+                &session,
+                SelectSourcesOptions::default()
+                    .set_cursor_mode(cursor_mode)
+                    .set_sources(enumflags2::BitFlags::from(ScSourceType::Monitor))
+                    .set_multiple(false),
+            )
+            .await
+            .context("Failed to select ScreenCast sources on libei session")?;
+
+        // Without a restore token the portal shows a permission dialog here and
+        // Start() does not return until someone answers it. The RDP listener is
+        // not bound yet, so from outside the process this looks like a hang with
+        // no output at all: say what is being waited on before blocking.
+        info!(
+            "libei: Requesting portal session start{}",
+            if restore_token.is_some() {
+                " (restore token present, no dialog expected)"
+            } else {
+                " (no restore token: the portal will prompt on the session's display and this call blocks until it is answered)"
+            }
+        );
+
         let response = remote_desktop
             .start(
                 &session,
@@ -199,6 +255,48 @@ impl SessionStrategy for LibeiStrategy {
         // EIS activation (ConnectToEIS) is deferred until the first
         // RDP client connects, preventing compositor idle timeout.
         info!("libei: Portal session ready (EIS deferred until client connects)");
+
+        // Video streams from the same session (ScreenCast sources selected above).
+        let video_streams: Vec<StreamInfo> = selected
+            .streams()
+            .iter()
+            .map(|s| {
+                let (w, h) = s.size().unwrap_or((0, 0));
+                let (x, y) = s.position().unwrap_or((0, 0));
+                StreamInfo {
+                    node_id: s.pipe_wire_node_id(),
+                    width: w as u32,
+                    height: h as u32,
+                    position_x: x,
+                    position_y: y,
+                }
+            })
+            .collect();
+        if video_streams.is_empty() {
+            return Err(anyhow::anyhow!(
+                "libei: RemoteDesktop session returned no ScreenCast streams"
+            ));
+        }
+        let video_fd = {
+            use std::os::fd::AsRawFd;
+            let fd = screencast
+                .open_pipe_wire_remote(
+                    &session,
+                    ashpd::desktop::screencast::OpenPipeWireRemoteOptions::default(),
+                )
+                .await
+                .context("Failed to open PipeWire remote for libei video")?;
+            let raw = fd.as_raw_fd();
+            // Ownership transfers to the display pipeline downstream (from_raw_fd);
+            // forget here so this scope does not close it.
+            std::mem::forget(fd);
+            raw
+        };
+        info!(
+            fd = video_fd,
+            streams = video_streams.len(),
+            "libei: acquired video via ScreenCast on the RemoteDesktop session"
+        );
 
         let portal_session = Arc::new(RwLock::new(session));
 
@@ -257,7 +355,8 @@ impl SessionStrategy for LibeiStrategy {
             connection: Arc::new(Mutex::new(None)),
             seats: Arc::new(Mutex::new(HashMap::new())),
             devices: Arc::new(EisDevices::new(0)),
-            streams: Arc::new(Mutex::new(vec![])),
+            streams: Arc::new(Mutex::new(video_streams)),
+            video_fd,
             health_reporter: std::sync::OnceLock::new(),
             eis_activated: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             activating: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -298,8 +397,10 @@ pub struct LibeiSessionHandleImpl {
     seats: Arc<Mutex<HashMap<ei::Seat, SeatData>>>,
     /// Input devices (populated by event loop after activation)
     devices: Arc<EisDevices>,
-    /// External video streams (set by server, independent of EIS)
+    /// Video streams from ScreenCast on this same RemoteDesktop session (#51)
     streams: Arc<Mutex<Vec<StreamInfo>>>,
+    /// PipeWire FD for the video streams, opened on this session (#51)
+    video_fd: std::os::fd::RawFd,
     health_reporter: std::sync::OnceLock<HealthReporter>,
     /// Whether EIS has been activated (ConnectToEIS called)
     eis_activated: Arc<std::sync::atomic::AtomicBool>,
@@ -370,15 +471,11 @@ impl LibeiSessionHandleImpl {
         let context = ei::Context::new(stream).context("Failed to create EIS context")?;
 
         let mut events =
-            EiEventStream::new(context.clone()).context("Failed to create EIS event stream")?;
+            EisEventStream::new(context.clone()).context("Failed to create EIS event stream")?;
 
-        let handshake_resp = reis::tokio::ei_handshake(
-            &mut events,
-            "lamco-rdp-server",
-            ei::handshake::ContextType::Sender,
-        )
-        .await
-        .context("EIS handshake failed")?;
+        let handshake_resp = ei_handshake(&mut events, "lamco-rdp-server", HANDSHAKE_TIMEOUT)
+            .await
+            .context("EIS handshake failed")?;
 
         info!("[libei] EIS handshake complete");
 
@@ -393,15 +490,36 @@ impl LibeiSessionHandleImpl {
         }
         *self.connection.lock().await = Some(handshake_resp.connection);
         *self.devices.last_serial.lock().await = handshake_resp.serial;
+        self.devices.device_version.store(
+            handshake_resp
+                .negotiated_interfaces
+                .get("ei_device")
+                .copied()
+                .unwrap_or(0),
+            std::sync::atomic::Ordering::Relaxed,
+        );
 
-        // Process initial events (seat + device setup) with a timeout.
-        // The compositor sends all setup events in a burst. We process
-        // until the stream goes quiet (no event within 500ms) or EOF.
+        // Process the seat+device setup burst, ending on a deterministic
+        // barrier rather than a quiet-time guess. `seat.done` issues bind +
+        // connection.sync(); per the EI protocol the server emits its
+        // ei_callback.done only after every event resulting from those prior
+        // requests (the whole seat/device/resumed burst) has been sent, so the
+        // callback.done is our reliable "setup drained" signal regardless of how
+        // long the burst takes. The per-event timeout is a 3s failsafe only (the
+        // old 500ms quiet-timeout could cut off a slow burst — the suspected
+        // cause of the GNOME 46 zero-devices failure).
         loop {
-            match tokio::time::timeout(tokio::time::Duration::from_millis(500), events.next()).await
-            {
+            match tokio::time::timeout(tokio::time::Duration::from_secs(3), events.next()).await {
                 Ok(Some(Ok(PendingRequestResult::Request(event)))) => {
+                    let sync_barrier_reached = matches!(
+                        &event,
+                        ei::Event::Callback(_, ei::callback::Event::Done { .. })
+                    );
                     self.handle_event(event).await?;
+                    if sync_barrier_reached {
+                        debug!("[libei] setup sync barrier reached — device burst drained");
+                        break;
+                    }
                 }
                 Ok(Some(Ok(PendingRequestResult::ParseError(msg)))) => {
                     warn!("[libei] EIS parse error during setup: {}", msg);
@@ -419,8 +537,7 @@ impl LibeiSessionHandleImpl {
                     break;
                 }
                 Err(_) => {
-                    // Timeout — no more events, setup is done
-                    debug!("[libei] No more events after 500ms, setup complete");
+                    warn!("[libei] setup barrier failsafe timeout (3s) — sync never completed");
                     break;
                 }
             }
@@ -547,6 +664,13 @@ impl LibeiSessionHandleImpl {
                         // the second call with "Invalid device state 3"
                         // and disconnect the client.
                         eis_common::assign_device_roles(&device, data, &self.devices).await;
+                        // v3 devices require ready() after done before the
+                        // server will emit resumed (and thus start_emulating).
+                        if eis_common::eis_device_ready(&self.devices, &device)
+                            && let Some(ref ctx) = *self.context.read().await
+                        {
+                            let _ = ctx.flush();
+                        }
                         info!(
                             "[libei] Device '{}' setup complete",
                             data.name.as_deref().unwrap_or("unknown"),
@@ -564,6 +688,13 @@ impl LibeiSessionHandleImpl {
                 }
             }
 
+            // Response to `connection.sync()`. We do not yet gate readiness on
+            // it (see the reis/EIS roadmap), but consuming it explicitly makes
+            // the handshake sequence observable rather than swallowed.
+            ei::Event::Callback(_callback, ei::callback::Event::Done { callback_data }) => {
+                tracing::debug!("[libei] sync callback done (data={callback_data})");
+            }
+
             _ => {}
         }
 
@@ -578,12 +709,8 @@ impl SessionHandle for LibeiSessionHandleImpl {
     }
 
     fn pipewire_access(&self) -> PipeWireAccess {
-        // libei provides input only; video comes from Portal ScreenCast
-        warn!(
-            "libei: pipewire_access() called but this strategy provides input only. \
-             Video capture requires Portal ScreenCast."
-        );
-        PipeWireAccess::NodeId(0)
+        // Video is acquired via ScreenCast on this same RemoteDesktop session (#51).
+        PipeWireAccess::FileDescriptor(self.video_fd)
     }
 
     fn streams(&self) -> Vec<StreamInfo> {
@@ -602,8 +729,20 @@ impl SessionHandle for LibeiSessionHandleImpl {
         eis_common::eis_keyboard_keycode(&self.context, &self.devices, keycode, pressed).await
     }
 
-    async fn notify_pointer_motion_absolute(&self, _stream_id: u32, x: f64, y: f64) -> Result<()> {
-        eis_common::eis_pointer_motion_absolute(&self.context, &self.devices, x, y).await
+    async fn notify_keyboard_keysym(&self, keysym: u32, pressed: bool) -> Result<()> {
+        eis_common::eis_text_keysym(&self.context, &self.devices, keysym, pressed).await
+    }
+
+    async fn notify_pointer_motion_absolute(&self, stream_id: u32, x: f64, y: f64) -> Result<()> {
+        let stream_offset = self
+            .streams
+            .lock()
+            .await
+            .iter()
+            .find(|s| s.node_id == stream_id)
+            .map(|s| (s.position_x as f64, s.position_y as f64));
+        eis_common::eis_pointer_motion_absolute(&self.context, &self.devices, x, y, stream_offset)
+            .await
     }
 
     async fn notify_pointer_button(&self, button: i32, pressed: bool) -> Result<()> {
@@ -614,8 +753,35 @@ impl SessionHandle for LibeiSessionHandleImpl {
         eis_common::eis_pointer_axis(&self.context, &self.devices, dx, dy).await
     }
 
+    async fn notify_pointer_axis_discrete(&self, dx: i32, dy: i32) -> Result<()> {
+        eis_common::eis_pointer_axis_discrete(&self.context, &self.devices, dx, dy).await
+    }
+
     async fn notify_pointer_motion_relative(&self, dx: f64, dy: f64) -> Result<()> {
         eis_common::eis_pointer_motion_relative(&self.context, &self.devices, dx, dy).await
+    }
+
+    async fn stage_pointer_motion_relative(&self, dx: f64, dy: f64) -> Result<()> {
+        eis_common::stage_pointer_motion_relative(&self.devices, dx, dy).await
+    }
+
+    async fn stage_pointer_button(&self, button: i32, pressed: bool) -> Result<()> {
+        eis_common::stage_pointer_button(&self.devices, button, pressed).await
+    }
+
+    async fn stage_pointer_axis(&self, dx: f64, dy: f64) -> Result<()> {
+        eis_common::stage_pointer_axis(&self.devices, dx, dy).await
+    }
+
+    async fn stage_pointer_axis_discrete(&self, dx_120: i32, dy_120: i32) -> Result<()> {
+        // dx_120/dy_120 are already in 120-units-per-detent -- the same
+        // convention ei_scroll.scroll_discrete uses, passed straight
+        // through (mirrors notify_pointer_axis_discrete above).
+        eis_common::stage_pointer_axis_discrete(&self.devices, dx_120, dy_120).await
+    }
+
+    async fn commit_input_batch(&self) -> Result<()> {
+        eis_common::commit_pointer_frame(&self.context, &self.devices).await
     }
 
     async fn notify_touch_down(&self, _stream_id: u32, slot: u32, x: f64, y: f64) -> Result<()> {

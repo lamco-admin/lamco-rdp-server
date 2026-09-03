@@ -23,11 +23,16 @@ use ironrdp_rdpsnd::{
     server::{NegotiatedFormat, RdpsndError, RdpsndServerHandler, RdpsndServerMessage},
 };
 use ironrdp_server::ServerEvent;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    audio::codecs::{AudioEncoder, OpusEncoderConfig},
+    audio::{
+        capture::{
+            AudioCaptureHandle, AudioFormat as CaptureFormat, CaptureConfig, spawn_audio_capture,
+        },
+        codecs::{AudioEncoder, OpusEncoderConfig},
+    },
     config::AudioConfig,
 };
 
@@ -64,6 +69,8 @@ pub struct PipeWireAudioHandler {
     event_sender: Option<mpsc::UnboundedSender<ServerEvent>>,
     node_id: Option<u32>,
     active: bool,
+    capture_stop: Option<oneshot::Sender<()>>,
+    pump: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl std::fmt::Debug for PipeWireAudioHandler {
@@ -107,24 +114,32 @@ impl PipeWireAudioHandler {
         }
 
         if audio_config.codec == "pcm" || audio_config.codec == "auto" {
+            // Advertise 44.1 kHz PCM first. It is the native rate of Windows
+            // audio endpoints, so mstsc plays it directly. Offering the 48 kHz
+            // capture rate first made mstsc select 48 kHz and then feed it to a
+            // 44.1 kHz endpoint without resampling: pitch dropped ~1.5 semitones
+            // (voices sounded deeper) and audio fell behind video ~5 s per minute
+            // (48000/44100 = 1.088). start() drives PipeWire capture at whatever
+            // rate is negotiated, so selecting 44.1 kHz resamples end to end.
+            let pcm_44100_bytes_per_sec = 44100 * channels as u32 * 2;
             format_specs.push(FormatSpec {
                 format_tag: WaveFormat::PCM,
                 channels,
-                sample_rate,
-                avg_bytes_per_sec: pcm_bytes_per_sec,
+                sample_rate: 44100,
+                avg_bytes_per_sec: pcm_44100_bytes_per_sec,
                 block_align,
                 bits_per_sample: 16,
                 extra_data: None,
             });
 
-            // 44.1kHz fallback for clients that only support CD-quality rates
+            // Also offer the configured capture rate (e.g. 48 kHz) as a secondary
+            // option for clients that resample correctly, but only when it differs.
             if sample_rate != 44100 {
-                let fallback_bytes_per_sec = 44100 * channels as u32 * 2;
                 format_specs.push(FormatSpec {
                     format_tag: WaveFormat::PCM,
                     channels,
-                    sample_rate: 44100,
-                    avg_bytes_per_sec: fallback_bytes_per_sec,
+                    sample_rate,
+                    avg_bytes_per_sec: pcm_bytes_per_sec,
                     block_align,
                     bits_per_sample: 16,
                     extra_data: None,
@@ -187,6 +202,8 @@ impl PipeWireAudioHandler {
             event_sender,
             node_id,
             active: false,
+            capture_stop: None,
+            pump: None,
         }
     }
 
@@ -300,20 +317,63 @@ impl RdpsndServerHandler for PipeWireAudioHandler {
             audio_format.format, audio_format.n_samples_per_sec, audio_format.n_channels
         );
 
-        match self.create_encoder(audio_format) {
-            Some(encoder) => {
-                debug!("Audio encoder created: {}", encoder.name());
-                self.selected_format = Some(audio_format.clone());
-                self.encoder = Some(encoder);
-                self.active = true;
-                Ok(())
-            }
+        let encoder = match self.create_encoder(audio_format) {
+            Some(encoder) => encoder,
             // create_encoder already logs the specific failure (unsupported
             // format tag, or the underlying codec constructor's error).
-            None => Err(Box::new(std::io::Error::other(
-                "audio encoder creation failed, see prior log for detail",
-            ))),
-        }
+            None => {
+                return Err(Box::new(std::io::Error::other(
+                    "audio encoder creation failed, see prior log for detail",
+                )));
+            }
+        };
+        debug!("Audio encoder created: {}", encoder.name());
+        self.selected_format = Some(audio_format.clone());
+        self.active = true;
+
+        let Some(sender) = self.event_sender.clone() else {
+            // Format is selected so negotiation completes, but with no channel
+            // back to the server there is nowhere to deliver captured audio, so
+            // capture does not start.
+            warn!("No event sender available; audio capture not started");
+            return Ok(());
+        };
+
+        let sample_rate = audio_format.n_samples_per_sec;
+        let channels = u32::from(audio_format.n_channels.max(1));
+        let frame_ms = self.audio_config.frame_ms.max(1);
+        // Interleaved sample count for one RDP wave frame. Opus requires exactly
+        // this many per encode; PCM/G711/ADPCM tolerate it. The pump timestamps
+        // each wave from wall-clock elapsed rather than counting frames.
+        let frame_len = ((sample_rate * frame_ms / 1000) * channels).max(channels) as usize;
+
+        let capture_config = CaptureConfig {
+            sample_rate,
+            channels,
+            format: CaptureFormat::I16,
+            buffer_frames: 1024,
+        };
+
+        // node_id is left as configured (currently None): lamco-pipewire sets
+        // stream.capture.sink=true, so a null target binds the default sink's
+        // monitor — the desktop audio output the client wants to hear.
+        let handle = match spawn_audio_capture(capture_config, self.node_id, 16) {
+            Ok(handle) => handle,
+            Err(e) => {
+                error!("Failed to start audio capture: {e:#}");
+                return Err(Box::new(std::io::Error::other(
+                    "audio capture start failed",
+                )));
+            }
+        };
+
+        let (stop_tx, stop_rx) = oneshot::channel();
+        let pump = tokio::spawn(audio_pump(handle, stop_rx, encoder, sender, frame_len));
+        self.capture_stop = Some(stop_tx);
+        self.pump = Some(pump);
+
+        info!("Audio capture started: {sample_rate}Hz, {channels}ch, {frame_ms}ms frames");
+        Ok(())
     }
 
     fn stop(&mut self) {
@@ -323,9 +383,72 @@ impl RdpsndServerHandler for PipeWireAudioHandler {
             return;
         }
         info!("Audio handler stopping");
+        // Signal the pump; it flips the capture stop flag and exits on its own.
+        // Detach rather than abort so the PipeWire thread is always told to stop
+        // even if the pump is mid-encode when the client goes away.
+        if let Some(stop_tx) = self.capture_stop.take() {
+            let _ = stop_tx.send(());
+        }
+        self.pump.take();
         self.active = false;
         self.selected_format = None;
         self.encoder = None;
+    }
+}
+
+/// Drains captured PCM into `frame_len`-sample chunks, encodes each, and hands
+/// the result to the server event loop as an RDPSND wave. Runs until the client
+/// stops audio (`stop_rx`), the capture stream ends, or the event channel closes.
+async fn audio_pump(
+    mut handle: AudioCaptureHandle,
+    mut stop_rx: oneshot::Receiver<()>,
+    mut encoder: AudioEncoder,
+    sender: mpsc::UnboundedSender<ServerEvent>,
+    frame_len: usize,
+) {
+    let start = std::time::Instant::now();
+    let mut pending: Vec<i16> = Vec::with_capacity(frame_len * 4);
+
+    loop {
+        tokio::select! {
+            biased;
+            _ = &mut stop_rx => break,
+            samples = handle.receiver.recv() => {
+                let Some(samples) = samples else { break };
+                pending.extend_from_slice(&samples.to_i16());
+
+                while pending.len() >= frame_len {
+                    let frame: Vec<i16> = pending.drain(..frame_len).collect();
+                    match encoder.encode_i16(&frame) {
+                        Ok(data) if !data.is_empty() => {
+                            // Timestamp each wave from wall-clock elapsed, not a
+                            // per-frame accumulator. The accumulator drifts behind
+                            // real time whenever capture or encode can't keep pace,
+                            // and the RDPSND server then drops the lagging waves as
+                            // stale (audible dropouts).
+                            let timestamp = start.elapsed().as_millis() as u32;
+                            let wave = RdpsndServerMessage::Wave(data, timestamp);
+                            if sender.send(ServerEvent::Rdpsnd(wave)).is_err() {
+                                handle.stop();
+                                return;
+                            }
+                        }
+                        Ok(_) => {}
+                        Err(e) => warn!("Audio encode error: {e}"),
+                    }
+                }
+            }
+        }
+    }
+
+    handle.stop();
+}
+
+impl Drop for PipeWireAudioHandler {
+    fn drop(&mut self) {
+        if let Some(stop_tx) = self.capture_stop.take() {
+            let _ = stop_tx.send(());
+        }
     }
 }
 

@@ -198,7 +198,7 @@ impl EncodingAdaptation {
 
 #[cfg(test)]
 #[expect(
-    clippy::unchecked_duration_subtraction,
+    clippy::unchecked_time_subtraction,
     reason = "tests run well after process start; Instant - 1s never underflows the monotonic clock"
 )]
 mod tests {

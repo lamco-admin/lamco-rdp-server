@@ -1,6 +1,6 @@
 name: lamco-rdp-server
 title: Lamco RDP Server
-version: '1.4.4'
+version: '1.4.5'
 summary: Native Wayland RDP server — Community Edition
 description: |
   Lamco RDP Server — Community Edition
@@ -26,14 +26,30 @@ base: core24
 grade: stable
 confinement: strict
 
+# The GUI starts the server with --dbus-service so it can reconnect to it, and
+# the server owns io.lamco.RdpServer on the session bus for that. Under strict
+# confinement owning a bus name needs a dbus slot; without it AppArmor denies the
+# bind and the server used to exit before listening (found 2026-09-02, present
+# since 1.4.4).
+slots:
+  rdp-server-dbus:
+    interface: dbus
+    bus: session
+    name: io.lamco.RdpServer
+
 platforms:
   amd64:
     build-on: [amd64]
     build-for: [amd64]
+  arm64:
+    build-on: [arm64]
+    build-for: [arm64]
 
 apps:
   lamco-rdp-server:
     command: bin/lamco-rdp-server
+    slots:
+      - rdp-server-dbus
     plugs:
       - network
       - network-bind
@@ -47,6 +63,8 @@ apps:
     command: bin/lamco-rdp-server-gui
     command-chain:
       - bin/gui-launch
+    slots:
+      - rdp-server-dbus
     plugs:
       - network
       - network-bind
@@ -76,13 +94,20 @@ parts:
 
   lamco-rdp-server:
     plugin: rust
-    source: https://github.com/lamco-admin/lamco-rdp-server/releases/download/v1.4.4/lamco-rdp-server-1.4.4.tar.xz
+    source: https://github.com/lamco-admin/lamco-rdp-server/releases/download/v1.4.5/lamco-rdp-server-1.4.5.tar.xz
     # Vendored tarball includes .cargo/config.toml + vendor/
     rust-cargo-parameters:
       - --frozen
       - --no-default-features
       - --features
-      - h264,libei,gui
+      - h264,vaapi,opus-libopus,libei,gui
+    # Thin LTO + more codegen units keep peak memory within the Launchpad
+    # remote-build workers (fat LTO over 886 vendored crates peaks 8-10GB).
+    # Same override the RPM Fusion / AUR / OBS channels use; it overrides the
+    # tarball's [profile.release] without editing the source.
+    build-environment:
+      - CARGO_PROFILE_RELEASE_LTO: "thin"
+      - CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "4"
     build-packages:
       - build-essential
       - pkg-config
@@ -94,6 +119,7 @@ parts:
       - libfuse3-dev
       - libdbus-1-dev
       - libssl-dev
+      - libva-dev
     stage-packages:
       - libpipewire-0.3-0
       - libxkbcommon0
@@ -111,3 +137,8 @@ parts:
       - fonts-dejavu-core   # fallback font so text renders under strict confinement
       - mesa-vulkan-drivers # wgpu Vulkan ICD
       - libgl1-mesa-dri     # GL/GLES fallback ICD
+      - libva2              # VA-API loader (cros-libva is a hard link-time dep once vaapi is enabled)
+      - libva-drm2
+      - i965-va-driver                  # Intel VA-API driver (pre-Broadwell iGPUs)
+      - intel-media-va-driver-non-free  # Intel VA-API driver (Broadwell+, H.264 encode)
+      - mesa-va-drivers                 # AMD (radeonsi) VA-API driver

@@ -44,7 +44,7 @@ Community Edition runs fully sandboxed via XDG Desktop Portals. Clipboard is sup
 | **RPM** | openSUSE Tumbleweed | `sudo zypper install ./lamco-rdp-server-*.suse-tw.x86_64.rpm` |
 | **RPM** | RHEL 9 / AlmaLinux 9 | `sudo dnf install ./lamco-rdp-server-*.el9.x86_64.rpm` |
 | **DEB** | Debian 13 (Trixie) | `sudo dpkg -i lamco-rdp-server_*_amd64.deb` |
-| **Source** | Any (Rust 1.88+) | `cargo build --release --offline` |
+| **Source** | Any (Rust 1.94+) | `cargo build --release --offline` |
 
 Native installs provide full bidirectional clipboard, hardware GPU encoding, and all compositor integration strategies. Free for single-server use and non-profits; commercial license required for multi-server deployments.
 
@@ -60,13 +60,13 @@ The source tarball on the Releases page includes vendored dependencies for offli
 | **Sway / River** (wlroots) | AVC444 | wlr-direct | wl-clipboard | Native only |
 | **Hyprland** (official portal) | AVC444 | wlr-direct | wl-clipboard | Native only |
 | **Hyprland** (hypr-remote community portal) | AVC444 | Portal | Portal | Flatpak or native |
-| **COSMIC** (System76) | AVC420 | /dev/uinput | wlr-direct | Flatpak or native |
+| **COSMIC** (System76) | AVC420 | keyboard + `/dev/uinput` pointer (interim) | data-control | Native (Flatpak is video-only) |
 
 **Notes:**
 - GNOME 40-44 (RHEL 9) lacks Portal clipboard because RemoteDesktop v1 predates the clipboard API.
 - KDE Portal clipboard has a known bug ([KDE#515465](https://bugs.kde.org/show_bug.cgi?id=515465)) on Plasma 6.3.90-6.5.5; fixed in 6.6+. Klipper D-Bus cooperation works on all KDE versions as a fallback.
 - wlroots compositors need native install for input and clipboard; Flatpak provides video-only on these desktops.
-- COSMIC provides video-only (no RemoteDesktop portal yet). Blocked on upstream [Smithay libei](https://github.com/Smithay/smithay/pull/1388).
+- COSMIC has no RemoteDesktop portal yet (cosmic-comp #2442, xdg-desktop-portal-cosmic #317), so input runs through the server's own portal-generic path: keyboard injection plus a `/dev/uinput` pointer, which needs a native install. When COSMIC's portal lands the server switches to libei automatically.
 
 For the full compatibility matrix with portal versions, session persistence, and deployment recommendations, see the [product page](https://www.lamco.ai/products/lamco-rdp-server/).
 
@@ -87,7 +87,7 @@ Then connect from any RDP client (Windows Remote Desktop, FreeRDP, Remmina, etc.
 
 ## Building from Source
 
-**Requirements:** Rust 1.88+, OpenSSL dev, PipeWire dev, `nasm` (optional, 3x faster OpenH264)
+**Requirements:** Rust 1.94+, OpenSSL dev, PipeWire dev, `nasm` (optional, 3x faster OpenH264)
 
 ```bash
 cargo build --release                                    # software H.264
@@ -141,7 +141,7 @@ lamco-rdp-server is built on a set of published Rust crates available on [crates
 
 These crates are MIT/Apache-2.0 licensed. See [lamco.ai/open-source](https://www.lamco.ai/open-source/) for documentation and details.
 
-The server also depends on a [fork of IronRDP](https://github.com/lamco-admin/IronRDP) that adds my own innovations to IronRDP before they're published. Contributions to upstream IronRDP are in progress.
+The server also depends on a [fork of IronRDP](https://github.com/lamco-admin/IronRDP) that carries my own IronRDP work before it is published upstream, and the `ironrdp-egfx` crate that Devolutions does not yet publish to crates.io. As of 1.4.5 the fork is pinned to upstream master with no local commits; contributions to upstream IronRDP are ongoing.
 
 ## Troubleshooting
 
@@ -185,7 +185,7 @@ The Community Edition fully embraces the Flatpak/Snap sandbox philosophy, using 
 | Corporate | $1,499/yr | Up to 100 | Native/distro |
 | Enterprise | Custom | Unlimited | Native/distro |
 
-**Converts** to Apache License 2.0 on 2028-12-31.
+**Converts** to Apache License 2.0 on 2029-06-01.
 
 See [lamco.ai](https://www.lamco.ai) for full pricing and licensing details.
 

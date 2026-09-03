@@ -50,6 +50,22 @@ type SharedClipboardProvider =
 type PendingPortalRequests =
     Arc<RwLock<std::collections::VecDeque<(u32, String, std::time::Instant)>>>;
 
+/// Which data-control eager-fetch this response corresponds to.
+///
+/// Data-control's `send()` is synchronous at the Wayland protocol level, so formats it
+/// serves must be fetched from the RDP client and cached before the compositor ever asks.
+/// IronRDP only supports one outstanding data request at a time, so these are fetched one
+/// at a time via `pending_eager_fetches`, chained from `handle_rdp_data_response`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum EagerFetchKind {
+    Text,
+    Html { format_id: u32 },
+    Image { format_id: u32 },
+}
+
+/// Queue of eager fetches still needed for the current data-control announcement.
+type PendingEagerFetches = Arc<RwLock<std::collections::VecDeque<EagerFetchKind>>>;
+
 /// Server event sender for RDP clipboard messages
 type ServerEventSender = Arc<RwLock<Option<mpsc::UnboundedSender<ironrdp_server::ServerEvent>>>>;
 
@@ -274,6 +290,11 @@ pub struct ClipboardOrchestrator {
     pending_portal_requests:
         Arc<RwLock<std::collections::VecDeque<(u32, String, std::time::Instant)>>>,
 
+    /// Queue of data-control eager fetches (HTML/image) still needed for the current
+    /// announcement, chained one at a time behind `pending_portal_requests`. See
+    /// `EagerFetchKind`.
+    pending_eager_fetches: PendingEagerFetches,
+
     /// Server event sender for sending clipboard requests to IronRDP
     /// Set by LamcoCliprdrFactory after ServerEvent sender is available
     server_event_sender: Arc<RwLock<Option<mpsc::UnboundedSender<ironrdp_server::ServerEvent>>>>,
@@ -345,6 +366,17 @@ pub struct ClipboardOrchestrator {
     /// connect-start and `RdpDisconnect`. Announces (`SendInitiateCopy`) are
     /// always legal and are never gated on this.
     rdp_ready: Arc<AtomicBool>,
+
+    /// True while the Linux selection belongs to us because the remote copied.
+    ///
+    /// Announcing the remote's formats makes this process the selection owner,
+    /// and a compositor will not let an owner read its own selection back:
+    /// Mutter answers `SelectionRead` with "Tried to read own selection". So a
+    /// Linux→Windows data request while this is set must be served from what
+    /// the remote gave us, never by asking the compositor. Ownership persists
+    /// until a local application copies something, which arrives as
+    /// `PortalFormatsAvailable` and clears this.
+    remote_owns_selection: Arc<AtomicBool>,
 }
 
 // File transfer state (FileTransferState, IncomingFile, OutgoingFile) has been
@@ -523,6 +555,7 @@ impl ClipboardOrchestrator {
             event_tx,
             shutdown_tx: None,
             pending_portal_requests: Arc::new(RwLock::new(std::collections::VecDeque::new())),
+            pending_eager_fetches: Arc::new(RwLock::new(std::collections::VecDeque::new())),
             server_event_sender: Arc::new(RwLock::new(None)), // Set by WrdCliprdrFactory
             clipboard_provider: Arc::new(RwLock::new(None)),
             current_rdp_formats: Arc::new(RwLock::new(Vec::new())),
@@ -539,6 +572,7 @@ impl ClipboardOrchestrator {
             task_handles: Arc::clone(&task_handles),
             file_transfer_backend,
             rdp_ready: Arc::new(AtomicBool::new(false)),
+            remote_owns_selection: Arc::new(AtomicBool::new(false)),
         };
 
         manager.start_event_processor(event_rx);
@@ -852,6 +886,7 @@ impl ClipboardOrchestrator {
         let config = self.config.clone();
         let clipboard_provider = Arc::clone(&self.clipboard_provider);
         let pending_portal_requests = Arc::clone(&self.pending_portal_requests);
+        let pending_eager_fetches = Arc::clone(&self.pending_eager_fetches);
         let server_event_sender = Arc::clone(&self.server_event_sender);
         let current_rdp_formats = Arc::clone(&self.current_rdp_formats);
         let local_advertised_formats = Arc::clone(&self.local_advertised_formats);
@@ -863,6 +898,7 @@ impl ClipboardOrchestrator {
         let file_transfer_backend = Arc::clone(&self.file_transfer_backend);
         let transfer_data_cache = Arc::clone(&self.transfer_data_cache);
         let rdp_ready = Arc::clone(&self.rdp_ready);
+        let remote_owns_selection = Arc::clone(&self.remote_owns_selection);
         let health_reporter = self.health_reporter.clone();
 
         let (shutdown_tx, mut shutdown_rx) = mpsc::channel::<()>(1);
@@ -882,6 +918,7 @@ impl ClipboardOrchestrator {
                             &config,
                             &clipboard_provider,
                             &pending_portal_requests,
+                            &pending_eager_fetches,
                             &server_event_sender,
                             &current_rdp_formats,
                             &local_advertised_formats,
@@ -893,6 +930,7 @@ impl ClipboardOrchestrator {
                             &file_transfer_backend,
                             &transfer_data_cache,
                             &rdp_ready,
+                            &remote_owns_selection,
                         ).await {
                             let err_msg = format!("{e}");
                             error!("Error handling clipboard event: {err_msg}");
@@ -938,6 +976,7 @@ impl ClipboardOrchestrator {
         _config: &ClipboardOrchestratorConfig,
         clipboard_provider: &SharedClipboardProvider,
         pending_portal_requests: &PendingPortalRequests,
+        pending_eager_fetches: &PendingEagerFetches,
         server_event_sender: &ServerEventSender,
         current_rdp_formats: &Arc<RwLock<Vec<ClipboardFormat>>>,
         local_advertised_formats: &Arc<RwLock<Vec<ClipboardFormat>>>,
@@ -953,6 +992,7 @@ impl ClipboardOrchestrator {
         >,
         transfer_data_cache: &Arc<RwLock<HashMap<String, Vec<u8>>>>,
         rdp_ready: &Arc<AtomicBool>,
+        remote_owns_selection: &Arc<AtomicBool>,
     ) -> Result<()> {
         match event {
             ClipboardEvent::RdpReady => {
@@ -1088,7 +1128,9 @@ impl ClipboardOrchestrator {
                     cooperation_coordinator,
                     server_event_sender,
                     pending_portal_requests,
+                    pending_eager_fetches,
                     local_advertised_formats,
+                    remote_owns_selection,
                 )
                 .await
             }
@@ -1103,6 +1145,8 @@ impl ClipboardOrchestrator {
                     local_advertised_formats,
                     file_transfer_backend,
                     cooperation_content_cache,
+                    transfer_data_cache,
+                    remote_owns_selection,
                 )
                 .await
             }
@@ -1110,10 +1154,13 @@ impl ClipboardOrchestrator {
             ClipboardEvent::RdpDataResponse(data) => {
                 Self::handle_rdp_data_response(
                     data,
+                    converter,
                     sync_manager,
                     transfer_engine,
                     clipboard_provider,
                     pending_portal_requests,
+                    pending_eager_fetches,
+                    _config,
                     file_transfer_backend,
                     server_event_sender,
                     transfer_data_cache,
@@ -1194,6 +1241,7 @@ impl ClipboardOrchestrator {
                     reannounce_count,
                     file_transfer_backend,
                     rdp_ready,
+                    remote_owns_selection,
                 )
                 .await
             }

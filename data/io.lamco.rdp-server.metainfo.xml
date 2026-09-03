@@ -100,6 +100,21 @@
   </supports>
 
   <releases>
+    <release version="1.4.5" date="2026-09-02">
+      <url type="details">https://github.com/lamco-admin/lamco-rdp-server/releases/tag/v1.4.5</url>
+      <description>
+        <p>Area capture on GNOME, hardware H.264 encoding in the EGFX pipeline, working desktop audio, server-drawn cursors and multitouch, and a long reliability pass across GNOME, KDE, wlroots, and COSMIC.</p>
+        <ul>
+          <li>Area capture on GNOME keeps the picture moving while a fullscreen or maximised video plays.</li>
+          <li>VA-API hardware encoding now drives EGFX H.264 (AVC444 and AVC420), with software fallback.</li>
+          <li>Desktop audio capture now starts and stays in sync, including on mstsc.</li>
+          <li>Server-driven cursor shapes with prediction, multitouch over MS-RDPEI, and the client's keyboard layout applied to the session.</li>
+          <li>Hyper-V Enhanced Session Mode connects with the new rdp security mode, and libei video persists on KDE.</li>
+          <li>The server no longer crashes when a client disconnects, and a configured listen port is no longer reset to 3389.</li>
+          <li>A GNOME server no longer stops accepting connections after a client connect, and the first connection after an audio-enabled client disconnects no longer fails.</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.4.4" date="2026-07-04">
       <url type="details">https://github.com/lamco-admin/lamco-rdp-server/releases/tag/v1.4.4</url>
       <description>

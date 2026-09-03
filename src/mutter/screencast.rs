@@ -127,6 +127,53 @@ impl MutterScreenCastSession<'_> {
         Ok(path)
     }
 
+    /// Record a rectangular area of the stage.
+    ///
+    /// Immune to the direct-scanout freeze that afflicts `RecordMonitor`
+    /// (GNOME/mutter#3903). Mutter's area source re-paints the stage into its
+    /// own framebuffer rather than copying from the scanout buffer, so it never
+    /// has to care whether a fullscreen surface has been handed to the display
+    /// plane. Its `before_stage_painted()` carries no `uses_dma_bufs` gate on
+    /// either gnome-49 or gnome-50, which is the gate mutter!5276 adds to the
+    /// monitor source.
+    ///
+    /// The trade is that the area and scale are fixed when the stream is
+    /// created and are never updated afterwards, so a resolution, scale or
+    /// layout change requires tearing the stream down and creating a new one.
+    ///
+    /// Not exposed by xdg-desktop-portal-gnome: this exists only on Mutter's
+    /// private interface.
+    ///
+    /// # Arguments
+    ///
+    /// * `x`, `y`, `width`, `height` - the area in stage coordinates
+    /// * `properties` - Recording properties (cursor mode, etc.)
+    ///
+    /// # Returns
+    ///
+    /// Object path to the stream
+    pub async fn record_area(
+        &self,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        properties: HashMap<String, Value<'_>>,
+    ) -> Result<OwnedObjectPath> {
+        let response = self
+            .proxy
+            .call_method("RecordArea", &(x, y, width, height, properties))
+            .await
+            .context("Failed to call RecordArea")?;
+
+        let body = response.body();
+        let path: OwnedObjectPath = body
+            .deserialize()
+            .context("Failed to deserialize RecordArea response")?;
+
+        Ok(path)
+    }
+
     /// Record a virtual monitor (for headless operation)
     ///
     /// # Arguments

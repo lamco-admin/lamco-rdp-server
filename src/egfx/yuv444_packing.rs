@@ -67,7 +67,7 @@ impl Yuv420Frame {
 
     /// Convert YUV420 back to BGRA for feeding to OpenH264
     ///
-    /// OpenH264's `YUVBuffer::from_rgb_source()` expects BGRA input and does
+    /// OpenH264's `YUVBuffer::from_bgra8_source()` expects BGRA input and does
     /// its own YUV420 conversion internally. Since we've already computed
     /// YUV420, we must convert back to BGRA.
     ///

@@ -28,6 +28,21 @@ pub mod fuse_backend;
 pub mod staging_backend;
 pub mod strategy;
 
+/// True when `path` lives under a `lamco-clipboard-fuse-<pid>` mount owned by a
+/// *different* server process — a stale mount left in the desktop clipboard by a
+/// prior instance (issue #58). Such a URI resolves to a dead path, so callers
+/// drop it rather than offer it to the RDP client.
+pub fn is_stale_foreign_fuse_path(path: &Path) -> bool {
+    let ours = std::process::id();
+    path.components().any(|c| {
+        c.as_os_str()
+            .to_str()
+            .and_then(|s| s.strip_prefix("lamco-clipboard-fuse-"))
+            .and_then(|pid| pid.parse::<u32>().ok())
+            .is_some_and(|pid| pid != ours)
+    })
+}
+
 /// Descriptor of a file available for transfer from Windows.
 ///
 /// Bridges between the CLIPRDR FileGroupDescriptorW (parsed from wire format)

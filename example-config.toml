@@ -1,5 +1,9 @@
 # lamco-rdp-server Configuration Example
 #
+# Values here are checked against Config::default() by
+# tests::example_config_matches_current_schema (src/config/mod.rs) — if you
+# change a default, update this file in the same commit or that test fails.
+#
 # Location depends on deployment:
 # - Native (root): /etc/lamco-rdp-server/config.toml
 # - Native (user): ~/.config/lamco-rdp-server/config.toml
@@ -14,8 +18,11 @@
 # Server Settings
 # =============================================================================
 [server]
-# Listen address and port (format: IP:PORT)
-listen_addr = "0.0.0.0:3389"
+# Listen address and port (format: IP:PORT). "[::]:3389" is the default and
+# dual-stacks on Linux (net.ipv6.bindv6only=0): one socket accepts both IPv6
+# and IPv4 clients (IPv4 arrives as an IPv4-mapped address). Use "0.0.0.0:3389"
+# to force IPv4-only.
+listen_addr = "[::]:3389"
 # Maximum concurrent connections (0 = unlimited)
 max_connections = 10
 # Session timeout in seconds (0 = no timeout)
@@ -115,6 +122,35 @@ opus_bitrate = 64000
 protocol = "auto"
 # Allow fallback to alternative capture protocol if preferred is unavailable
 allow_fallback = true
+# How a monitor is recorded on GNOME: "auto", "area", or "monitor".
+#
+# Mutter stops recording a monitor stream entirely while a fullscreen or
+# maximised surface is handed to direct scanout, so a video freezes the remote
+# picture for its whole duration (GNOME/mutter#3903, fix in mutter!5276, not yet
+# released). Recording an area of the stage instead re-paints rather than
+# copying the scanout buffer, and keeps producing frames.
+#
+# "auto" records an area when the compositor gives us a rectangle and is driving
+# a single monitor, and the monitor otherwise. An area's rectangle is fixed when
+# the stream is created, so the server rebuilds the stream when the host's
+# resolution, scale or layout changes.
+gnome_record_mode = "auto"
+
+# Mark a headless GNOME session's virtual monitor as part of the platform.
+#
+# Sets "is-platform" on Mutter's RecordVirtual, which Mutter documents as the
+# output not being "interpreted as if the screen is shared, but more
+# transparently as if it was a real monitor". For a headless server the virtual
+# monitor genuinely is the session's only display, so that is the accurate
+# description, and it suppresses the screen-sharing treatment GNOME otherwise
+# applies.
+#
+# Off by default, which is the behaviour before this setting existed. It only
+# affects headless sessions, since is-platform is a RecordVirtual property that
+# monitor and area sessions never send. Mutter builds that predate the property
+# ignore it rather than failing.
+gnome_virtual_is_platform = false
+
 # Ext-capture handshake timeout in milliseconds
 # How long to wait for the compositor to deliver constraint events after
 # requesting an ext-image-copy-capture session. Some compositors advertise
@@ -126,8 +162,9 @@ handshake_timeout_ms = 5000
 # Input Configuration
 # =============================================================================
 [input]
-# Use libei for input injection (Wayland native)
-use_libei = true
+# Input injection protocol: "auto" (compositor-preferred), "libei" (Wayland
+# native), or "wlr" (wlr-virtual-pointer/keyboard, wlroots compositors only)
+input_protocol = "auto"
 # Keyboard layout: "auto" (detect from client) or specific layout
 keyboard_layout = "auto"
 # Enable touch input support
@@ -205,10 +242,10 @@ zero_copy = true
 [performance.adaptive_fps]
 enabled = true
 min_fps = 5
-max_fps = 60
+max_fps = 30
 # Activity thresholds (fraction of screen changed)
-high_activity_threshold = 0.20
-medium_activity_threshold = 0.08
+high_activity_threshold = 0.3
+medium_activity_threshold = 0.1
 low_activity_threshold = 0.01
 
 # Latency tuning
@@ -218,8 +255,8 @@ mode = "balanced"
 interactive_max_delay_ms = 16
 balanced_max_delay_ms = 33
 quality_max_delay_ms = 100
-balanced_damage_threshold = 0.05
-quality_damage_threshold = 0.02
+balanced_damage_threshold = 0.02
+quality_damage_threshold = 0.05
 
 # =============================================================================
 # Logging Configuration
@@ -241,34 +278,36 @@ metrics = true
 [egfx]
 # Enable EGFX channel for improved graphics
 enabled = true
-# H.264 profile level: "4.1", "4.2", "5.0", "5.1"
-h264_level = "4.1"
+# H.264 profile level: "auto", "4.1", "4.2", "5.0", "5.1"
+h264_level = "auto"
 # H.264 bitrate in kbps
 h264_bitrate = 5000
 # ZGFX compression: "never", "auto", "always"
-zgfx_compression = "auto"
+zgfx_compression = "never"
 # Maximum frames in flight before waiting for ACK
-max_frames_in_flight = 4
+max_frames_in_flight = 3
 # Frame acknowledgement timeout in ms
-frame_ack_timeout = 500
+frame_ack_timeout = 5000
 # IDR frame interval for recovery (seconds)
 periodic_idr_interval = 5
 # Codec selection: "avc420", "avc444", "auto"
 codec = "auto"
 # Quality parameters (lower = better quality, larger files)
-qp_min = 18
-qp_max = 36
+qp_min = 10
+qp_max = 40
 qp_default = 23
 # AVC444 for full chroma (better color accuracy)
 avc444_enabled = true
 avc444_aux_bitrate_ratio = 0.5
-color_matrix = "BT709"
-color_range = "limited"
+color_matrix = "auto"
+color_range = "auto"
 # Aux omission optimization
 avc444_enable_aux_omission = true
-avc444_max_aux_interval = 5
-avc444_aux_change_threshold = 0.01
-avc444_force_aux_idr_on_return = true
+avc444_max_aux_interval = 30
+avc444_aux_change_threshold = 0.05
+# Must be false: forcing an IDR on aux-stream return only makes sense with a
+# second encoder instance to force. A single encoder can't honor this.
+avc444_force_aux_idr_on_return = false
 
 # Encoding adaptation: closed-loop QP adjustment from EGFX client feedback.
 # When enabled, the server dynamically adjusts H.264 quality (QP) based on
@@ -298,24 +337,31 @@ severe_queue_threshold = 6
 # Enable damage tracking (highly recommended)
 enabled = true
 # Method: "pipewire", "diff", "hybrid"
-method = "hybrid"
+method = "diff"
 # Tile size for damage detection
-tile_size = 32
+tile_size = 16
 # Difference threshold to trigger update
-diff_threshold = 0.05
+diff_threshold = 0.01
 # Pixel threshold for change detection
-pixel_threshold = 4
+pixel_threshold = 1
 # Merge nearby damage regions within this distance
-merge_distance = 32
+merge_distance = 16
 # Minimum area to consider as damage
-min_region_area = 256
+min_region_area = 64
+# Percentage-point divergence between a compositor's damage-region hint and
+# the periodic pixel-diff calibration probe above which one sample counts
+# as "high divergence"
+compositor_hint_distrust_threshold_pp = 15.0
+# Consecutive high-divergence samples before compositor damage hints are
+# distrusted for the rest of the connection (falls back to pixel-diff)
+compositor_hint_distrust_consecutive_samples = 3
 
 # =============================================================================
 # Hardware Encoding Configuration
 # =============================================================================
 [hardware_encoding]
-# Enable hardware encoding (VA-API, NVENC)
-enabled = true
+# Enable hardware encoding (VA-API, NVENC, Vulkan Video)
+enabled = false
 # VA-API device path
 vaapi_device = "/dev/dri/renderD128"
 # Enable DMA-BUF zero-copy capture
@@ -325,7 +371,11 @@ fallback_to_software = true
 # Quality preset: "speed", "balanced", "quality"
 quality_preset = "balanced"
 # Prefer NVENC over VA-API if available
-prefer_nvenc = false
+prefer_nvenc = true
+# Backend probe order when multiple hardware encoders are available
+backend_priority = ["vulkan-video", "nvenc", "vaapi"]
+# Vulkan device selection: "auto" or an explicit device index/name
+vulkan_device = "auto"
 
 # =============================================================================
 # Display Configuration
@@ -337,9 +387,24 @@ allow_resize = true
 # Example: ["1920x1080", "2560x1440", "3840x2160"]
 allowed_resolutions = []
 # Enable DPI-aware scaling
-dpi_aware = true
-# Allow rotation
-allow_rotation = true
+dpi_aware = false
+# Frame transform applied to captured frames: "auto", "none", or an explicit
+# rotation/flip (compositor-dependent)
+frame_transform = "auto"
+# Read per-output HDR/color state via wp-color-management (for HDR-aware
+# encoding decisions). No effect if the compositor lacks the protocol.
+color_management = true
+# Read wlroots output heads/modes via zwlr-output-management (wlroots
+# compositors only).
+output_management = true
+# On a client resize, drive a real wlroots output-mode change so the source
+# output physically switches resolution (needs output_management). If false,
+# only the capture is re-created.
+resize_drives_output_mode = true
+# Apply HDR->SDR tone mapping to captured frames when the source is HDR. Off by
+# default: enable only if your compositor sends PQ/HLG pixels over the capture
+# stream (many tone-map to SDR themselves, where this would wash the image out).
+hdr_tone_mapping = false
 
 # =============================================================================
 # Advanced Video Configuration
@@ -348,11 +413,11 @@ allow_rotation = true
 # Enable frame skipping under load
 enable_frame_skip = true
 # Scene change threshold for IDR frames
-scene_change_threshold = 0.30
+scene_change_threshold = 0.7
 # Intra refresh interval (frames)
-intra_refresh_interval = 60
+intra_refresh_interval = 300
 # Enable adaptive quality based on network
-enable_adaptive_quality = true
+enable_adaptive_quality = false
 
 # =============================================================================
 # Cursor Configuration
@@ -363,35 +428,35 @@ mode = "metadata"
 # Auto-select mode based on latency
 auto_mode = true
 # Latency threshold for predictive mode (ms)
-predictive_latency_threshold_ms = 50
+predictive_latency_threshold_ms = 100
 # Cursor update rate (Hz)
 cursor_update_fps = 60
 
 # Cursor predictor settings (for predictive mode)
 [cursor.predictor]
-history_size = 5
-lookahead_ms = 50
-velocity_smoothing = 0.3
-acceleration_smoothing = 0.1
+history_size = 8
+lookahead_ms = 50.0
+velocity_smoothing = 0.4
+acceleration_smoothing = 0.2
 max_prediction_distance = 100
-min_velocity_threshold = 5
+min_velocity_threshold = 50.0
 stop_convergence_rate = 0.5
 
 # =============================================================================
 # Video Pipeline Configuration (Advanced)
 # =============================================================================
 [video_pipeline.processor]
-target_fps = 60
-max_queue_depth = 4
+target_fps = 30
+max_queue_depth = 30
 adaptive_quality = true
-damage_threshold = 0.01
+damage_threshold = 0.05
 drop_on_full_queue = true
 enable_metrics = true
 
 [video_pipeline.dispatcher]
-channel_size = 8
+channel_size = 30
 priority_dispatch = true
-max_frame_age_ms = 100
+max_frame_age_ms = 150
 enable_backpressure = true
 high_water_mark = 0.8
 low_water_mark = 0.5
@@ -400,7 +465,7 @@ load_balancing = true
 [video_pipeline.converter]
 buffer_pool_size = 8
 enable_simd = true
-damage_threshold = 0.01
+damage_threshold = 0.75
 enable_statistics = true
 
 # =============================================================================
@@ -444,9 +509,23 @@ display_expanded = true
 advanced_video_expanded = false
 cursor_expanded = true
 cursor_predictor_expanded = false
+multimon_expanded = false
+logging_expanded = false
 # Log viewer preferences
 log_auto_scroll = true
 log_filter_level = "info"
 # Close behavior: true = closing GUI stops server (default)
 #                 false = GUI closes but server keeps running (detach mode)
 close_stops_server = true
+
+# =============================================================================
+# Diagnostics (troubleshooting only — not exposed in the GUI)
+# =============================================================================
+# These carry real cost: decode_self_test adds 10-20% CPU overhead and defeats
+# adaptive FPS; dump_h264_to has no size cap and can fill a disk if left on.
+# Enable only while actively debugging an encoder issue, then turn back off.
+[diagnostics]
+# Verify encoder output by decoding every frame server-side
+decode_self_test = false
+# Write the raw H.264 bitstream to this file for offline inspection
+# dump_h264_to = "/tmp/lamco-rdp-server-h264.dump"

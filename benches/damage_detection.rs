@@ -3,7 +3,9 @@
 //! Measures performance of tile-based frame comparison and region detection
 //! at various resolutions.
 
-use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
+use std::hint::black_box;
+
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use lamco_rdp_server::damage::{DamageConfig, DamageDetector, DamageRegion};
 
 /// Generate test BGRA data with a gradient pattern

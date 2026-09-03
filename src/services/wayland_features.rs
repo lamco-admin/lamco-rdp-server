@@ -216,6 +216,16 @@ pub enum WaylandFeature {
         damage_supported: bool,
     },
 
+    /// ext-image-copy-capture-v1 protocol (standardized wlr-screencopy successor)
+    ExtImageCopyCapture {
+        /// Protocol version
+        version: u32,
+        /// Supports DMA-BUF output
+        dmabuf_supported: bool,
+        /// Supports damage tracking
+        damage_supported: bool,
+    },
+
     /// wlr-direct input protocols (virtual keyboard/pointer)
     WlrDirectInput {
         /// Virtual keyboard protocol version
@@ -306,6 +316,7 @@ impl WaylandFeature {
             Self::CredentialStorage { .. } => "cred-storage",
             Self::UnattendedAccess { .. } => "unattended",
             Self::WlrScreencopy { .. } => "wlr-screencopy",
+            Self::ExtImageCopyCapture { .. } => "ext-image-copy-capture",
             Self::WlrDirectInput { .. } => "wlr-direct-input",
             Self::LibeiInput { .. } => "libei-input",
             // Authentication
@@ -417,6 +428,16 @@ impl std::fmt::Display for WaylandFeature {
                 write!(
                     f,
                     "wlr-screencopy(v{version}, dmabuf={dmabuf_supported}, damage={damage_supported})"
+                )
+            }
+            Self::ExtImageCopyCapture {
+                version,
+                dmabuf_supported,
+                damage_supported,
+            } => {
+                write!(
+                    f,
+                    "ext-image-copy-capture(v{version}, dmabuf={dmabuf_supported}, damage={damage_supported})"
                 )
             }
             Self::WlrDirectInput {

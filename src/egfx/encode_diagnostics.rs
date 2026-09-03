@@ -57,6 +57,7 @@ impl EncodeDiagnostics {
     ///
     /// - `dump_path = Some(p)` opens (creates / appends) `p` for raw frame writes.
     /// - `decode_self_test = true` initializes the in-process decoder.
+    ///
     /// Either or both may be enabled independently.
     pub fn new(dump_path: Option<&Path>, decode_self_test: bool) -> Result<Self> {
         let (dump_file, dump_path_owned) = match dump_path {

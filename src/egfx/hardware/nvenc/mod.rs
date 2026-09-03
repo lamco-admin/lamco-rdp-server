@@ -98,7 +98,7 @@ impl NvencPreset {
         }
     }
 
-    fn to_guid(&self) -> GUID {
+    fn to_guid(self) -> GUID {
         match self {
             Self::P1 => NV_ENC_PRESET_P1_GUID,
             Self::P2 => NV_ENC_PRESET_P2_GUID,
@@ -136,7 +136,7 @@ impl NvencTuning {
         }
     }
 
-    fn to_nvenc_tuning(&self) -> NV_ENC_TUNING_INFO {
+    fn to_nvenc_tuning(self) -> NV_ENC_TUNING_INFO {
         match self {
             Self::Default => NV_ENC_TUNING_INFO::NV_ENC_TUNING_INFO_HIGH_QUALITY,
             Self::LowLatency => NV_ENC_TUNING_INFO::NV_ENC_TUNING_INFO_LOW_LATENCY,
@@ -181,12 +181,24 @@ pub struct NvencEncoder {
     height: u32,
 
     /// Quality preset
+    #[expect(
+        dead_code,
+        reason = "captured at session setup for diagnostics and for the reconfigure path that is not wired yet"
+    )]
     preset: QualityPreset,
 
     /// NVENC preset (P1-P7)
+    #[expect(
+        dead_code,
+        reason = "captured at session setup for diagnostics and for the reconfigure path that is not wired yet"
+    )]
     nvenc_preset: NvencPreset,
 
     /// NVENC tuning mode
+    #[expect(
+        dead_code,
+        reason = "captured at session setup for diagnostics and for the reconfigure path that is not wired yet"
+    )]
     tuning: NvencTuning,
 
     /// Frame counter
@@ -202,6 +214,10 @@ pub struct NvencEncoder {
     stats: HardwareEncoderStats,
 
     /// Color space configuration for VUI signaling
+    #[expect(
+        dead_code,
+        reason = "captured at session setup for diagnostics and for the reconfigure path that is not wired yet"
+    )]
     color_space: ColorSpaceConfig,
 
     /// NVENC session (owns the encoder) - Boxed to prevent move-invalidation.
@@ -306,7 +322,7 @@ impl NvencEncoder {
         preset: QualityPreset,
     ) -> HardwareEncoderResult<Self> {
         // Validate dimensions
-        if width == 0 || height == 0 || width % 2 != 0 || height % 2 != 0 {
+        if width == 0 || height == 0 || !width.is_multiple_of(2) || !height.is_multiple_of(2) {
             return Err(HardwareEncoderError::InvalidDimensions {
                 width,
                 height,
@@ -327,8 +343,7 @@ impl NvencEncoder {
         // CudaContext::new already returns Arc<CudaContext>
         let cuda_ctx = CudaContext::new(0).map_err(|e| {
             HardwareEncoderError::from(NvencError::CudaDeviceNotFound(format!(
-                "Failed to create CUDA context: {}",
-                e
+                "Failed to create CUDA context: {e}"
             )))
         })?;
 
@@ -338,16 +353,14 @@ impl NvencEncoder {
         // Create NVENC encoder with CUDA device
         let encoder = Encoder::initialize_with_cuda(cuda_ctx_for_encoder).map_err(|e| {
             HardwareEncoderError::from(NvencError::ApiInitFailed(format!(
-                "Failed to initialize NVENC: {}",
-                e
+                "Failed to initialize NVENC: {e}"
             )))
         })?;
 
         // Check H.264 encoding support
         let encode_guids = encoder.get_encode_guids().map_err(|e| {
             HardwareEncoderError::from(NvencError::ApiInitFailed(format!(
-                "Failed to query encode GUIDs: {}",
-                e
+                "Failed to query encode GUIDs: {e}"
             )))
         })?;
 
@@ -363,8 +376,7 @@ impl NvencEncoder {
             .get_supported_input_formats(NV_ENC_CODEC_H264_GUID)
             .map_err(|e| {
                 HardwareEncoderError::from(NvencError::ApiInitFailed(format!(
-                    "Failed to query input formats: {}",
-                    e
+                    "Failed to query input formats: {e}"
                 )))
             })?;
 
@@ -391,8 +403,7 @@ impl NvencEncoder {
             )
             .map_err(|e| {
                 HardwareEncoderError::from(NvencError::ApiInitFailed(format!(
-                    "Failed to get preset config: {}",
-                    e
+                    "Failed to get preset config: {e}"
                 )))
             })?;
 
@@ -461,8 +472,7 @@ impl NvencEncoder {
                 .start_session(buffer_format, init_params)
                 .map_err(|e| {
                     HardwareEncoderError::from(NvencError::SessionCreationFailed(format!(
-                        "Failed to start session: {}",
-                        e
+                        "Failed to start session: {e}"
                     )))
                 })?,
         );
@@ -478,8 +488,7 @@ impl NvencEncoder {
         for i in 0..NUM_BUFFERS {
             let input = session.create_input_buffer().map_err(|e| {
                 HardwareEncoderError::from(NvencError::InputBufferError(format!(
-                    "Failed to create input buffer {}: {}",
-                    i, e
+                    "Failed to create input buffer {i}: {e}"
                 )))
             })?;
             // SAFETY: Buffer<'a> borrows the Session. We erase the lifetime to
@@ -494,8 +503,7 @@ impl NvencEncoder {
 
             let output = session.create_output_bitstream().map_err(|e| {
                 HardwareEncoderError::from(NvencError::BitstreamError(format!(
-                    "Failed to create output bitstream {}: {}",
-                    i, e
+                    "Failed to create output bitstream {i}: {e}"
                 )))
             })?;
             // SAFETY: Bitstream<'a> borrows the Session. Same lifetime erasure
@@ -615,7 +623,7 @@ impl HardwareEncoder for NvencEncoder {
         // This is critical - CUDA contexts are thread-local and must be bound
         // before any NVENC API calls, including in Drop
         self.cuda_ctx.bind_to_thread().map_err(|e| {
-            HardwareEncoderError::EncodeFailed(format!("Failed to bind CUDA context: {:?}", e))
+            HardwareEncoderError::EncodeFailed(format!("Failed to bind CUDA context: {e:?}"))
         })?;
 
         // Validate dimensions
@@ -644,7 +652,7 @@ impl HardwareEncoder for NvencEncoder {
         }
 
         // Determine if this should be an IDR frame
-        let is_idr = self.force_idr || (self.frame_count % self.gop_size as u64 == 0);
+        let is_idr = self.force_idr || self.frame_count.is_multiple_of(self.gop_size as u64);
 
         // Get current buffer index
         let buf_idx = self.current_buffer;
@@ -661,7 +669,7 @@ impl HardwareEncoder for NvencEncoder {
         // Lock input buffer and write BGRA data
         {
             let mut lock = input_buffer.lock().map_err(|e| {
-                HardwareEncoderError::EncodeFailed(format!("Failed to lock input buffer: {}", e))
+                HardwareEncoderError::EncodeFailed(format!("Failed to lock input buffer: {e}"))
             })?;
             // SAFETY: We've validated the data size matches the buffer size
             unsafe { lock.write(bgra_data) };
@@ -683,18 +691,13 @@ impl HardwareEncoder for NvencEncoder {
         // Encode the frame
         self.session
             .encode_picture(&mut **input_buffer, &mut **output_bitstream, params)
-            .map_err(|e| {
-                HardwareEncoderError::EncodeFailed(format!("NVENC encode failed: {}", e))
-            })?;
+            .map_err(|e| HardwareEncoderError::EncodeFailed(format!("NVENC encode failed: {e}")))?;
 
         // Lock output bitstream and read encoded data
         // Scoped to release the lock before processing (avoids borrow conflict with self.prepend_sps_pps)
         let (raw_data_copy, actual_is_idr) = {
             let lock = output_bitstream.lock().map_err(|e| {
-                HardwareEncoderError::EncodeFailed(format!(
-                    "Failed to lock output bitstream: {}",
-                    e
-                ))
+                HardwareEncoderError::EncodeFailed(format!("Failed to lock output bitstream: {e}"))
             })?;
 
             let raw_data = lock.data().to_vec();
@@ -793,16 +796,19 @@ pub fn is_nvidia_available() -> bool {
     false
 }
 
-#[expect(dead_code, reason = "diagnostic utility for NVENC troubleshooting")]
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "diagnostic utility for NVENC troubleshooting")
+)]
 fn get_nvidia_info() -> Option<(String, String)> {
     // Read driver version from /proc
     if let Ok(version) = std::fs::read_to_string("/proc/driver/nvidia/version") {
         // Parse version line like "NVRM version: NVIDIA UNIX x86_64 Kernel Module  535.154.05"
-        if let Some(line) = version.lines().next() {
-            if let Some(ver_start) = line.find("Module") {
-                let version_str = line[ver_start + 7..].trim().to_string();
-                return Some(("NVIDIA GPU".to_string(), version_str));
-            }
+        if let Some(line) = version.lines().next()
+            && let Some(ver_start) = line.find("Module")
+        {
+            let version_str = line[ver_start + 7..].trim().to_string();
+            return Some(("NVIDIA GPU".to_string(), version_str));
         }
     }
 
@@ -863,12 +869,10 @@ mod tests {
     fn test_nvidia_detection() {
         // This test may fail without actual hardware
         let available = is_nvidia_available();
-        println!("NVIDIA available: {}", available);
+        println!("NVIDIA available: {available}");
 
-        if available {
-            if let Some((gpu, version)) = get_nvidia_info() {
-                println!("GPU: {}, Driver: {}", gpu, version);
-            }
+        if available && let Some((gpu, version)) = get_nvidia_info() {
+            println!("GPU: {gpu}, Driver: {version}");
         }
     }
 

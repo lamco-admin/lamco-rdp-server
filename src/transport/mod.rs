@@ -20,7 +20,11 @@ pub mod socket_activation;
 #[cfg(feature = "websocket")]
 pub mod websocket;
 
-use std::{future::Future, pin::Pin, time::Instant};
+use std::{
+    future::Future,
+    pin::Pin,
+    time::{Duration, Instant},
+};
 
 use anyhow::Result;
 pub use config::TransportsConfig;
@@ -33,7 +37,7 @@ pub use socket_activation::{ActivatedFds, ActivationError};
 use tracing::{debug, error, info, warn};
 
 /// Configures and runs an `AcceptDispatcher` for a specific binary's runtime
-/// context (wlr-direct, qemu, future vsock-only, future WebSocket gateway, etc).
+/// context (desktop, qemu, future vsock-only, future WebSocket gateway, etc).
 ///
 /// Encapsulates the per-binary differences in: which transports to bind,
 /// what state the per-connection handler needs (event sink, PAM validator,
@@ -41,11 +45,13 @@ use tracing::{debug, error, info, warn};
 /// consumes this uniform interface and doesn't care which binary it's running
 /// inside.
 ///
-/// Implementors today: `crate::server::deployment::WlrDirectDeployment`.
+/// Implementors today: `crate::server::deployment::WlrDirectDeployment`, which
+/// despite its name backs every desktop-sharing session strategy (Portal,
+/// Mutter Direct, libei, wlr-direct alike) — not just the wlr-direct one.
 /// Phase 2 adds `crate::qemu::deployment::QemuDeployment`.
 #[async_trait::async_trait]
 pub trait AcceptDeployment: Send {
-    /// Diagnostic name surfaced in logs (e.g. `"wlr-direct"`, `"qemu"`).
+    /// Diagnostic name surfaced in logs (e.g. `"desktop"`, `"qemu"`).
     fn name(&self) -> &'static str;
 
     /// Bind all listeners for this deployment. Called once at dispatcher
@@ -119,7 +125,9 @@ impl AcceptDispatcher {
                 }
                 Some((_idx, name, result)) = accept_futures.next() => (name, result),
             };
-            // accept_futures is dropped here, releasing the &mut borrow on listeners.
+            // Explicit drop (not just end-of-scope) to release the &mut borrow
+            // on listeners before the drain step below needs its own &mut.
+            drop(accept_futures);
 
             match accept_result {
                 Ok(Some(accepted)) => {
@@ -172,6 +180,35 @@ impl AcceptDispatcher {
                     if matches!(action, PostConnectionAction::Stop) {
                         info!("Handler requested stop: terminating accept loop");
                         return Ok(());
+                    }
+
+                    // #57-adjacent: run_connection() above occupies this loop for
+                    // the entire session, so the OS backlog is the only thing
+                    // absorbing connection attempts that arrive while we're busy.
+                    // A client that gives up before we ever get back to accept()
+                    // leaves an unaccepted, already-CLOSE-WAIT socket sitting
+                    // there — under sustained rapid reconnects that fills the
+                    // backlog and starves every later attempt. Drain and
+                    // immediately drop anything that queued up during the
+                    // session we just finished, rather than serving each one a
+                    // full (likely-abandoned) connection attempt in turn.
+                    // Bounded so a genuine connection flood can't stall the
+                    // loop indefinitely; each attempt costs at most 1ms.
+                    let mut drained = 0u32;
+                    'drain: for l in listeners.iter_mut() {
+                        for _ in 0..32 {
+                            match tokio::time::timeout(Duration::from_millis(1), l.accept()).await {
+                                Ok(Ok(Some(_))) => drained += 1,
+                                _ => continue 'drain,
+                            }
+                        }
+                    }
+                    if drained > 0 {
+                        warn!(
+                            deployment = dep_name,
+                            drained,
+                            "Dropped stale connection attempts queued while busy with the prior session"
+                        );
                     }
                 }
                 Ok(None) => {

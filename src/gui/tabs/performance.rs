@@ -1,6 +1,7 @@
 //! Performance Configuration Tab
 //!
-//! Threading, adaptive FPS, and latency governor settings.
+//! Threading, damage tracking, adaptive FPS, latency governor, and metrics
+//! exposure settings.
 
 use iced::{
     Alignment, Element, Length,
@@ -8,13 +9,14 @@ use iced::{
 };
 
 use crate::gui::{
-    message::{Message, PerformancePreset},
+    message::{DamageTrackingPreset, Message, PerformancePreset},
     state::AppState,
     theme, widgets,
     widgets::space,
 };
 
 const LATENCY_MODES: &[&str] = &["interactive", "balanced", "quality"];
+const DAMAGE_METHODS: &[&str] = &["diff", "pipewire", "hybrid"];
 
 pub fn view_performance_tab(state: &AppState) -> Element<'_, Message> {
     let mut content = column![
@@ -131,6 +133,18 @@ pub fn view_performance_tab(state: &AppState) -> Element<'_, Message> {
                 "Auto-detected from compositor DMA-BUF support; manual override not yet wired",
             ),
             space().height(20.0),
+            // Damage Tracking section
+            widgets::collapsible_header(
+                "Damage Tracking",
+                state.damage_tracking_expanded,
+                Message::DamageTrackingToggleExpanded,
+            ),
+            if state.damage_tracking_expanded {
+                view_damage_tracking_config(state)
+            } else {
+                column![].into()
+            },
+            space().height(16.0),
             // Adaptive FPS section
             widgets::collapsible_header(
                 "Adaptive FPS",
@@ -154,11 +168,214 @@ pub fn view_performance_tab(state: &AppState) -> Element<'_, Message> {
             } else {
                 column![].into()
             },
+            space().height(20.0),
+            // Monitoring section
+            widgets::subsection_header("Monitoring"),
+            space().height(8.0),
+            widgets::toggle_with_help(
+                "Enable Performance Snapshots",
+                state.config.monitoring.enabled,
+                "Collect periodic snapshots and emit D-Bus PerformanceUpdated signals",
+                Message::MonitoringEnabledToggled,
+            ),
+            space().height(8.0),
+            widgets::labeled_row_with_help(
+                "Snapshot Interval:",
+                150.0,
+                row![
+                    widgets::number_input(
+                        &state.edit_strings.monitoring_snapshot_interval,
+                        "5",
+                        60.0,
+                        Message::MonitoringSnapshotIntervalChanged,
+                    ),
+                    text(" seconds"),
+                ]
+                .align_y(Alignment::Center)
+                .into(),
+                "How often to publish performance snapshots",
+            ),
+            space().height(8.0),
+            widgets::labeled_row_with_help(
+                "Metrics Bind Address:",
+                150.0,
+                widgets::number_input(
+                    &state.config.monitoring.metrics_bind,
+                    "127.0.0.1:9100",
+                    150.0,
+                    Message::MonitoringMetricsBindChanged,
+                ),
+                "Prometheus + /health HTTP endpoint; only active with the metrics-server feature",
+            ),
         ]
         .spacing(4),
     );
 
     content.padding(20).into()
+}
+
+/// Damage tracking configuration view
+fn view_damage_tracking_config(state: &AppState) -> Element<'_, Message> {
+    let damage = &state.config.damage_tracking;
+
+    column![
+        space().height(8.0),
+        widgets::toggle_with_help(
+            "Enable Damage Tracking",
+            damage.enabled,
+            "Only encode changed regions (significant bandwidth savings)",
+            Message::DamageTrackingEnabledToggled,
+        ),
+        space().height(12.0),
+        widgets::labeled_row(
+            "Detection Method:",
+            150.0,
+            pick_list(DAMAGE_METHODS.to_vec(), Some(damage.method.as_str()), |s| {
+                Message::DamageTrackingMethodChanged(s.to_string())
+            },)
+            .width(Length::Fixed(150.0))
+            .into(),
+        ),
+        space().height(4.0),
+        text("Diff: CPU pixel comparison | PipeWire: Compositor hints | Hybrid: Both")
+            .size(12)
+            .style(|_theme| text::Style {
+                color: Some(theme::colors::TEXT_MUTED),
+            }),
+        space().height(12.0),
+        // Sensitivity presets
+        text("Sensitivity Presets:").size(13),
+        space().height(8.0),
+        row![
+            button(text("Text Work"))
+                .on_press(Message::DamageTrackingPresetSelected(
+                    DamageTrackingPreset::TextWork
+                ))
+                .padding([6, 12])
+                .style(theme::secondary_button_style),
+            button(text("General"))
+                .on_press(Message::DamageTrackingPresetSelected(
+                    DamageTrackingPreset::General
+                ))
+                .padding([6, 12])
+                .style(theme::secondary_button_style),
+            button(text("Video"))
+                .on_press(Message::DamageTrackingPresetSelected(
+                    DamageTrackingPreset::Video
+                ))
+                .padding([6, 12])
+                .style(theme::secondary_button_style),
+        ]
+        .spacing(8),
+        space().height(12.0),
+        widgets::labeled_row_with_help(
+            "Tile Size:",
+            150.0,
+            row![
+                widgets::number_input(
+                    &state.edit_strings.tile_size,
+                    "16",
+                    60.0,
+                    Message::DamageTrackingTileSizeChanged,
+                ),
+                text(" pixels"),
+            ]
+            .align_y(Alignment::Center)
+            .into(),
+            "16x16 matches FreeRDP (max sensitivity)",
+        ),
+        space().height(8.0),
+        widgets::labeled_row(
+            "Diff Threshold:",
+            150.0,
+            row![
+                widgets::float_slider(
+                    damage.diff_threshold,
+                    Message::DamageTrackingDiffThresholdChanged,
+                ),
+                text(format!(" ({}%)", (damage.diff_threshold * 100.0) as u32)),
+            ]
+            .align_y(Alignment::Center)
+            .into(),
+        ),
+        space().height(8.0),
+        widgets::labeled_row(
+            "Pixel Threshold:",
+            150.0,
+            widgets::number_input(
+                &state.edit_strings.pixel_threshold,
+                "1",
+                60.0,
+                Message::DamageTrackingPixelThresholdChanged,
+            ),
+        ),
+        space().height(8.0),
+        widgets::labeled_row(
+            "Merge Distance:",
+            150.0,
+            row![
+                widgets::number_input(
+                    &state.edit_strings.merge_distance,
+                    "16",
+                    60.0,
+                    Message::DamageTrackingMergeDistanceChanged,
+                ),
+                text(" pixels"),
+            ]
+            .align_y(Alignment::Center)
+            .into(),
+        ),
+        space().height(8.0),
+        widgets::labeled_row(
+            "Min Region Area:",
+            150.0,
+            row![
+                widgets::number_input(
+                    &state.edit_strings.min_region_area,
+                    "64",
+                    60.0,
+                    Message::DamageTrackingMinRegionAreaChanged,
+                ),
+                text(" pixels\u{00B2}"),
+            ]
+            .align_y(Alignment::Center)
+            .into(),
+        ),
+        space().height(8.0),
+        widgets::labeled_row_with_help(
+            "Hint Distrust Threshold:",
+            150.0,
+            row![
+                widgets::number_input(
+                    &state.edit_strings.hint_distrust_threshold_pp,
+                    "15",
+                    60.0,
+                    Message::DamageTrackingHintDistrustThresholdChanged,
+                ),
+                text(" pp"),
+            ]
+            .align_y(Alignment::Center)
+            .into(),
+            "Divergence between compositor damage hints and the pixel-diff \
+             calibration probe, in percentage points, above which one sample \
+             counts as high divergence",
+        ),
+        space().height(8.0),
+        widgets::labeled_row_with_help(
+            "Hint Distrust Samples:",
+            150.0,
+            widgets::number_input(
+                &state.edit_strings.hint_distrust_consecutive_samples,
+                "3",
+                60.0,
+                Message::DamageTrackingHintDistrustConsecutiveSamplesChanged,
+            ),
+            "Consecutive high-divergence samples before compositor damage \
+             hints are distrusted for the rest of the connection",
+        ),
+    ]
+    .padding([0, 16])
+    .into()
 }
 
 /// Adaptive FPS configuration view

@@ -62,7 +62,7 @@ use super::{
     color_convert::{ColorMatrix, bgra_to_yuv444},
     color_space::{ColorRange, ColorSpaceConfig},
     encoder::{EncoderConfig, EncoderError, EncoderResult},
-    yuv444_packing::pack_dual_views,
+    yuv444_packing::{Yuv420Frame, pack_dual_views},
 };
 
 /// AVC444 encoded frame (dual H.264 bitstreams)
@@ -157,6 +157,165 @@ pub struct Avc444Stats {
 ///     // Send frame.stream1_data and frame.stream2_data via EGFX
 /// }
 /// ```
+/// Send-safe proxy to the VA-API AVC444 encoder running on its own thread.
+///
+/// `VaapiEncoder` is `!Send` (thread-affine VA handles), but the display
+/// pipeline is a `tokio::spawn`'d future that must be `Send`, so the encoder
+/// lives on a dedicated thread behind [`HardwareEncoderThread`]. Main and aux
+/// subframes are issued back to back on that one thread, preserving the
+/// single-encoder unified DPB that MS-RDPEGFX § 3.3.8.3.2 requires.
+#[cfg(all(feature = "h264", feature = "vaapi"))]
+struct HardwareBackendProxy {
+    thread: crate::egfx::hardware::HardwareEncoderThread,
+    /// Macroblock-aligned encode dimensions. The VA-API backend signals no
+    /// frame cropping, so each view is edge-padded to these before upload.
+    aligned_width: u32,
+    aligned_height: u32,
+    /// Set by `force_keyframe`; folded into the next (main) subframe's IDR flag.
+    pending_idr: bool,
+}
+
+#[cfg(all(feature = "h264", feature = "vaapi"))]
+impl HardwareBackendProxy {
+    fn encode_view(
+        &mut self,
+        view: &Yuv420Frame,
+        timestamp_ms: i64,
+        force_idr: bool,
+    ) -> EncoderResult<(Vec<u8>, bool)> {
+        let nv12 = i420_to_nv12(
+            view,
+            self.aligned_width as usize,
+            self.aligned_height as usize,
+        );
+        let force = force_idr || std::mem::take(&mut self.pending_idr);
+        match self.thread.encode_nv12(
+            nv12,
+            self.aligned_width,
+            self.aligned_height,
+            timestamp_ms as u64,
+            force,
+        ) {
+            Ok(Some(result)) => Ok(result),
+            // An encoder skip (rate control) is reported as an empty subframe;
+            // the caller treats that as an omitted aux.
+            Ok(None) => Ok((Vec::new(), false)),
+            Err(msg) => Err(EncoderError::EncodeFailed(format!(
+                "hardware encode failed: {msg}"
+            ))),
+        }
+    }
+}
+
+/// H.264 backend for the AVC444 dual-view encoder.
+///
+/// Both subframes MUST be encoded by the same encoder (MS-RDPEGFX § 3.3.8.3.2),
+/// so a single backend instance encodes Main then Aux sequentially, sharing one
+/// DPB. The software backend is OpenH264; the hardware backend is a single
+/// VA-API encoder driven, on its own thread, through its NV12 entry point.
+#[cfg(feature = "h264")]
+enum Avc444Backend {
+    Software(openh264_compat::VersionedEncoder),
+    #[cfg(feature = "vaapi")]
+    Hardware(HardwareBackendProxy),
+}
+
+#[cfg(feature = "h264")]
+impl Avc444Backend {
+    /// Encode one YUV420 subframe. `force_idr` requests an IDR for this
+    /// subframe. Returns `(bitstream, is_keyframe)`; an empty bitstream means the
+    /// encoder skipped the frame (rate control), which the caller treats as an
+    /// omitted aux so encoder and decoder DPBs stay in sync.
+    fn encode_view(
+        &mut self,
+        view: &Yuv420Frame,
+        w: i32,
+        h: i32,
+        timestamp_ms: i64,
+        force_idr: bool,
+    ) -> EncoderResult<(Vec<u8>, bool)> {
+        match self {
+            Avc444Backend::Software(encoder) => {
+                if force_idr {
+                    encoder.force_intra_frame();
+                }
+                let strides = view.strides();
+                let encoded = encoder
+                    .encode(
+                        view.y_plane(),
+                        view.u_plane(),
+                        view.v_plane(),
+                        strides.0 as i32,
+                        strides.1 as i32,
+                        strides.2 as i32,
+                        w,
+                        h,
+                        timestamp_ms,
+                    )
+                    .map_err(|e| {
+                        EncoderError::EncodeFailed(format!("subframe encoding failed: {e}"))
+                    })?;
+                Ok((encoded.to_vec(), encoded.is_keyframe()))
+            }
+            #[cfg(feature = "vaapi")]
+            Avc444Backend::Hardware(proxy) => proxy.encode_view(view, timestamp_ms, force_idr),
+        }
+    }
+
+    fn force_keyframe(&mut self) {
+        match self {
+            Avc444Backend::Software(encoder) => encoder.force_intra_frame(),
+            #[cfg(feature = "vaapi")]
+            Avc444Backend::Hardware(proxy) => proxy.pending_idr = true,
+        }
+    }
+}
+
+/// Repack planar I420 into contiguous NV12 (Y plane then interleaved UV),
+/// edge-padding to `(dst_w, dst_h)` when the source is smaller. The VA-API
+/// backend signals no frame cropping, so encode dimensions are macroblock
+/// aligned and the last valid row/column is replicated into the padding to
+/// avoid hard edges the encoder would otherwise spend bits on.
+#[cfg(all(feature = "h264", feature = "vaapi"))]
+fn i420_to_nv12(view: &Yuv420Frame, dst_w: usize, dst_h: usize) -> Vec<u8> {
+    let (src_w, src_h) = view.dimensions();
+    let (y_stride, u_stride, v_stride) = view.strides();
+    let y = view.y_plane();
+    let u = view.u_plane();
+    let v = view.v_plane();
+
+    let cw = dst_w / 2;
+    let ch = dst_h / 2;
+    let src_cw = src_w / 2;
+    let src_ch = src_h / 2;
+    let mut nv12 = vec![0u8; dst_w * dst_h + 2 * cw * ch];
+
+    for row in 0..dst_h {
+        let src_row = row.min(src_h - 1);
+        let src = &y[src_row * y_stride..src_row * y_stride + src_w];
+        let dst = &mut nv12[row * dst_w..row * dst_w + dst_w];
+        dst[..src_w].copy_from_slice(src);
+        let last = src[src_w - 1];
+        for px in &mut dst[src_w..] {
+            *px = last;
+        }
+    }
+
+    let uv_off = dst_w * dst_h;
+    for row in 0..ch {
+        let src_row = row.min(src_ch - 1);
+        let u_row = &u[src_row * u_stride..src_row * u_stride + src_cw];
+        let v_row = &v[src_row * v_stride..src_row * v_stride + src_cw];
+        let dst = &mut nv12[uv_off + row * cw * 2..uv_off + row * cw * 2 + cw * 2];
+        for col in 0..cw {
+            let sc = col.min(src_cw - 1);
+            dst[col * 2] = u_row[sc];
+            dst[col * 2 + 1] = v_row[sc];
+        }
+    }
+    nv12
+}
+
 #[cfg(feature = "h264")]
 pub struct Avc444Encoder {
     /// SINGLE H.264 encoder for BOTH Main and Aux subframes
@@ -166,7 +325,7 @@ pub struct Avc444Encoder {
     ///
     /// This ensures unified DPB (Decoded Picture Buffer) timeline between
     /// Main and Aux, preventing cross-stream reference corruption.
-    encoder: openh264_compat::VersionedEncoder,
+    backend: Avc444Backend,
 
     /// Configuration
     config: EncoderConfig,
@@ -328,8 +487,26 @@ impl Avc444Encoder {
             color_space.vui_matrix_coefficients()
         );
 
-        Ok(Self {
-            encoder,
+        Ok(Self::assemble(
+            config,
+            color_space,
+            color_matrix,
+            level,
+            Avc444Backend::Software(encoder),
+        ))
+    }
+
+    /// Assemble the encoder around a chosen backend. Shared by `new` (OpenH264)
+    /// and `new_hardware` (VA-API) so the field defaults live in one place.
+    fn assemble(
+        config: EncoderConfig,
+        color_space: ColorSpaceConfig,
+        color_matrix: ColorMatrix,
+        level: Option<super::h264_level::H264Level>,
+        backend: Avc444Backend,
+    ) -> Self {
+        Self {
+            backend,
             config,
             color_space,
             color_matrix,
@@ -338,27 +515,102 @@ impl Avc444Encoder {
             total_encode_time_ms: 0.0,
             current_level: level,
             // DIAGNOSTIC FLAG: Force all keyframes to disable P-frame inter-prediction
-            force_all_keyframes: false, // Re-enabled P-frames with temporal logging
-            // Phase 1: Aux omission defaults
-            // NOTE: These are now overridden by configure_aux_omission() called from display_handler
-            // using config.toml values
+            force_all_keyframes: false,
+            // Phase 1: Aux omission defaults, overridden by configure_aux_omission()
             last_aux_hash: None,
             frames_since_aux: 0,
-            max_aux_interval: 30,           // Default, overridden by config
-            aux_change_threshold: 0.05,     // Default, overridden by config
-            force_aux_idr_on_return: false, // Default, overridden by config
-            enable_aux_omission: false,     // Default, overridden by config
-            // Periodic IDR defaults (overridden by configure_periodic_idr)
+            max_aux_interval: 30,
+            aux_change_threshold: 0.05,
+            force_aux_idr_on_return: false,
+            enable_aux_omission: false,
+            // Periodic IDR defaults, overridden by configure_periodic_idr()
             last_idr_time: std::time::Instant::now(),
-            periodic_idr_interval_secs: 5, // Default 5 seconds
+            periodic_idr_interval_secs: 5,
             force_next_idr: false,
             force_aux_on_next_frame: false,
             diagnostics: None,
-        })
+        }
+    }
+
+    /// Create an AVC444 encoder backed by a single VA-API H.264 encoder.
+    ///
+    /// Both subframes run through this one encoder (MS-RDPEGFX § 3.3.8.3.2). It
+    /// is built at the config's macroblock-aligned dimensions because the VA-API
+    /// backend signals no frame cropping. Requires the VA-API backend; any other
+    /// hardware backend is rejected so the caller falls back to software AVC444
+    /// rather than failing mid-stream.
+    #[cfg(feature = "vaapi")]
+    pub fn new_hardware(
+        config: EncoderConfig,
+        hw_config: &crate::config::HardwareEncodingConfig,
+    ) -> EncoderResult<Self> {
+        let width = config.width.ok_or_else(|| {
+            EncoderError::InitFailed("hardware AVC444 requires known dimensions".to_string())
+        })?;
+        let height = config.height.ok_or_else(|| {
+            EncoderError::InitFailed("hardware AVC444 requires known dimensions".to_string())
+        })?;
+
+        let w32 = u32::from(width);
+        let h32 = u32::from(height);
+
+        // The encoder is built on its own thread (VA-API handles are !Send).
+        // spawn() blocks until construction succeeds or fails, so a failure
+        // falls back to software here rather than mid-stream.
+        let thread = crate::egfx::hardware::HardwareEncoderThread::spawn(hw_config, w32, h32)
+            .map_err(EncoderError::InitFailed)?;
+
+        // Only VA-API implements the dual-view NV12 entry point today.
+        if thread.backend_name() != "vaapi" {
+            return Err(EncoderError::InitFailed(format!(
+                "hardware AVC444 requires the VA-API backend, got {}",
+                thread.backend_name()
+            )));
+        }
+
+        let color_space = config.color_space.unwrap_or({
+            match (config.width, config.height) {
+                (Some(w), Some(h)) if w >= 1280 && h >= 720 => ColorSpaceConfig::BT709_FULL,
+                (Some(_), Some(_)) => ColorSpaceConfig::BT601_LIMITED,
+                _ => ColorSpaceConfig::BT709_FULL,
+            }
+        });
+        let color_matrix = color_space.matrix;
+        let level = config
+            .width
+            .zip(config.height)
+            .map(|(w, h)| super::h264_level::H264Level::for_config(w, h, config.max_fps));
+
+        info!(
+            "AVC444: VA-API hardware encoder at {}×{}, QP [{}, {}]",
+            width, height, config.qp_min, config.qp_max
+        );
+
+        Ok(Self::assemble(
+            config,
+            color_space,
+            color_matrix,
+            level,
+            Avc444Backend::Hardware(HardwareBackendProxy {
+                thread,
+                aligned_width: w32,
+                aligned_height: h32,
+                pending_idr: false,
+            }),
+        ))
     }
 
     /// Attach encoder diagnostics. Called once after construction by the
     /// display handler when the operator has enabled diagnostics in config.
+    /// Name of the active encode backend, for telemetry.
+    pub fn backend_name(&self) -> &'static str {
+        match &self.backend {
+            Avc444Backend::Software(_) => "openh264",
+            #[cfg(feature = "vaapi")]
+            Avc444Backend::Hardware(_) => "vaapi",
+        }
+    }
+
     /// Mirrors `Avc420Encoder::set_diagnostics` so both encoders share the
     /// same opt-in surface from the caller's perspective.
     pub fn set_diagnostics(
@@ -598,50 +850,30 @@ impl Avc444Encoder {
         // The YUV420 frames may have padded chroma planes for macroblock alignment,
         // but OpenH264 expects logical dimensions and will do its own padding internally.
         let (w, h) = (width as i32, height as i32);
-        let main_strides = main_yuv420.strides();
 
-        // === PERIODIC IDR: Force keyframe at regular intervals or on PLI ===
-        if self.should_force_idr() {
-            self.encoder.force_intra_frame();
-        }
-
-        // === DIAGNOSTIC: Force keyframes if flag is set ===
-        if self.force_all_keyframes {
-            self.encoder.force_intra_frame();
-            if self.frame_count == 0 {
-                debug!("DIAGNOSTIC: force_all_keyframes=true - All frames will be IDR");
-            }
+        // === IDR DECISION FOR MAIN (periodic/PLI, or diagnostic all-keyframes) ===
+        // should_force_idr() is called exactly once (it advances the periodic
+        // timer); OR in the diagnostic all-keyframes flag.
+        let force_main_idr = self.should_force_idr() || self.force_all_keyframes;
+        if self.force_all_keyframes && self.frame_count == 0 {
+            debug!("DIAGNOSTIC: force_all_keyframes=true - All frames will be IDR");
         }
 
         // === SINGLE ENCODER: SEQUENTIAL ENCODING (FreeRDP Pattern) ===
         //
         // MS-RDPEGFX Section 3.3.8.3.2: "The two subframe bitstreams MUST be
-        // encoded using the same H.264 encoder"
+        // encoded using the same H.264 encoder". Main is encoded first and
+        // updates the unified DPB that Aux then references. This holds for both
+        // backends: the OpenH264 single encoder and a single VA-API encoder.
         //
         // 1. Encode Main subframe -> Updates unified DPB
         // 2. Encode Aux subframe -> SAME DPB, sequential call
 
         // Encode Main subframe FIRST (luma + subsampled chroma)
-        let main_encoded = self
-            .encoder
-            .encode(
-                main_yuv420.y_plane(),
-                main_yuv420.u_plane(),
-                main_yuv420.v_plane(),
-                main_strides.0 as i32,
-                main_strides.1 as i32,
-                main_strides.2 as i32,
-                w,
-                h,
-                timestamp_ms as i64,
-            )
-            .map_err(|e| {
-                EncoderError::EncodeFailed(format!("Main subframe encoding failed: {e}"))
-            })?;
-
-        let main_is_keyframe = main_encoded.is_keyframe();
+        let (stream1_data, main_is_keyframe) =
+            self.backend
+                .encode_view(&main_yuv420, w, h, timestamp_ms as i64, force_main_idr)?;
         let main_frame_type_str = if main_is_keyframe { "IDR" } else { "P" };
-        let stream1_data = main_encoded.to_vec();
 
         // === PHASE 1: AUXILIARY STREAM (CONDITIONALLY ENCODED) ===
         //
@@ -660,63 +892,45 @@ impl Avc444Encoder {
         // - Next aux P-frame would reference missing frame → corruption
         // - By not encoding: Both DPBs stay perfectly in sync
 
-        let should_send_aux = self.should_send_aux(&aux_yuv420, main_is_keyframe); // Now OK - no mutable borrow
+        let should_send_aux = self.should_send_aux(&aux_yuv420, main_is_keyframe);
 
-        let aux_bitstream_opt = if should_send_aux {
-            // === CRITICAL: Force aux IDR when main is IDR (artifact clearing sync) ===
-            // When periodic IDR or PLI triggers, both streams need full refresh.
-            // If main is IDR but aux is P-frame, the aux P-frame references may be stale.
-            // This ensures BOTH streams refresh together for complete artifact clearing.
-            if main_is_keyframe {
-                self.encoder.force_intra_frame(); // Same encoder!
+        // Only meaningful when the aux subframe is actually sent.
+        let mut aux_is_keyframe = false;
+        let stream2_data_opt = if should_send_aux {
+            // Force aux IDR to stay in lockstep with a main IDR (both streams
+            // refresh together, clearing artifacts), or when reintroducing aux
+            // after omission so it does not reference frames the decoder evicted.
+            let force_aux_idr = if main_is_keyframe {
                 debug!("Forcing aux IDR to sync with main IDR (artifact clearing)");
+                true
             } else if self.force_aux_idr_on_return && self.frames_since_aux > 0 {
-                // === SAFE MODE: Force aux IDR when reintroducing after omission ===
-                // If aux was omitted for N frames, forcing IDR when it returns ensures:
-                // - No dependency on stale aux frames decoder might have evicted
-                // - Clean reference point for future aux updates
-                // - Robust operation even with long omission intervals
-                self.encoder.force_intra_frame(); // Same encoder!
                 debug!(
                     "Forcing aux IDR on reintroduction (omitted for {} frames)",
                     self.frames_since_aux
                 );
-            }
+                true
+            } else {
+                false
+            };
 
-            // Encode Aux subframe SECOND with SAME encoder (sequential call)
-            // CRITICAL: This maintains unified DPB shared with Main
-            let aux_strides = aux_yuv420.strides();
-            let aux_encoded = self
-                .encoder
-                .encode(
-                    aux_yuv420.y_plane(),
-                    aux_yuv420.u_plane(),
-                    aux_yuv420.v_plane(),
-                    aux_strides.0 as i32,
-                    aux_strides.1 as i32,
-                    aux_strides.2 as i32,
-                    w,
-                    h,
-                    timestamp_ms as i64,
-                )
-                .map_err(|e| {
-                    EncoderError::EncodeFailed(format!("Aux subframe encoding failed: {e}"))
-                })?;
+            // Encode Aux subframe SECOND with the SAME encoder (sequential
+            // call), maintaining the unified DPB shared with Main.
+            let (aux_data, aux_kf) =
+                self.backend
+                    .encode_view(&aux_yuv420, w, h, timestamp_ms as i64, force_aux_idr)?;
 
-            let aux_raw = aux_encoded.to_vec();
-
-            // CRITICAL FIX: Check if aux encoder skipped the frame (0 bytes)
-            // This happens when Main is IDR and rate control skips the second encode
-            let aux_data = aux_raw;
+            // A zero-byte result means the encoder skipped the frame (rate
+            // control, common right after a main IDR). Treat it as omitted so
+            // encoder and decoder DPBs stay in sync (client keeps cached aux).
             if aux_data.is_empty() {
                 trace!("Aux encoder skipped frame (rate control) - treating as omitted");
                 self.frames_since_aux += 1;
                 None
             } else {
-                // Update aux tracking
+                aux_is_keyframe = aux_kf;
                 self.last_aux_hash = Some(Self::hash_yuv420(&aux_yuv420));
                 self.frames_since_aux = 0;
-                Some(aux_encoded)
+                Some(aux_data)
             }
         } else {
             // === AUX OMITTED: Don't encode at all! ===
@@ -732,32 +946,15 @@ impl Avc444Encoder {
             .and_then(|d| d.checked_sub(pack_time))
             .unwrap_or_default();
 
-        // Convert aux to byte data (aux_bitstream_opt contains EncodedFrameData)
-        let stream2_data_opt = aux_bitstream_opt
-            .as_ref()
-            .map(openh264_compat::EncodedFrameData::to_vec);
-
         // Handle empty main bitstream (encoder skip)
         if stream1_data.is_empty() {
             trace!("AVC444 encoder skipped frame (main stream empty)");
             return Ok(None);
         }
 
-        // Check aux frame type (if encoded)
-        let _aux_is_keyframe = aux_bitstream_opt
-            .as_ref()
-            .is_some_and(openh264_compat::EncodedFrameData::is_keyframe);
-
         // Diagnostic logging for bandwidth analysis
         if let Some(ref aux_data) = stream2_data_opt {
-            let aux_type_str = if aux_bitstream_opt
-                .as_ref()
-                .is_some_and(openh264_compat::EncodedFrameData::is_keyframe)
-            {
-                "IDR"
-            } else {
-                "P"
-            };
+            let aux_type_str = if aux_is_keyframe { "IDR" } else { "P" };
             debug!(
                 "[AVC444 Frame #{}] Main: {} ({}B), Aux: {} ({}B) [BOTH SENT]",
                 self.frame_count,
@@ -864,7 +1061,7 @@ impl Avc444Encoder {
     /// With single encoder, this affects the next encode() call.
     /// Since we encode Main first, then Aux, this will make both IDR.
     pub fn force_keyframe(&mut self) {
-        self.encoder.force_intra_frame();
+        self.backend.force_keyframe();
         debug!("Forced keyframe for next encode (affects both Main and Aux)");
     }
 

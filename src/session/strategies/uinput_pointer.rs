@@ -18,20 +18,29 @@ use evdev::{
     UinputAbsSetup, uinput::VirtualDevice,
 };
 
-/// Absolute-axis range of the virtual device (standard tablet range).
+/// Absolute-axis range of the virtual device. Not tied to any real display
+/// resolution -- it's the standard evdev tablet-axis range (`0..=32767`, the
+/// same span `ABS_X`/`ABS_Y` use on real absolute pointing hardware such as
+/// graphics tablets and touchscreens). `motion_absolute` maps the caller's
+/// normalized `[0,1]` position onto this range; the compositor rescales it
+/// to actual output pixels.
 const ABS_MAX: i32 = 32767;
 const EV_SYN: u16 = 0x00;
 const EV_KEY: u16 = 0x01;
 const EV_REL: u16 = 0x02;
 const EV_ABS: u16 = 0x03;
 
-/// True if `/dev/uinput` exists and is writable by this process.
-pub fn available() -> bool {
-    std::path::Path::new("/dev/uinput").exists()
-        && std::fs::OpenOptions::new()
-            .write(true)
-            .open("/dev/uinput")
-            .is_ok()
+/// Why `/dev/uinput` isn't usable, distinguishing the two failure classes a
+/// caller can actually act on. `None` means it's fine to try opening it.
+fn unavailable_reason() -> Option<&'static str> {
+    let path = std::path::Path::new("/dev/uinput");
+    if !path.exists() {
+        return Some("does not exist (uinput kernel module not loaded)");
+    }
+    if std::fs::OpenOptions::new().write(true).open(path).is_err() {
+        return Some("exists but is not writable (add this user to the input group)");
+    }
+    None
 }
 
 /// A virtual absolute pointing device backed by `/dev/uinput`.
@@ -43,6 +52,10 @@ impl UinputPointer {
     /// Create the virtual pointer. Errors if `/dev/uinput` can't be opened so the
     /// caller can fall back to a pointer-less (keyboard-only) session.
     pub fn new() -> Result<Self> {
+        if let Some(reason) = unavailable_reason() {
+            anyhow::bail!("open /dev/uinput for lamco-rdp-pointer: {reason}");
+        }
+
         let abs_x = UinputAbsSetup::new(
             AbsoluteAxisCode::ABS_X,
             AbsInfo::new(0, 0, ABS_MAX, 0, 0, 1),
@@ -62,7 +75,7 @@ impl UinputPointer {
         rel.insert(RelativeAxisCode::REL_HWHEEL);
 
         let device = VirtualDevice::builder()
-            .context("open /dev/uinput")?
+            .context("open /dev/uinput for lamco-rdp-pointer")?
             .name("lamco-rdp-pointer")
             .input_id(InputId::new(BusType::BUS_USB, 0x4C41, 0x4D43, 1))
             .with_absolute_axis(&abs_x)

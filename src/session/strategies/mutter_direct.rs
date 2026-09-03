@@ -22,9 +22,7 @@ use std::sync::{
 use anyhow::{Context, Result, anyhow};
 use async_trait::async_trait;
 use futures_util::StreamExt;
-#[cfg(feature = "libei")]
-use tracing::warn;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::{
     health::{HealthEvent, HealthReporter},
@@ -123,7 +121,9 @@ impl MutterEisInput {
     async fn activate(&self) -> Result<()> {
         use std::{collections::HashMap, os::unix::net::UnixStream};
 
-        use reis::{PendingRequestResult, ei, tokio::EiEventStream};
+        use reis::{PendingRequestResult, ei};
+
+        use super::eis_stream::{EisEventStream, HANDSHAKE_TIMEOUT, ei_handshake};
 
         // Serialize activation: if another task is already activating, wait it out.
         if self.activating.swap(true, Ordering::AcqRel) {
@@ -142,10 +142,10 @@ impl MutterEisInput {
 
         // Already up and the socket still accepts writes — nothing to do.
         if self.activated.load(Ordering::Acquire) {
-            if let Some(ref ctx) = *self.context.read().await {
-                if ctx.flush().is_ok() {
-                    return Ok(());
-                }
+            if let Some(ref ctx) = *self.context.read().await
+                && ctx.flush().is_ok()
+            {
+                return Ok(());
             }
             warn!("[mutter-eis] socket dead on reactivation — reconnecting");
             self.devices.clear().await;
@@ -161,27 +161,60 @@ impl MutterEisInput {
             crate::mutter::MutterRemoteDesktopSession::new(&self.dbus_connection, rd_session_path)
                 .await
                 .context("Failed to create RemoteDesktop proxy for EIS")?;
-        let fd = rd_session
-            .connect_to_eis(HashMap::new())
-            .await
-            .context("ConnectToEIS failed")?;
+        // One retry with a fresh socket: the handshake either completes within
+        // a millisecond or the socket is dead, and a dead socket must not take
+        // the accept loop down with it (this runs on the connection task).
+        let mut attempt = 0;
+        let (context, mut events, handshake) = loop {
+            attempt += 1;
+            let fd = match rd_session.connect_to_eis(HashMap::new()).await {
+                Ok(fd) => fd,
+                Err(e) => {
+                    // Surface input death to health directly: the caller only warns
+                    // per failed injection, which leaves the health surface blind to
+                    // an input channel that never came up at all.
+                    if let Some(r) = self.health_reporter.get() {
+                        r.report(HealthEvent::EisStreamEnded {
+                            reason: format!("ConnectToEIS failed: {e}"),
+                        });
+                    }
+                    return Err(e.context("ConnectToEIS failed"));
+                }
+            };
 
-        let stream = UnixStream::from(fd);
-        let context = ei::Context::new(stream).context("Failed to create EIS context")?;
-        let mut events =
-            EiEventStream::new(context.clone()).context("Failed to create EIS event stream")?;
+            let stream = UnixStream::from(fd);
+            let context = ei::Context::new(stream).context("Failed to create EIS context")?;
+            let mut events = EisEventStream::new(context.clone())
+                .context("Failed to create EIS event stream")?;
 
-        let handshake = reis::tokio::ei_handshake(
-            &mut events,
-            "lamco-rdp-server-mutter",
-            ei::handshake::ContextType::Sender,
-        )
-        .await
-        .context("EIS handshake failed")?;
+            match ei_handshake(&mut events, "lamco-rdp-server-mutter", HANDSHAKE_TIMEOUT).await {
+                Ok(handshake) => break (context, events, handshake),
+                Err(e) if attempt < 2 => {
+                    // Dropping `context` and `events` closes the socket.
+                    warn!("[mutter-eis] {e:#}; retrying with a fresh ConnectToEIS");
+                }
+                Err(e) => {
+                    if let Some(r) = self.health_reporter.get() {
+                        r.report(HealthEvent::EisStreamEnded {
+                            reason: format!("EIS handshake failed: {e:#}"),
+                        });
+                    }
+                    return Err(e.context("EIS handshake failed"));
+                }
+            }
+        };
         info!("[mutter-eis] handshake complete");
         let _ = context.flush();
 
         *self.devices.last_serial.lock().await = handshake.serial;
+        self.devices.device_version.store(
+            handshake
+                .negotiated_interfaces
+                .get("ei_device")
+                .copied()
+                .unwrap_or(0),
+            std::sync::atomic::Ordering::Relaxed,
+        );
         *self.context.write().await = Some(context);
         *self.connection.lock().await = Some(handshake.connection);
 
@@ -192,12 +225,24 @@ impl MutterEisInput {
         let seat_caps: tokio::sync::Mutex<std::collections::HashMap<String, u64>> =
             tokio::sync::Mutex::new(std::collections::HashMap::new());
         loop {
-            match tokio::time::timeout(std::time::Duration::from_millis(500), events.next()).await {
+            match tokio::time::timeout(std::time::Duration::from_secs(3), events.next()).await {
                 Ok(Some(Ok(PendingRequestResult::Request(event)))) => {
+                    // The post-bind connection.sync()'s callback.done arrives only
+                    // after the full seat/device burst, so use it as a
+                    // deterministic drain barrier rather than a 500ms quiet guess
+                    // (which could cut off a slow burst).
+                    let sync_barrier_reached = matches!(
+                        &event,
+                        ei::Event::Callback(_, ei::callback::Event::Done { .. })
+                    );
                     let ctx_read = self.context.read().await;
                     if let Some(ref ctx) = *ctx_read {
                         handle_eis_event(event, ctx, &self.connection, &self.devices, &seat_caps)
                             .await?;
+                    }
+                    if sync_barrier_reached {
+                        debug!("[mutter-eis] setup sync barrier reached — device burst drained");
+                        break;
                     }
                 }
                 Ok(Some(Ok(PendingRequestResult::ParseError(msg)))) => {
@@ -215,7 +260,9 @@ impl MutterEisInput {
                     break;
                 }
                 Err(_) => {
-                    debug!("[mutter-eis] setup burst quiet — devices ready");
+                    warn!(
+                        "[mutter-eis] setup barrier failsafe timeout (3s) — sync never completed"
+                    );
                     break;
                 }
             }
@@ -230,15 +277,54 @@ impl MutterEisInput {
     }
 }
 
-/// Generate a `notify_*` body for `MutterEisInput`: ensure the channel is alive,
-/// inject, and on failure reconnect once and retry. `$call` is re-evaluated so
-/// each attempt builds a fresh injection future against the current context.
+/// Generate a `notify_*` body for `MutterEisInput`: ensure the channel is
+/// alive, inject, and on failure recover and retry. `$call` is re-evaluated
+/// so each attempt builds a fresh injection future against the current
+/// context.
+///
+/// A [`super::eis_common::DeviceNotReady`] failure (this one device type
+/// hasn't appeared in the compositor's device-setup burst yet) is handled by
+/// waiting briefly and retrying against the *same* session, not by
+/// reconnecting: a full `reconnect()` clears every device, not just the one
+/// that wasn't ready, so if input keeps arriving faster than a fresh
+/// device-setup burst can complete, each reconnect can itself provoke
+/// another `DeviceNotReady` for whatever event arrives next -- a
+/// self-amplifying storm that leaves input dead for as long as events keep
+/// coming in. Any other error (a genuinely dead socket) still gets the full
+/// `reconnect()`.
 #[cfg(feature = "libei")]
 macro_rules! eis_inject {
     ($self:expr, $what:literal, $call:expr) => {{
         $self.ensure_alive().await?;
         match $call.await {
             Ok(()) => Ok(()),
+            Err(e) if e.downcast_ref::<super::eis_common::DeviceNotReady>().is_some() => {
+                debug!(
+                    "[mutter-eis] {} injection failed ({e}) — device not yet in the setup burst, waiting",
+                    $what
+                );
+                for _ in 0..40 {
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                    match $call.await {
+                        Ok(()) => return Ok(()),
+                        Err(e2) if e2.downcast_ref::<super::eis_common::DeviceNotReady>().is_some() => {}
+                        Err(e2) => {
+                            warn!(
+                                "[mutter-eis] {} injection failed ({e2}) — reconnecting",
+                                $what
+                            );
+                            $self.reconnect().await?;
+                            return $call.await;
+                        }
+                    }
+                }
+                warn!(
+                    "[mutter-eis] {} device never became ready after 2s — reconnecting",
+                    $what
+                );
+                $self.reconnect().await?;
+                $call.await
+            }
             Err(e) => {
                 warn!(
                     "[mutter-eis] {} injection failed ({e}) — reconnecting",
@@ -266,7 +352,25 @@ impl MutterEisInput {
         )
     }
 
-    async fn pointer_motion_absolute(&self, x: f64, y: f64) -> Result<()> {
+    async fn keysym(&self, keysym: u32, pressed: bool) -> Result<()> {
+        eis_inject!(
+            self,
+            "text",
+            super::eis_common::eis_text_keysym(
+                self.context.as_ref(),
+                self.devices.as_ref(),
+                keysym,
+                pressed
+            )
+        )
+    }
+
+    async fn pointer_motion_absolute(
+        &self,
+        x: f64,
+        y: f64,
+        offset: Option<(f64, f64)>,
+    ) -> Result<()> {
         eis_inject!(
             self,
             "pointer-abs",
@@ -274,7 +378,8 @@ impl MutterEisInput {
                 self.context.as_ref(),
                 self.devices.as_ref(),
                 x,
-                y
+                y,
+                offset
             )
         )
     }
@@ -315,6 +420,64 @@ impl MutterEisInput {
                 dx,
                 dy
             )
+        )
+    }
+
+    async fn pointer_axis_discrete(&self, dx: i32, dy: i32) -> Result<()> {
+        eis_inject!(
+            self,
+            "axis-discrete",
+            super::eis_common::eis_pointer_axis_discrete(
+                self.context.as_ref(),
+                self.devices.as_ref(),
+                dx,
+                dy
+            )
+        )
+    }
+
+    // === Batched pointer-device injection ===
+    // See SessionHandle::stage_pointer_* / commit_input_batch for why this
+    // exists (batching a coalesced group of pointer-device events into one
+    // EIS frame instead of one frame per event).
+
+    async fn stage_pointer_motion_relative(&self, dx: f64, dy: f64) -> Result<()> {
+        eis_inject!(
+            self,
+            "pointer-rel-stage",
+            super::eis_common::stage_pointer_motion_relative(self.devices.as_ref(), dx, dy)
+        )
+    }
+
+    async fn stage_pointer_button(&self, button: i32, pressed: bool) -> Result<()> {
+        eis_inject!(
+            self,
+            "button-stage",
+            super::eis_common::stage_pointer_button(self.devices.as_ref(), button, pressed)
+        )
+    }
+
+    async fn stage_pointer_axis(&self, dx: f64, dy: f64) -> Result<()> {
+        eis_inject!(
+            self,
+            "axis-stage",
+            super::eis_common::stage_pointer_axis(self.devices.as_ref(), dx, dy)
+        )
+    }
+
+    async fn stage_pointer_axis_discrete(&self, dx: i32, dy: i32) -> Result<()> {
+        eis_inject!(
+            self,
+            "axis-discrete-stage",
+            super::eis_common::stage_pointer_axis_discrete(self.devices.as_ref(), dx, dy)
+        )
+    }
+
+    async fn commit_pointer_frame(&self) -> Result<()> {
+        eis_inject!(
+            self,
+            "commit-frame",
+            super::eis_common::commit_pointer_frame(self.context.as_ref(), self.devices.as_ref())
         )
     }
 
@@ -375,6 +538,10 @@ pub struct MutterSessionHandleImpl {
     health_reporter: Arc<std::sync::OnceLock<HealthReporter>>,
     /// Output connector used to re-create the Mutter session per connection.
     monitor_connector: Option<String>,
+    /// Carried so a re-established session records the same way the first did.
+    record_mode: crate::mutter::session_manager::RecordMode,
+    /// Whether a headless virtual monitor is marked as part of the platform.
+    virtual_is_platform: bool,
     /// Set while we deliberately close the session in `release_after_client`, so
     /// the Closed-signal listener logs an expected teardown rather than an
     /// unexpected compositor kill.
@@ -383,6 +550,14 @@ pub struct MutterSessionHandleImpl {
     /// on each re-establishment so a late Closed from a stopped session can't
     /// invalidate its successor.
     listener_tasks: std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>,
+    /// Serialises `establish_for_client` against `release_after_client`.
+    ///
+    /// A client disconnecting and the next one connecting are separate events on
+    /// separate tasks, and a scripted client pair can put them 6ms apart. Without
+    /// this, the release of the old session ran concurrently with the setup of the
+    /// new one: the teardown tore down the PipeWire stream the new session had
+    /// just built, and the connecting client saw a truncated negotiation.
+    lifecycle: tokio::sync::Mutex<()>,
 }
 
 impl MutterSessionHandleImpl {
@@ -481,7 +656,12 @@ impl MutterSessionHandleImpl {
                 );
                 return;
             }
-            error!("Mutter {which} session Closed signal received (unexpected)");
+            // Not deliberate, but not necessarily a failure: the compositor
+            // idle-reaps a session with no client attached, which is expected
+            // teardown. Report the raw signal and let the health monitor, which
+            // holds the client-connected state, make the healthy/degraded call
+            // rather than asserting failure severity from here.
+            warn!("Mutter {which} session Closed signal received without a deliberate release");
             if let Some(r) = health_reporter.get() {
                 r.report(HealthEvent::SessionClosed {
                     reason: reason.into(),
@@ -540,6 +720,10 @@ impl SessionHandle for MutterSessionHandleImpl {
         SessionType::MutterDirect
     }
 
+    fn is_session_valid(&self) -> bool {
+        self.session_valid.load(Ordering::Acquire)
+    }
+
     async fn activate_input(&self) -> Result<()> {
         // Establish the EIS channel now that a client is connected. Doing this
         // here (rather than at session creation) keeps the socket fresh — the
@@ -575,7 +759,27 @@ impl SessionHandle for MutterSessionHandleImpl {
         }
     }
 
-    async fn notify_pointer_motion_absolute(&self, _stream_id: u32, x: f64, y: f64) -> Result<()> {
+    async fn notify_keyboard_keysym(&self, keysym: u32, pressed: bool) -> Result<()> {
+        if !self.session_valid.load(Ordering::Acquire) {
+            return Err(anyhow!(
+                "Mutter session invalid — cannot send keyboard keysym"
+            ));
+        }
+        #[cfg(feature = "libei")]
+        {
+            self.eis.keysym(keysym, pressed).await
+        }
+        #[cfg(not(feature = "libei"))]
+        {
+            let rd_session = self.current_rd_session().await?;
+            rd_session
+                .notify_keyboard_keysym(keysym, pressed)
+                .await
+                .context("Failed to inject keyboard keysym via Mutter D-Bus")
+        }
+    }
+
+    async fn notify_pointer_motion_absolute(&self, stream_id: u32, x: f64, y: f64) -> Result<()> {
         if !self.session_valid.load(Ordering::Acquire) {
             return Err(anyhow!(
                 "Mutter session invalid — cannot send pointer motion"
@@ -583,18 +787,27 @@ impl SessionHandle for MutterSessionHandleImpl {
         }
         #[cfg(feature = "libei")]
         {
-            self.eis.pointer_motion_absolute(x, y).await
+            let stream_offset = self
+                .streams()
+                .into_iter()
+                .find(|s| s.node_id == stream_id)
+                .map(|s| (s.position_x as f64, s.position_y as f64));
+            self.eis.pointer_motion_absolute(x, y, stream_offset).await
         }
         #[cfg(not(feature = "libei"))]
         {
+            let _ = stream_id;
             let stream_path = self
                 .mutter_handle
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .streams
                 .first()
+                .cloned()
                 .ok_or_else(|| anyhow!("No streams available"))?;
             let rd_session = self.current_rd_session().await?;
             rd_session
-                .notify_pointer_motion_absolute(stream_path, x, y)
+                .notify_pointer_motion_absolute(&stream_path, x, y)
                 .await
                 .context("Failed to inject pointer motion via Mutter D-Bus")
         }
@@ -638,6 +851,30 @@ impl SessionHandle for MutterSessionHandleImpl {
         }
     }
 
+    async fn notify_pointer_axis_discrete(&self, dx: i32, dy: i32) -> Result<()> {
+        if !self.session_valid.load(Ordering::Acquire) {
+            return Err(anyhow!(
+                "Mutter session invalid — cannot send discrete scroll"
+            ));
+        }
+        #[cfg(feature = "libei")]
+        {
+            self.eis.pointer_axis_discrete(dx, dy).await
+        }
+        #[cfg(not(feature = "libei"))]
+        {
+            // Mutter's D-Bus RemoteDesktop has no discrete-scroll method; fall
+            // back to the continuous conversion.
+            let dx_c = (dx as f64 / 120.0) * 15.0;
+            let dy_c = (dy as f64 / 120.0) * 15.0;
+            let rd_session = self.current_rd_session().await?;
+            rd_session
+                .notify_pointer_axis(dx_c, dy_c)
+                .await
+                .context("Failed to inject discrete scroll via Mutter D-Bus")
+        }
+    }
+
     async fn notify_pointer_motion_relative(&self, dx: f64, dy: f64) -> Result<()> {
         if !self.session_valid.load(Ordering::Acquire) {
             return Err(anyhow!(
@@ -658,6 +895,59 @@ impl SessionHandle for MutterSessionHandleImpl {
         }
     }
 
+    // === Batched pointer-device injection ===
+    // Only meaningful with EIS (libei) active -- gated at the item level so
+    // the non-libei D-Bus build simply falls back to SessionHandle's default
+    // (stage immediately via the notify_pointer_* methods above, which
+    // themselves already branch to the D-Bus path when libei is off).
+    #[cfg(feature = "libei")]
+    async fn stage_pointer_motion_relative(&self, dx: f64, dy: f64) -> Result<()> {
+        if !self.session_valid.load(Ordering::Acquire) {
+            return Err(anyhow!(
+                "Mutter session invalid — cannot stage relative motion"
+            ));
+        }
+        self.eis.stage_pointer_motion_relative(dx, dy).await
+    }
+
+    #[cfg(feature = "libei")]
+    async fn stage_pointer_button(&self, button: i32, pressed: bool) -> Result<()> {
+        if !self.session_valid.load(Ordering::Acquire) {
+            return Err(anyhow!("Mutter session invalid — cannot stage button"));
+        }
+        self.eis.stage_pointer_button(button, pressed).await
+    }
+
+    #[cfg(feature = "libei")]
+    async fn stage_pointer_axis(&self, dx: f64, dy: f64) -> Result<()> {
+        if !self.session_valid.load(Ordering::Acquire) {
+            return Err(anyhow!("Mutter session invalid — cannot stage axis"));
+        }
+        self.eis.stage_pointer_axis(dx, dy).await
+    }
+
+    #[cfg(feature = "libei")]
+    async fn stage_pointer_axis_discrete(&self, dx_120: i32, dy_120: i32) -> Result<()> {
+        if !self.session_valid.load(Ordering::Acquire) {
+            return Err(anyhow!(
+                "Mutter session invalid — cannot stage discrete scroll"
+            ));
+        }
+        // dx_120/dy_120 are already 120-units-per-detent, passed straight
+        // through (mirrors notify_pointer_axis_discrete above).
+        self.eis.stage_pointer_axis_discrete(dx_120, dy_120).await
+    }
+
+    #[cfg(feature = "libei")]
+    async fn commit_input_batch(&self) -> Result<()> {
+        if !self.session_valid.load(Ordering::Acquire) {
+            // Nothing was actually staged if the session was already
+            // invalid (every stage_* call above would have errored first).
+            return Ok(());
+        }
+        self.eis.commit_pointer_frame().await
+    }
+
     async fn notify_touch_down(&self, _stream_id: u32, slot: u32, x: f64, y: f64) -> Result<()> {
         if !self.session_valid.load(Ordering::Acquire) {
             return Err(anyhow!("Mutter session invalid — cannot send touch down"));
@@ -670,12 +960,15 @@ impl SessionHandle for MutterSessionHandleImpl {
         {
             let stream_path = self
                 .mutter_handle
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .streams
                 .first()
+                .cloned()
                 .ok_or_else(|| anyhow!("No streams available"))?;
             let rd_session = self.current_rd_session().await?;
             rd_session
-                .notify_touch_down(stream_path, slot, x, y)
+                .notify_touch_down(&stream_path, slot, x, y)
                 .await
                 .context("Failed to inject touch down via Mutter D-Bus")
         }
@@ -693,12 +986,15 @@ impl SessionHandle for MutterSessionHandleImpl {
         {
             let stream_path = self
                 .mutter_handle
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .streams
                 .first()
+                .cloned()
                 .ok_or_else(|| anyhow!("No streams available"))?;
             let rd_session = self.current_rd_session().await?;
             rd_session
-                .notify_touch_motion(stream_path, slot, x, y)
+                .notify_touch_motion(&stream_path, slot, x, y)
                 .await
                 .context("Failed to inject touch motion via Mutter D-Bus")
         }
@@ -745,21 +1041,103 @@ impl SessionHandle for MutterSessionHandleImpl {
     }
 
     async fn establish_for_client(&self) -> Result<(Vec<StreamInfo>, bool)> {
+        // Wait for any in-flight release to finish before touching the session.
+        let _lifecycle = self.lifecycle.lock().await;
+
         // Still-valid session (the startup session on the very first client, or
-        // one that hasn't been released yet): reuse it unchanged.
+        // one that hasn't been released yet): reuse it, but only after proving
+        // the compositor still answers for it. The flag can be stale: no Closed
+        // signal arrives when the compositor's bus name vanishes outright (a
+        // shell still settling at server startup, or a shell restart), so a
+        // session created moments before that death stays flagged valid while
+        // every one of its D-Bus objects is gone. A cheap SessionId property
+        // read is the arbiter; on failure we fall through to re-establishment
+        // instead of handing the client a corpse with permanently dead input.
         if self.session_valid.load(Ordering::Acquire) {
-            let streams = self.streams();
-            let node = self
+            let rd_path = self
                 .mutter_handle
                 .read()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .pipewire_node_id();
-            info!(
-                node,
-                stream_count = streams.len(),
-                "[mutter-lifecycle] Session still valid — reusing for incoming client"
+                .remote_desktop_session
+                .clone();
+            let alive =
+                match crate::mutter::MutterRemoteDesktopSession::new(&self.connection, rd_path)
+                    .await
+                {
+                    Ok(rd) => rd.session_id().await.is_ok(),
+                    Err(_) => false,
+                };
+            // A live session is not automatically a correct one. An area
+            // stream fixes its rectangle at creation and Mutter never updates
+            // it, so if the host's resolution, scale or layout moved while we
+            // were idle, reusing the session would capture the wrong region
+            // and report nothing wrong. Re-establishing rebuilds against the
+            // current geometry, and the existing rebind path carries the
+            // capture pipeline across.
+            let area_stale = if alive {
+                let source = self
+                    .mutter_handle
+                    .read()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .capture_source
+                    .clone();
+                match (source.connector(), source.area()) {
+                    (Some(connector), Some(created_for)) => {
+                        match crate::mutter::area_moved(&self.connection, connector, created_for)
+                            .await
+                        {
+                            Ok(Some(now)) => {
+                                info!(
+                                    "[mutter-lifecycle] Capture area for {connector} moved from {}x{} at ({},{}) to {}x{} at ({},{}) — re-establishing",
+                                    created_for.width,
+                                    created_for.height,
+                                    created_for.x,
+                                    created_for.y,
+                                    now.width,
+                                    now.height,
+                                    now.x,
+                                    now.y
+                                );
+                                true
+                            }
+                            Ok(None) => false,
+                            // Not evidence of a change, so do not tear down a
+                            // working session over it.
+                            Err(e) => {
+                                debug!(
+                                    "[mutter-lifecycle] Could not re-check the capture area: {e:#}"
+                                );
+                                false
+                            }
+                        }
+                    }
+                    _ => false,
+                }
+            } else {
+                false
+            };
+
+            if alive && !area_stale {
+                let streams = self.streams();
+                let node = self
+                    .mutter_handle
+                    .read()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .pipewire_node_id();
+                info!(
+                    node,
+                    stream_count = streams.len(),
+                    "[mutter-lifecycle] Session still valid (liveness verified) — reusing for incoming client"
+                );
+                return Ok((streams, false));
+            }
+            if alive {
+                self.session_valid.store(false, Ordering::Release);
+            }
+            warn!(
+                "[mutter-lifecycle] Session flagged valid but the compositor no longer answers for it — re-establishing"
             );
-            return Ok((streams, false));
+            self.session_valid.store(false, Ordering::Release);
         }
 
         // The previous session was closed on the last disconnect (deliberate
@@ -770,7 +1148,11 @@ impl SessionHandle for MutterSessionHandleImpl {
             .await
             .context("Failed to create Mutter session manager for re-establishment")?;
         let mut fresh = manager
-            .create_session(self.monitor_connector.as_deref())
+            .create_session(
+                self.monitor_connector.as_deref(),
+                self.record_mode,
+                self.virtual_is_platform,
+            )
             .await
             .context("Failed to re-establish Mutter session")?;
 
@@ -830,6 +1212,8 @@ impl SessionHandle for MutterSessionHandleImpl {
     }
 
     async fn release_after_client(&self) {
+        let _lifecycle = self.lifecycle.lock().await;
+
         // Close the session deterministically on disconnect. This closes the
         // idle-reap race window (the compositor can't quietly kill a session we
         // already stopped) and guarantees the next client gets a fresh one.
@@ -881,11 +1265,39 @@ impl SessionHandle for MutterSessionHandleImpl {
 pub struct MutterDirectStrategy {
     /// Monitor connector (e.g., "HDMI-1"), or None for virtual monitor
     monitor_connector: Option<String>,
+    /// Whether to record an area or the monitor itself (GNOME/mutter#3903).
+    record_mode: crate::mutter::session_manager::RecordMode,
+    /// Whether a headless virtual monitor is marked as part of the platform.
+    virtual_is_platform: bool,
 }
 
 impl MutterDirectStrategy {
     pub fn new(monitor_connector: Option<String>) -> Self {
-        Self { monitor_connector }
+        Self {
+            monitor_connector,
+            record_mode: crate::mutter::session_manager::RecordMode::default(),
+            virtual_is_platform: false,
+        }
+    }
+
+    /// Set how a monitor is recorded (see `RecordMode`).
+    #[must_use]
+    pub fn with_record_mode(
+        mut self,
+        record_mode: crate::mutter::session_manager::RecordMode,
+    ) -> Self {
+        self.record_mode = record_mode;
+        self
+    }
+
+    /// Mark a headless virtual monitor as part of the platform.
+    ///
+    /// Only reaches the compositor on the headless path, since `is-platform` is
+    /// a `RecordVirtual` property; monitor and area sessions never send it.
+    #[must_use]
+    pub fn with_virtual_is_platform(mut self, is_platform: bool) -> Self {
+        self.virtual_is_platform = is_platform;
+        self
     }
 
     pub async fn is_available() -> bool {
@@ -926,7 +1338,11 @@ impl SessionStrategy for MutterDirectStrategy {
             .context("Failed to create Mutter session manager")?;
 
         let mutter_handle = manager
-            .create_session(self.monitor_connector.as_deref())
+            .create_session(
+                self.monitor_connector.as_deref(),
+                self.record_mode,
+                self.virtual_is_platform,
+            )
             .await
             .context("Failed to create Mutter session")?;
 
@@ -970,8 +1386,11 @@ impl SessionStrategy for MutterDirectStrategy {
             session_valid,
             health_reporter,
             monitor_connector: self.monitor_connector.clone(),
+            record_mode: self.record_mode,
+            virtual_is_platform: self.virtual_is_platform,
             deliberate_close: Arc::new(AtomicBool::new(false)),
             listener_tasks: std::sync::Mutex::new(Vec::new()),
+            lifecycle: tokio::sync::Mutex::new(()),
         };
 
         // Listen for Mutter Closed signals (proactive session death detection)
@@ -1062,6 +1481,10 @@ async fn handle_eis_event(
                     // Resumed (below) — issuing it on Done *and* Resumed is
                     // rejected by some compositors.
                     super::eis_common::assign_device_roles(&device, data, devices).await;
+                    // v3 devices require ready() after done before resumed.
+                    if super::eis_common::eis_device_ready(devices, &device) {
+                        let _ = context.flush();
+                    }
                 }
                 ei::device::Event::Resumed { serial } => {
                     *devices.last_serial.lock().await = serial;
@@ -1071,6 +1494,12 @@ async fn handle_eis_event(
                 }
                 _ => {}
             }
+        }
+
+        // Response to `connection.sync()`; consumed explicitly for handshake
+        // observability. Gating readiness on it is future work (reis/EIS roadmap).
+        ei::Event::Callback(_callback, ei::callback::Event::Done { callback_data }) => {
+            tracing::debug!("[mutter-eis] sync callback done (data={callback_data})");
         }
 
         _ => {}

@@ -57,7 +57,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 /// Default activation threshold — at minimum require 2 unacked frames before
 /// considering throttling. Matches GNOME RD `ACTIVATE_THROTTLING_TH_DEFAULT`.
@@ -328,6 +328,45 @@ impl FlowController {
         self.total_frame_slots = UNLIMITED_FRAME_SLOTS;
     }
 
+    /// Break a stalled throttle. When the client stops acking — a decoder
+    /// stall, a dropped ack, or a connection that has not yet surfaced as
+    /// closed — the unacked count never drains and `should_throttle()` would
+    /// stay true forever, freezing video. If the oldest unacked frame is older
+    /// than `timeout`, treat all outstanding frames as lost, reset to Inactive
+    /// so the encoder resumes, and return `Some(stalled_ms)` so the caller can
+    /// force a fresh IDR to resynchronize the decoder and surface the stall to
+    /// health. Returns `None` when there is nothing outstanding or the wait is
+    /// still within the timeout.
+    pub fn check_ack_timeout(&mut self, timeout: Duration) -> Option<u64> {
+        let now = Instant::now();
+        let oldest_unacked = self
+            .frames
+            .iter()
+            .filter(|f| f.acked_at.is_none())
+            .map(|f| f.encoded_at)
+            .min()?;
+        let stalled = now.saturating_duration_since(oldest_unacked);
+        if stalled < timeout {
+            return None;
+        }
+        let stalled_ms = stalled.as_millis() as u64;
+
+        warn!(
+            stalled_ms,
+            unacked = self.unacked_count(),
+            state = ?self.state,
+            "EGFX flow controller: frame-ack stall exceeded timeout — dropping unacked \
+             frames, resuming encoder, forcing IDR"
+        );
+        self.frames.clear();
+        self.rtt_samples.clear();
+        self.state = ThrottlingState::Inactive;
+        self.activate_th = self.config.activate_th_floor;
+        self.total_frame_slots = UNLIMITED_FRAME_SLOTS;
+        self.stats_throttle_exits += 1;
+        Some(stalled_ms)
+    }
+
     /// Should the encoder pause? Returns true when `total_frame_slots == 0`.
     /// Display loop checks this before encoding each frame.
     pub fn should_throttle(&self) -> bool {
@@ -421,10 +460,10 @@ impl FlowController {
             if f.encoded_at >= cutoff {
                 enc = enc.saturating_add(1);
             }
-            if let Some(ack_t) = f.acked_at {
-                if ack_t >= cutoff {
-                    ack = ack.saturating_add(1);
-                }
+            if let Some(ack_t) = f.acked_at
+                && ack_t >= cutoff
+            {
+                ack = ack.saturating_add(1);
             }
         }
         (enc, ack)

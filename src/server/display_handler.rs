@@ -68,7 +68,7 @@ use std::{
     num::{NonZeroU16, NonZeroUsize},
     os::fd::{IntoRawFd, OwnedFd},
     sync::Arc,
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use anyhow::Result;
@@ -76,6 +76,7 @@ use bytes::Bytes;
 use ironrdp_server::{
     BitmapUpdate as IronBitmapUpdate, DesktopSize, DisplayUpdate, GfxServerHandle,
     PixelFormat as IronPixelFormat, RdpServerDisplay, RdpServerDisplayUpdates, ServerEvent,
+    ServerResult,
 };
 use tokio::sync::{Mutex, RwLock, mpsc};
 use tracing::{debug, error, info, trace, warn};
@@ -92,7 +93,7 @@ use crate::{
         gfx_factory::SharedHandlerState, input_handler::LamcoInputHandler,
     },
     services::{ServiceId, ServiceRegistry},
-    video::{BitmapConverter, BitmapUpdate, RdpPixelFormat},
+    video::{BitmapConverter, BitmapUpdate, RdpPixelFormat, Rectangle},
 };
 
 /// Client-initiated resize request
@@ -151,6 +152,14 @@ impl VideoEncoder {
                         aux: frame.stream2_data,
                     })
                 }),
+        }
+    }
+
+    /// Active encode backend name for telemetry ("openh264" / "vaapi").
+    fn backend_name(&self) -> &'static str {
+        match self {
+            VideoEncoder::Avc420(e) => e.backend_name(),
+            VideoEncoder::Avc444(e) => e.backend_name(),
         }
     }
 
@@ -248,8 +257,43 @@ impl FrameRateRegulator {
     }
 }
 
+/// Wayland client observers, wired in after construction via
+/// `set_wayland_observers`. Each is present only when the compositor exposes
+/// the matching protocol.
+#[cfg(feature = "wayland")]
+#[derive(Default, Clone)]
+struct WaylandObservers {
+    color: std::sync::OnceLock<crate::compositor::ColorObserver>,
+    output: std::sync::OnceLock<crate::compositor::OutputObserver>,
+}
+
+/// Map an observed output transfer to the tone-mapper's source transfer;
+/// `None` for SDR/unknown (no tone mapping needed).
+#[cfg(feature = "wayland")]
+fn hdr_source_transfer(
+    t: crate::compositor::OutputTransfer,
+) -> Option<crate::egfx::tone_map::SourceTransfer> {
+    use crate::{compositor::OutputTransfer, egfx::tone_map::SourceTransfer};
+    match t {
+        OutputTransfer::Pq => Some(SourceTransfer::Pq),
+        OutputTransfer::Hlg => Some(SourceTransfer::Hlg),
+        OutputTransfer::Sdr | OutputTransfer::Unknown => None,
+    }
+}
+
 /// RDP Display Handler
 ///
+/// Shared handle to the encoder telemetry slot the `SnapshotCollector` reads.
+///
+/// Two levels of `Option` are load-bearing: the outer one is "no collector has
+/// been attached yet", the inner one is "attached, but the encoder has not
+/// reported a snapshot yet". The outer lock is async because it is set from the
+/// server task; the inner is a `parking_lot` lock because the encode path
+/// touches it per frame and must not await.
+type EncoderStateSlot = Arc<
+    RwLock<Option<Arc<parking_lot::RwLock<Option<crate::health::performance::EncoderSnapshot>>>>>,
+>;
+
 /// Provides the display size and update stream to IronRDP server.
 /// Manages the video pipeline from PipeWire capture to RDP transmission.
 ///
@@ -282,6 +326,18 @@ pub struct LamcoDisplayHandler {
 
     /// Monitor configuration from streams
     stream_info: Vec<StreamInfo>,
+
+    /// Server-driven cursor shape/position strategy (mode selection,
+    /// shape-change tracking, predictive rendering state).
+    cursor_strategy: Arc<Mutex<crate::cursor::CursorStrategy>>,
+
+    /// Server-published NetworkAutoDetect RTT (MS-RDPBCGR 2.2.14), same
+    /// handle the EGFX FlowController reads (`server/mod.rs` creates it and
+    /// hands it to the ironrdp-server builder, which writes measured RTT
+    /// into it; `u32::MAX` until the first measurement). Set post-construction
+    /// via `set_autodetect_rtt_handle`, feeding `CursorStrategy::update_latency`
+    /// for Predictive-mode auto-switching and lookahead tuning.
+    autodetect_rtt: Arc<RwLock<Option<Arc<std::sync::atomic::AtomicU32>>>>,
 
     // === EGFX/H.264 Support ===
     /// Shared GFX server handle for EGFX frame sending
@@ -360,11 +416,27 @@ pub struct LamcoDisplayHandler {
     fps_state:
         Arc<RwLock<Option<Arc<parking_lot::RwLock<crate::health::performance::FpsSnapshot>>>>>,
 
+    /// Encoder stats sink shared with the SnapshotCollector (set via
+    /// set_encoder_state). Written with the active backend name when the encoder
+    /// is created so telemetry reports "openh264"/"vaapi" instead of empty.
+    encoder_state: EncoderStateSlot,
+
     /// Shared stream active flag for Portal input coupling.
     /// Updated on PipeWire state transitions. Portal session reads this
     /// to suppress input injection when the stream is paused.
     /// None for non-Portal strategies (input is independent of stream state).
     stream_active_flag: parking_lot::RwLock<Option<Arc<std::sync::atomic::AtomicBool>>>,
+
+    /// Scale the compositor reports for the captured output, from the
+    /// `org.gnome.scale` stream tag.
+    ///
+    /// `None` until a producer publishes it, and `None` for producers that
+    /// never do. Mutter sets this tag only on a virtual-monitor stream, so in
+    /// practice it appears on headless GNOME sessions and nowhere else today.
+    ///
+    /// Live state, not configuration: it is refreshed whenever the producer
+    /// republishes its tags, and it describes the stream that is running now.
+    compositor_scale: parking_lot::RwLock<Option<f64>>,
 
     /// True when using direct frame channel (portal-generic) instead of PipeWire.
     /// Resize via PipeWire DestroyStream/CreateStream is not available in this mode.
@@ -373,6 +445,11 @@ pub struct LamcoDisplayHandler {
     /// Whether to request DMA-BUF buffers from PipeWire.
     /// Set based on compositor recommendation (DmaBuf for real GPUs, MemFd for virtual/software).
     use_dmabuf: bool,
+
+    /// Wayland color/output observers, wired in after construction via
+    /// `set_wayland_observers`.
+    #[cfg(feature = "wayland")]
+    wayland_observers: WaylandObservers,
 }
 
 impl LamcoDisplayHandler {
@@ -470,6 +547,10 @@ impl LamcoDisplayHandler {
             capture_node: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(
                 stream_info.first().map_or(0, |s| s.node_id),
             )),
+            cursor_strategy: Arc::new(Mutex::new(crate::cursor::CursorStrategy::new(
+                (&config.cursor).into(),
+            ))),
+            autodetect_rtt: Arc::new(RwLock::new(None)),
             stream_info,
             gfx_server_handle,
             gfx_handler_state,
@@ -492,9 +573,13 @@ impl LamcoDisplayHandler {
             pipewire_sensor: Arc::new(RwLock::new(None)),
             egfx_snapshot: Arc::new(RwLock::new(None)),
             fps_state: Arc::new(RwLock::new(None)),
+            encoder_state: Arc::new(RwLock::new(None)),
             stream_active_flag: parking_lot::RwLock::new(None),
+            compositor_scale: parking_lot::RwLock::new(None),
             direct_channel_mode: false,
             use_dmabuf,
+            #[cfg(feature = "wayland")]
+            wayland_observers: WaylandObservers::default(),
         })
     }
 
@@ -559,6 +644,10 @@ impl LamcoDisplayHandler {
             capture_node: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(
                 stream_info.first().map_or(0, |s| s.node_id),
             )),
+            cursor_strategy: Arc::new(Mutex::new(crate::cursor::CursorStrategy::new(
+                (&config.cursor).into(),
+            ))),
+            autodetect_rtt: Arc::new(RwLock::new(None)),
             stream_info,
             gfx_server_handle,
             gfx_handler_state,
@@ -581,10 +670,30 @@ impl LamcoDisplayHandler {
             pipewire_sensor: Arc::new(RwLock::new(None)),
             egfx_snapshot: Arc::new(RwLock::new(None)),
             fps_state: Arc::new(RwLock::new(None)),
+            encoder_state: Arc::new(RwLock::new(None)),
             stream_active_flag: parking_lot::RwLock::new(None),
+            compositor_scale: parking_lot::RwLock::new(None),
             direct_channel_mode: true,
             use_dmabuf: false, // direct channel is always CPU-resident
+            #[cfg(feature = "wayland")]
+            wayland_observers: WaylandObservers::default(),
         })
+    }
+
+    /// Wire the Wayland color/output observers after construction. Called once
+    /// at server startup; repeat calls are ignored.
+    #[cfg(feature = "wayland")]
+    pub fn set_wayland_observers(
+        &self,
+        color: Option<crate::compositor::ColorObserver>,
+        output: Option<crate::compositor::OutputObserver>,
+    ) {
+        if let Some(c) = color {
+            let _ = self.wayland_observers.color.set(c);
+        }
+        if let Some(o) = output {
+            let _ = self.wayland_observers.output.set(o);
+        }
     }
 
     /// Set input handler reference for reconnection notifications
@@ -596,6 +705,13 @@ impl LamcoDisplayHandler {
     ) {
         *self.input_handler.write().await = Some((*handler).clone());
         info!("Input handler reference set for reconnection notifications");
+    }
+
+    /// Wire the shared NetworkAutoDetect RTT handle (same one the EGFX
+    /// FlowController reads) so the cursor prediction loop can feed
+    /// measured latency into `CursorStrategy::update_latency`.
+    pub async fn set_autodetect_rtt_handle(&self, handle: Arc<std::sync::atomic::AtomicU32>) {
+        *self.autodetect_rtt.write().await = Some(handle);
     }
 
     /// Wire the health reporter so PipeWire stream state events propagate
@@ -611,6 +727,15 @@ impl LamcoDisplayHandler {
     /// preventing hundreds of futile D-Bus calls when the stream is paused.
     pub fn set_stream_active_flag(&self, flag: Arc<std::sync::atomic::AtomicBool>) {
         *self.stream_active_flag.write() = Some(flag);
+    }
+
+    /// Scale the compositor reports for the captured output, if it publishes one.
+    ///
+    /// Read from the `org.gnome.scale` stream tag. `None` means the producer
+    /// does not publish a scale, which is the case for every capture source
+    /// except a GNOME virtual monitor.
+    pub fn compositor_scale(&self) -> Option<f64> {
+        *self.compositor_scale.read()
     }
 
     /// Set clipboard manager reference for disconnect cleanup
@@ -771,6 +896,13 @@ impl LamcoDisplayHandler {
         state: Arc<parking_lot::RwLock<crate::health::performance::FpsSnapshot>>,
     ) {
         *self.fps_state.write().await = Some(state);
+    }
+
+    pub async fn set_encoder_state(
+        &self,
+        state: Arc<parking_lot::RwLock<Option<crate::health::performance::EncoderSnapshot>>>,
+    ) {
+        *self.encoder_state.write().await = Some(state);
     }
 
     /// Set PipeWire sensor for version-adaptive health monitoring
@@ -1060,6 +1192,70 @@ impl LamcoDisplayHandler {
         }
     }
 
+    /// Periodically re-emit `PointerPosition` at the cursor strategy's
+    /// predicted position, so Predictive mode keeps advancing between raw
+    /// cursor samples rather than only moving when a fresh compositor frame
+    /// happens to carry one. Also the only place that feeds the shared
+    /// NetworkAutoDetect RTT handle into `CursorStrategy::update_latency`,
+    /// since RTT measurements arrive independently of cursor frames.
+    ///
+    /// Runs for the lifetime of the display handler, mirroring the main
+    /// pipeline task; ticks at `CursorStrategyConfig::cursor_update_fps` and
+    /// does nothing but wait when no client is connected or the active mode
+    /// isn't Predictive.
+    fn start_cursor_prediction_loop(self: Arc<Self>) {
+        tokio::spawn(async move {
+            loop {
+                let fps = self.cursor_strategy.lock().await.update_fps().max(1);
+                tokio::time::sleep(Duration::from_millis(1000 / u64::from(fps))).await;
+
+                if !self
+                    .client_active
+                    .load(std::sync::atomic::Ordering::Acquire)
+                {
+                    continue;
+                }
+
+                let rtt_ms = self
+                    .autodetect_rtt
+                    .read()
+                    .await
+                    .as_ref()
+                    .map(|handle| handle.load(std::sync::atomic::Ordering::Acquire));
+
+                let predicted = {
+                    let mut strategy = self.cursor_strategy.lock().await;
+                    if let Some(rtt_ms) = rtt_ms
+                        && rtt_ms != u32::MAX
+                    {
+                        strategy.update_latency(rtt_ms);
+                    }
+                    if strategy.mode() == crate::cursor::CursorMode::Predictive {
+                        Some(strategy.render_position())
+                    } else {
+                        None
+                    }
+                };
+
+                let Some((x, y)) = predicted else {
+                    continue;
+                };
+                if x < 0 || y < 0 || x > i32::from(u16::MAX) || y > i32::from(u16::MAX) {
+                    continue;
+                }
+                let position = ironrdp_pdu::pointer::PointerPositionAttribute {
+                    x: x as u16,
+                    y: y as u16,
+                };
+                let sender = self.get_update_sender();
+                let sender = sender.lock().await;
+                if let Err(e) = sender.send(DisplayUpdate::PointerPosition(position)).await {
+                    debug!("Failed to send predicted cursor position update: {e}");
+                }
+            }
+        });
+    }
+
     /// Start the video pipeline
     ///
     /// This spawns a background task that continuously captures frames from PipeWire,
@@ -1072,6 +1268,8 @@ impl LamcoDisplayHandler {
     /// - **RemoteFX**: Fallback path when H.264 is not available, converts to
     ///   bitmap and sends through standard display update channel.
     pub fn start_pipeline(self: Arc<Self>) {
+        Arc::clone(&self).start_cursor_prediction_loop();
+
         let handler = Arc::clone(&self);
 
         tokio::spawn(async move {
@@ -1208,7 +1406,7 @@ impl LamcoDisplayHandler {
             let mut stress_window_dropped_at_start = 0u64;
             let mut stress_window_sent_at_start = 0u64;
             let mut stress_last_trigger = std::time::Instant::now()
-                .checked_sub(std::time::Duration::from_secs(60))
+                .checked_sub(std::time::Duration::from_mins(1))
                 .unwrap_or_else(std::time::Instant::now);
 
             // L3 FIX: aux-omission shrinks under stress.
@@ -1279,11 +1477,25 @@ impl LamcoDisplayHandler {
                 );
                 Some(DamageDetector::new(damage_config))
             } else {
-                debug!("🎯 Damage tracking DISABLED via config");
+                debug!(
+                    "🎯 Damage tracking DISABLED via config -- compositor damage hints (if any) \
+                     will be trusted unconditionally, with no calibration probe and no fallback \
+                     if they misbehave"
+                );
                 None
             };
 
             let mut frames_skipped_damage = 0u64; // Frames skipped due to no damage
+
+            // Compositor-hint trust state (see the damage-source-selection
+            // block below). Sticky for this connection's lifetime — reset
+            // only at the two true new-connection points, never on resize.
+            // A future capture strategy is covered automatically as long as
+            // it keeps feeding frames through this same shared pipeline
+            // (lamco_pipewire::frame::RawFrameData) rather than a parallel
+            // encode/damage path.
+            let mut compositor_hint_distrusted = false;
+            let mut consecutive_high_divergence = 0u32;
 
             // === FRAME STALL DETECTION ===
             // Track when we last received a frame from PipeWire. If the stream
@@ -1295,6 +1507,31 @@ impl LamcoDisplayHandler {
             // so a short window false-positives on normal idle (reading, etc.).
             // Use a longer window so only a genuinely stuck stream is flagged.
             let stall_threshold = std::time::Duration::from_secs(10);
+
+            // Corrupted-buffer storm detection. A compositor stuck in direct
+            // scanout keeps cycling its buffer pool while marking every chunk
+            // SPA_CHUNK_FLAG_CORRUPTED, so the picture freezes for seconds at a
+            // time without ever crossing the 10s stall threshold. Counting the
+            // flagged frames in a short window separates that from an idle
+            // desktop, which produces no buffers at all.
+            let corrupted_window = std::time::Duration::from_secs(2);
+            let corrupted_storm_threshold: u32 = 30;
+            let mut corrupted_window_start = std::time::Instant::now();
+            let mut corrupted_window_count: u32 = 0;
+            let mut corrupted_storm_reported = false;
+
+            // Most corrupted buffers carry size 0 and are dropped before a
+            // VideoFrame exists, so the counter above never sees them. The
+            // capture crate counts them at the source; sampling that is the
+            // only way to tell this apart from an idle desktop.
+            let mut corrupted_total_seen: u64 = 0;
+            let mut corrupted_since_report: u64 = 0;
+            // Ten in a two-second window: far above the interleave seen on healthy
+            // sessions, far below the rate of a real stall (about 75 a second).
+            let scanout_corrupted_floor: u64 = 10;
+            let mut last_scanout_report: Option<std::time::Instant> = None;
+            let scanout_report_interval = std::time::Duration::from_secs(2);
+            let scanout_stall_threshold = std::time::Duration::from_millis(1500);
 
             // Pace the "Processing frame" INFO log so low-throughput sessions
             // are not silent: log on every 30th frame OR when >2s elapsed since
@@ -1419,15 +1656,40 @@ impl LamcoDisplayHandler {
                     if let Some(req) = latest_resize {
                         info!("Processing client resize: {}x{}", req.width, req.height);
 
+                        // On wlroots-family compositors, drive a real output mode
+                        // change so the source output physically matches the
+                        // client's requested resolution rather than only
+                        // re-capturing a scaled region. Best-effort: a skip is
+                        // non-fatal (the capture-side resize below still runs).
+                        #[cfg(feature = "wayland")]
+                        if self.config.display.resize_drives_output_mode
+                            && let Some(out) = self.wayland_observers.output.get()
+                            && let Some((head, _)) =
+                                out.heads().into_iter().find(|(_, h)| h.enabled)
+                        {
+                            match out.request_custom_mode(
+                                &head,
+                                i32::from(req.width),
+                                i32::from(req.height),
+                                0,
+                            ) {
+                                Ok(()) => info!(
+                                    "Drove wlroots output '{}' to {}x{}",
+                                    head, req.width, req.height
+                                ),
+                                Err(e) => debug!("Output-mode change skipped: {e:#}"),
+                            }
+                        }
+
                         if handler.direct_channel_mode {
-                            // Direct frame channel (portal-generic): capture resolution
-                            // is fixed to the compositor's output size. We can't resize
-                            // the capture without wlr-output-management support, so
-                            // silently ignore the request rather than telling the RDP
-                            // client a resolution we can't deliver.
+                            // Direct frame channel (portal-generic): the capture
+                            // resolution follows the compositor output. The only
+                            // real resize is the wlroots output-mode change
+                            // attempted above; there is no PipeWire stream to
+                            // recreate here.
                             info!(
-                                "Resize to {}x{} ignored in direct channel mode \
-                                 (compositor output resolution is fixed)",
+                                "Resize to {}x{} in direct channel mode: relying on the \
+                                 compositor output mode (no PipeWire stream to recreate)",
                                 req.width, req.height
                             );
                             continue;
@@ -1561,6 +1823,27 @@ impl LamcoDisplayHandler {
                 let frame = {
                     let thread_mgr = handler.pipewire_thread.lock().await;
 
+                    // Tags a producer publishes about the stream. Mutter puts the
+                    // logical monitor's scale here on a virtual-monitor stream,
+                    // which is the only place a scale is observable from the
+                    // capture side at all. Read every pass because the producer
+                    // republishes on change and this is live state, not setup.
+                    {
+                        let tags = thread_mgr.stream_tags();
+                        let scale = tags.get_f64("org.gnome.scale");
+                        let mut current = handler.compositor_scale.write();
+                        if *current != scale {
+                            match scale {
+                                Some(s) => info!("Compositor reports output scale {s}"),
+                                None if current.is_some() => {
+                                    info!("Compositor stopped reporting an output scale");
+                                }
+                                None => {}
+                            }
+                            *current = scale;
+                        }
+                    }
+
                     // Forward PipeWire stream state changes to health monitor and sensor
                     let pw_sensor = handler.pipewire_sensor.read().await.clone();
                     if let Some(ref reporter) = *handler.health_reporter.read().await {
@@ -1616,14 +1899,46 @@ impl LamcoDisplayHandler {
                         }
                     }
 
-                    let frame = thread_mgr.try_recv_frame();
+                    // A frame the producer flagged SPA_CHUNK_FLAG_CORRUPTED carries
+                    // untrustworthy pixels and untrustworthy per-frame metadata
+                    // (damage regions in particular are stale slot contents rather
+                    // than a fresh claim), so encoding it puts garbage on the wire.
+                    // Drop it here and let the None path handle the resulting gap.
+                    let frame = match thread_mgr.try_recv_frame() {
+                        Some(f) if f.flags.is_corrupted() => {
+                            if corrupted_window_start.elapsed() > corrupted_window {
+                                corrupted_window_start = std::time::Instant::now();
+                                corrupted_window_count = 0;
+                                corrupted_storm_reported = false;
+                            }
+                            corrupted_window_count += 1;
+                            if !corrupted_storm_reported
+                                && corrupted_window_count >= corrupted_storm_threshold
+                            {
+                                corrupted_storm_reported = true;
+                                if let Some(ref reporter) = *handler.health_reporter.read().await {
+                                    reporter.report(
+                                        crate::health::HealthEvent::VideoFramesCorrupted {
+                                            count: corrupted_window_count,
+                                            window_ms: corrupted_window_start.elapsed().as_millis()
+                                                as u64,
+                                        },
+                                    );
+                                }
+                            }
+                            None
+                        }
+                        other => other,
+                    };
                     if frame.is_some()
                         && let Some(ref sensor) = pw_sensor
                     {
                         sensor.increment_frames();
                     }
-                    frame
+                    let corrupted_at_source = thread_mgr.corrupted_buffer_count();
+                    (frame, corrupted_at_source)
                 };
+                let (frame, corrupted_at_source) = frame;
 
                 let mut frame = match frame {
                     Some(f) => {
@@ -1709,6 +2024,8 @@ impl LamcoDisplayHandler {
                             egfx_frames_sent = 0;
                             video_encoder = None;
                             egfx_sender = None;
+                            compositor_hint_distrusted = false;
+                            consecutive_high_divergence = 0;
                             // New client needs fresh EGFX surface setup
                             handler
                                 .egfx_needs_init
@@ -1730,6 +2047,57 @@ impl LamcoDisplayHandler {
                         // still meant to be streaming — otherwise a static desktop
                         // flaps the session between healthy and degraded every time
                         // the user stops interacting.
+                        // The compositor is producing buffers and marking every
+                        // one unusable: that is not an idle desktop, it is
+                        // GNOME/mutter#3903 with a fullscreen or maximised
+                        // surface in direct scanout.
+                        //
+                        // Accumulate rather than reporting one iteration's delta.
+                        // This loop turns over in about a millisecond, so the
+                        // delta is almost always 1 while hundreds arrive in the
+                        // reporting window: the first version of this line said
+                        // "1 corrupted buffers" through an episode that logged 800.
+                        corrupted_since_report +=
+                            corrupted_at_source.saturating_sub(corrupted_total_seen);
+                        corrupted_total_seen = corrupted_at_source;
+                        {
+                            let client_here = handler
+                                .client_active
+                                .load(std::sync::atomic::Ordering::Relaxed);
+                            let starved = last_frame_time.elapsed() > scanout_stall_threshold;
+                            let due = last_scanout_report
+                                .is_none_or(|t| t.elapsed() > scanout_report_interval);
+                            // A rate, not a single buffer. Corrupted chunks also
+                            // interleave at a low rate on healthy virtio/Venus
+                            // sessions, and an idle desktop legitimately sends no
+                            // frames for seconds, so "one stray chunk plus a quiet
+                            // moment" must not be reported as a compositor fault.
+                            let storming = corrupted_since_report >= scanout_corrupted_floor;
+                            if client_here && starved && due && storming {
+                                let stalled_ms = last_frame_time.elapsed().as_millis() as u64;
+                                if let Some(ref reporter) = *handler.health_reporter.read().await {
+                                    reporter.report(
+                                        crate::health::HealthEvent::VideoFramesCorrupted {
+                                            count: corrupted_since_report.min(u64::from(u32::MAX))
+                                                as u32,
+                                            window_ms: stalled_ms,
+                                        },
+                                    );
+                                }
+                                warn!(
+                                    "Compositor delivered {corrupted_since_report} corrupted buffers and no usable frame for {stalled_ms}ms: it has handed this output to direct scanout and stopped recording for us (GNOME/mutter#3903). The picture is frozen until the surface leaves fullscreen or the compositor carries the fix from GNOME/mutter!5276."
+                                );
+                                last_scanout_report = Some(std::time::Instant::now());
+                                corrupted_since_report = 0;
+                            } else if due {
+                                // Window closed without a storm: start the next one
+                                // clean so counts cannot accumulate across minutes
+                                // of healthy operation into a false report.
+                                last_scanout_report = Some(std::time::Instant::now());
+                                corrupted_since_report = 0;
+                            }
+                        }
+
                         let stream_streaming = handler
                             .stream_active_flag
                             .read()
@@ -1752,7 +2120,20 @@ impl LamcoDisplayHandler {
                         // Zero-frame detection: if no frame has EVER arrived since session
                         // start, the capture protocol may be non-functional (e.g., ext-capture
                         // on a compositor with incomplete implementation).
-                        if !first_frame_received && !zero_frame_reported {
+                        //
+                        // Only while a client is actually connected. The window opens when
+                        // one connects, but nothing used to close it when that client left,
+                        // so a client that disconnects before the first frame arrives (a
+                        // scripted capture can be gone in 60ms) left the window running
+                        // against a connection that no longer existed. Ten seconds later the
+                        // server reported that capture had never delivered frames and drove
+                        // session health to failed, with nobody watching and nothing wrong.
+                        // An idle server receiving no frames is damage-driven capture working
+                        // as designed, not a fault.
+                        let client_present = handler
+                            .client_active
+                            .load(std::sync::atomic::Ordering::Relaxed);
+                        if client_present && !first_frame_received && !zero_frame_reported {
                             let since_start = session_start.elapsed();
                             if since_start > zero_frame_threshold {
                                 zero_frame_reported = true;
@@ -1803,6 +2184,8 @@ impl LamcoDisplayHandler {
                             egfx_frames_sent = 0;
                             video_encoder = None;
                             egfx_sender = None;
+                            compositor_hint_distrusted = false;
+                            consecutive_high_divergence = 0;
                             handler
                                 .egfx_needs_init
                                 .store(true, std::sync::atomic::Ordering::SeqCst);
@@ -1833,23 +2216,60 @@ impl LamcoDisplayHandler {
                             }
                         }
 
-                        // Replay the cached frame ONLY when the EGFX path can actually
-                        // consume it — i.e. EGFX is ready AND the client has confirmed
-                        // AVC support. Without the AVC check, this branch fires on
-                        // every iteration during the brief window between EGFX-ready
-                        // and AVC-detected (~17ms in practice), causing 9× redundant
-                        // replays of the same cached frame_id at INFO before the
-                        // encoder init block actually runs.
-                        if client_waiting
-                            && needs_init
-                            && handler.is_egfx_ready().await
-                            && handler.is_avc_supported().await
-                        {
+                        // Replay the cached frame once the EGFX channel is ready.
+                        // Codec choice (AVC vs. the V8/uncompressed fallback) is
+                        // decided in the same negotiation call that sets is_ready,
+                        // so by the time is_egfx_ready() is true the codec is
+                        // already settled — this is not a race to wait out.
+                        //
+                        // A prior version of this gate also required
+                        // is_avc_supported(), reasoning that would avoid redundant
+                        // replays during codec negotiation. It instead permanently
+                        // starved every non-AVC (V8/RemoteFX) client of the initial
+                        // frame: those clients never set is_avc_supported(), so on a
+                        // desktop idle enough that PipeWire never emits a live frame
+                        // within the 10s zero-frame window (damage-driven capture
+                        // legitimately produces nothing while nothing changes on
+                        // screen), the session was declared dead before anything
+                        // downstream ever ran. This was issue #57's real mechanism:
+                        // not a stream-teardown race, but this gate silently
+                        // excluding non-AVC clients from ever reaching the frame
+                        // that would have satisfied the health check.
+                        //
+                        // needs_init is cleared as soon as this replayed frame
+                        // reaches either setup path downstream (the AVC branch or
+                        // the V8/uncompressed branch), so a single replay per
+                        // connection is enough; this does not reopen the redundant-
+                        // replay concern the AVC gate was trying to address.
+                        let egfx_ready = handler.is_egfx_ready().await;
+                        // A client that never opens the EGFX channel at all (no
+                        // DVC, no H.264 decode — plain screenshot/automation
+                        // clients) never flips is_egfx_ready, and on an idle
+                        // desktop the damage-driven capture gives the FastPath
+                        // bitmap path no frame either. Such a client renders
+                        // nothing but its own blank framebuffer until the first
+                        // real damage. Once the EGFX gate deadline has passed
+                        // without readiness, replay the cached frame for it too.
+                        // Marking first_frame_received lets the gate's bypass
+                        // condition fire on this replayed frame, so it actually
+                        // reaches the bitmap path; the V8/legacy path then clears
+                        // egfx_needs_init, so this fires once per connection.
+                        let legacy_gate_settled =
+                            !egfx_ready && session_start.elapsed() > egfx_timeout;
+                        if client_waiting && needs_init && (egfx_ready || legacy_gate_settled) {
                             if let Some(ref cached) = cached_frame {
-                                info!(
-                                    "📦 Replaying cached frame for EGFX init ({}x{}, frame {})",
-                                    cached.width, cached.height, cached.frame_id
-                                );
+                                if legacy_gate_settled {
+                                    first_frame_received = true;
+                                    info!(
+                                        "📦 Replaying cached frame for legacy (non-EGFX) client init ({}x{}, frame {})",
+                                        cached.width, cached.height, cached.frame_id
+                                    );
+                                } else {
+                                    info!(
+                                        "📦 Replaying cached frame for EGFX init ({}x{}, frame {})",
+                                        cached.width, cached.height, cached.frame_id
+                                    );
+                                }
                                 cached.clone()
                             } else {
                                 // No cached frame yet (server just started, PipeWire
@@ -1923,6 +2343,10 @@ impl LamcoDisplayHandler {
                     };
                 }
 
+                handler
+                    .process_cursor_update(frame.meta.cursor.clone(), frame.monitor_index)
+                    .await;
+
                 frames_sent += 1;
                 let elapsed_since_log = last_processing_log.elapsed();
                 if frames_sent.is_multiple_of(30)
@@ -1987,16 +2411,19 @@ impl LamcoDisplayHandler {
                 // true so the next frame retries initialization. The flag is only
                 // cleared on successful setup (egfx_sender populated).
                 //
-                // For V8 clients (no AVC), clear immediately since they never
-                // enter the EGFX setup block and a stuck flag causes infinite
-                // cached frame replay.
-                let mut needs_init = if !egfx_gate_bypassed {
-                    handler
-                        .egfx_needs_init
-                        .load(std::sync::atomic::Ordering::SeqCst)
-                } else {
-                    false
-                };
+                // Always load the real value, even when the gate is bypassed:
+                // every consumer below that cares about `egfx_gate_bypassed` (the
+                // AVC setup block, the V8/EGFX-uncompressed block) already gates
+                // itself independently on `!egfx_gate_bypassed`, but the
+                // non-EGFX-client clear below needs the true flag state to ever
+                // fire for a bypassed (legacy, no-EGFX-channel) client. Hardcoding
+                // this to `false` when bypassed used to mean that clear could
+                // never run, so `egfx_needs_init` stayed stuck true forever and
+                // the cached-frame replay above re-fired on every loop iteration
+                // — an unbounded busy loop that starved the connection's own I/O.
+                let mut needs_init = handler
+                    .egfx_needs_init
+                    .load(std::sync::atomic::Ordering::SeqCst);
 
                 // L2 FIX: stress-triggered early IDR.
                 // When the rolling-window drop rate exceeds threshold and the
@@ -2206,6 +2633,21 @@ impl LamcoDisplayHandler {
                             aligned_width as u32,
                             aligned_height as u32,
                         );
+
+                        // HDR awareness: when the source output is in an HDR mode
+                        // its pixels are PQ/HLG-encoded and get squashed to 8-bit
+                        // SDR by the RDP path. Surface it here; PQ->SDR
+                        // tone-mapping is the encode-side follow-up.
+                        #[cfg(feature = "wayland")]
+                        if let Some(obs) = self.wayland_observers.color.get()
+                            && obs.any_hdr()
+                        {
+                            warn!(
+                                "⚠️  Source output is HDR (PQ/HLG); encoding to 8-bit SDR \
+                                 without tone-mapping — colors will be off until tone-mapping lands"
+                            );
+                        }
+
                         let config = EncoderConfig {
                             bitrate_kbps: self.config.egfx.h264_bitrate,
                             max_fps: self.config.video.target_fps as f32,
@@ -2284,8 +2726,36 @@ impl LamcoDisplayHandler {
                         };
 
                         if avc444_enabled {
-                            // Try AVC444 first (premium 4:4:4 chroma)
-                            match Avc444Encoder::new(config.clone()) {
+                            // Try AVC444 first (premium 4:4:4 chroma), preferring
+                            // the VA-API hardware encoder when it is enabled and
+                            // available, falling back to software otherwise.
+                            #[cfg(feature = "vaapi")]
+                            let avc444_result = if self.config.hardware_encoding.enabled {
+                                match Avc444Encoder::new_hardware(
+                                    config.clone(),
+                                    &self.config.hardware_encoding,
+                                ) {
+                                    Ok(enc) => {
+                                        info!(
+                                            "✅ AVC444 using VA-API hardware encoder for {}×{}",
+                                            aligned_width, aligned_height
+                                        );
+                                        Ok(enc)
+                                    }
+                                    Err(e) => {
+                                        warn!(
+                                            "Hardware AVC444 unavailable ({e:?}); using software AVC444"
+                                        );
+                                        Avc444Encoder::new(config.clone())
+                                    }
+                                }
+                            } else {
+                                Avc444Encoder::new(config.clone())
+                            };
+                            #[cfg(not(feature = "vaapi"))]
+                            let avc444_result = Avc444Encoder::new(config.clone());
+
+                            match avc444_result {
                                 Ok(mut encoder) => {
                                     // Wire aux omission config from EgfxConfig
                                     encoder.configure_aux_omission(
@@ -2331,8 +2801,32 @@ impl LamcoDisplayHandler {
                                 }
                             }
                         } else {
-                            // Use AVC420 (standard 4:2:0 chroma)
-                            match Avc420Encoder::new(config) {
+                            // Use AVC420 (standard 4:2:0 chroma), preferring the
+                            // VA-API hardware encoder when enabled and available.
+                            #[cfg(feature = "vaapi")]
+                            let avc420_result = if self.config.hardware_encoding.enabled {
+                                match Avc420Encoder::new_hardware(
+                                    config.clone(),
+                                    &self.config.hardware_encoding,
+                                ) {
+                                    Ok(enc) => {
+                                        info!("✅ AVC420 using VA-API hardware encoder");
+                                        Ok(enc)
+                                    }
+                                    Err(e) => {
+                                        warn!(
+                                            "Hardware AVC420 unavailable ({e:?}); using software AVC420"
+                                        );
+                                        Avc420Encoder::new(config)
+                                    }
+                                }
+                            } else {
+                                Avc420Encoder::new(config)
+                            };
+                            #[cfg(not(feature = "vaapi"))]
+                            let avc420_result = Avc420Encoder::new(config);
+
+                            match avc420_result {
                                 Ok(mut encoder) => {
                                     encoder.set_diagnostics(encoder_diagnostics.clone());
                                     video_encoder = Some(VideoEncoder::Avc420(encoder));
@@ -2357,6 +2851,25 @@ impl LamcoDisplayHandler {
                         // Per MS-RDPEGFX spec, clients in EGFX mode ignore FastPath bitmaps.
                         if video_encoder.is_none() {
                             info!("No H.264 encoder available, using EGFX uncompressed path");
+                        }
+
+                        // Publish the active encoder backend to the shared snapshot
+                        // so D-Bus/GUI telemetry reports it instead of an empty
+                        // string. Runs on encoder (re)creation, not per frame.
+                        if let Some(ref enc) = video_encoder {
+                            let backend = enc.backend_name();
+                            if let Some(handle) = self.encoder_state.read().await.as_ref() {
+                                let mut slot = handle.write();
+                                match slot.as_mut() {
+                                    Some(existing) => backend.clone_into(&mut existing.backend),
+                                    None => {
+                                        *slot = Some(crate::health::performance::EncoderSnapshot {
+                                            backend: backend.to_owned(),
+                                            ..Default::default()
+                                        });
+                                    }
+                                }
+                            }
                         }
                         if let Some(sender) = handler
                             .setup_egfx_surface(
@@ -2388,27 +2901,49 @@ impl LamcoDisplayHandler {
                         //
                         // Throttle path: drop the frame at the encoder boundary, log
                         // periodically so operators can see flow control engaged.
-                        let throttle = handler.gfx_handler_state.as_ref().is_some_and(|s| {
-                            s.flow_controller
-                                .lock()
-                                .ok()
-                                .is_some_and(|fc| fc.should_throttle())
-                        });
+                        // Break a stalled throttle: if the client has not acked
+                        // within frame_ack_timeout, the flow controller drops the
+                        // outstanding frames and resumes, and we force an IDR so
+                        // the decoder resyncs. Without this a client decode hiccup
+                        // (or a dropped ack) freezes the session permanently.
+                        let ack_timeout =
+                            std::time::Duration::from_millis(handler.config.egfx.frame_ack_timeout);
+                        let (recovered_ms, throttle) = handler
+                            .gfx_handler_state
+                            .as_ref()
+                            .and_then(|s| {
+                                s.flow_controller.lock().ok().map(|mut fc| {
+                                    (fc.check_ack_timeout(ack_timeout), fc.should_throttle())
+                                })
+                            })
+                            .unwrap_or((None, false));
+                        if let Some(stalled_ms) = recovered_ms {
+                            warn!(
+                                stalled_ms,
+                                "EGFX: frame-ack stall past timeout — resumed encoder, \
+                                 forcing IDR to resync client"
+                            );
+                            encoder.request_idr();
+                            if let Some(ref reporter) = *handler.health_reporter.read().await {
+                                reporter.report(crate::health::HealthEvent::VideoAckStalled {
+                                    stalled_ms,
+                                });
+                            }
+                        }
                         if throttle {
                             frames_dropped += 1;
-                            if frames_dropped.is_multiple_of(60) {
-                                if let Some(ref s) = handler.gfx_handler_state
-                                    && let Ok(fc) = s.flow_controller.lock()
-                                {
-                                    info!(
-                                        unacked = fc.unacked_count(),
-                                        activate_th = fc.activate_th(),
-                                        avg_rtt_us = fc.avg_rtt().as_micros() as u64,
-                                        state = ?fc.state(),
-                                        "EGFX L4 flow controller: throttling encoder \
-                                         (waiting for client to drain unacked frames)"
-                                    );
-                                }
+                            if frames_dropped.is_multiple_of(60)
+                                && let Some(ref s) = handler.gfx_handler_state
+                                && let Ok(fc) = s.flow_controller.lock()
+                            {
+                                info!(
+                                    unacked = fc.unacked_count(),
+                                    activate_th = fc.activate_th(),
+                                    avg_rtt_us = fc.avg_rtt().as_micros() as u64,
+                                    state = ?fc.state(),
+                                    "EGFX L4 flow controller: throttling encoder \
+                                     (waiting for client to drain unacked frames)"
+                                );
                             }
                             continue;
                         }
@@ -2448,6 +2983,24 @@ impl LamcoDisplayHandler {
                             frames_dropped += 1;
                             continue;
                         }
+
+                        // HDR -> SDR tone mapping (opt-in). When enabled and the
+                        // source output is HDR, convert the captured PQ/HLG
+                        // pixels to SDR before damage detection and encode, in a
+                        // fresh buffer (the PipeWire buffer is shared, so it
+                        // cannot be mutated in place).
+                        #[cfg(feature = "wayland")]
+                        let pixel_data = if self.config.display.hdr_tone_mapping
+                            && let Some(obs) = self.wayland_observers.color.get()
+                            && let Some((transfer, peak)) = obs.hdr_source()
+                            && let Some(src) = hdr_source_transfer(transfer)
+                        {
+                            let mut toned = pixel_data.as_ref().clone();
+                            crate::egfx::tone_map::tonemap_bgrx_in_place(&mut toned, src, peak);
+                            std::sync::Arc::new(toned)
+                        } else {
+                            pixel_data
+                        };
 
                         // === DAMAGE DETECTION (Config-controlled) ===
                         // Detect which regions changed since the last frame
@@ -2489,41 +3042,92 @@ impl LamcoDisplayHandler {
                                 );
                             }
                             vec![DamageRegion::full_frame(frame.width, frame.height)]
-                        } else if !frame.damage_regions.is_empty() {
-                            // Compositor-provided damage (authoritative, zero CPU cost).
+                        } else if !frame.damage_regions.is_empty() && !compositor_hint_distrusted {
+                            // Compositor-provided damage (authoritative, zero CPU cost --
+                            // as long as it's trustworthy; see the calibration probe below).
                             // Use PipeWire damage hints from wlr-screencopy or ext-image-copy-capture.
                             damage_source = "compositor-hint";
+                            let hint_regions: Vec<DamageRegion> = frame
+                                .damage_regions
+                                .iter()
+                                .map(|r| DamageRegion::from(*r))
+                                .collect();
                             if let Some(ref mut detector) = damage_detector_opt {
                                 if should_log_telemetry {
                                     // Calibration probe: run the real pixel-diff detector
                                     // instead of the cheap reference-only update, so we can
-                                    // log how far this protocol's damage hints diverge from
-                                    // an actual pixel diff. detect() updates the reference
-                                    // frame as a side effect, same as update_reference()
-                                    // would have -- this is not extra drift, just a ~2-3ms
-                                    // probe once every 60 frames.
+                                    // measure how far this compositor's damage hints diverge
+                                    // from an actual pixel diff. detect() updates the
+                                    // reference frame as a side effect, same as
+                                    // update_reference() would have -- this is not extra
+                                    // drift, just a ~2-3ms probe once every ~2s.
                                     let probe_regions =
                                         detector.detect(&pixel_data, frame.width, frame.height);
-                                    compositor_vs_pixel_diff =
-                                        Some(pipeline_decisions::compute_damage_ratio(
-                                            &probe_regions,
-                                            frame.width,
-                                            frame.height,
-                                        ));
+                                    let pixel_diff_ratio = pipeline_decisions::compute_damage_ratio(
+                                        &probe_regions,
+                                        frame.width,
+                                        frame.height,
+                                    );
+                                    let hint_ratio = pipeline_decisions::compute_damage_ratio(
+                                        &hint_regions,
+                                        frame.width,
+                                        frame.height,
+                                    );
+                                    compositor_vs_pixel_diff = Some(pixel_diff_ratio);
+
+                                    let divergence_pp = (hint_ratio - pixel_diff_ratio) * 100.0;
+                                    let eval = pipeline_decisions::evaluate_compositor_trust(
+                                        divergence_pp,
+                                        consecutive_high_divergence,
+                                        self.config
+                                            .damage_tracking
+                                            .compositor_hint_distrust_threshold_pp,
+                                        self.config
+                                            .damage_tracking
+                                            .compositor_hint_distrust_consecutive_samples,
+                                    );
+                                    consecutive_high_divergence = eval.new_consecutive_count;
+                                    if eval.should_distrust {
+                                        compositor_hint_distrusted = true;
+                                        warn!(
+                                            "🎯 Compositor damage hints distrusted for this connection: \
+                                             {} consecutive probes diverged >{:.1}pp from pixel-diff \
+                                             (last sample: hint={:.1}% pixel-diff={:.1}%). \
+                                             Switching to pixel-diff as primary damage source.",
+                                            eval.new_consecutive_count,
+                                            self.config
+                                                .damage_tracking
+                                                .compositor_hint_distrust_threshold_pp,
+                                            hint_ratio * 100.0,
+                                            pixel_diff_ratio * 100.0,
+                                        );
+                                        if let Some(ref reporter) =
+                                            *handler.health_reporter.read().await
+                                        {
+                                            reporter.report(
+                                                crate::health::HealthEvent::CompositorDamageHintsDistrusted {
+                                                    divergence_pp: divergence_pp.abs(),
+                                                },
+                                            );
+                                        }
+                                    }
                                 } else {
                                     // Keep DamageDetector reference frame synchronized for
                                     // seamless fallback, without the cost of a full diff.
                                     detector.update_reference(&pixel_data);
                                 }
                             }
-                            frame
-                                .damage_regions
-                                .iter()
-                                .map(|r| DamageRegion::from(*r))
-                                .collect()
+                            hint_regions
                         } else if let Some(ref mut detector) = damage_detector_opt {
-                            // Fallback: pixel-diff damage detection (SIMD, ~2-3ms at 1080p)
-                            damage_source = "pixel-diff";
+                            // Fallback: pixel-diff damage detection (SIMD, ~2-3ms at 1080p).
+                            // Reached either because the compositor sent no hint at all, or
+                            // because the calibration probe proved this connection's hints
+                            // untrustworthy (see compositor_hint_distrusted above).
+                            damage_source = if compositor_hint_distrusted {
+                                "pixel-diff-distrust"
+                            } else {
+                                "pixel-diff"
+                            };
                             detector.detect(&pixel_data, frame.width, frame.height)
                         } else {
                             // Damage tracking disabled - use full frame
@@ -2903,6 +3507,7 @@ impl LamcoDisplayHandler {
                     }
                 }
 
+                let frame_monitor_index = frame.monitor_index;
                 let convert_start = std::time::Instant::now();
                 let bitmap_update = match handler.convert_to_bitmap(frame).await {
                     Ok(bitmap) => bitmap,
@@ -2931,7 +3536,10 @@ impl LamcoDisplayHandler {
                 }
 
                 let iron_start = std::time::Instant::now();
-                let iron_updates = match handler.convert_to_iron_format(&bitmap_update).await {
+                let iron_updates = match handler
+                    .convert_to_iron_format(&bitmap_update, frame_monitor_index)
+                    .await
+                {
                     Ok(updates) => updates,
                     Err(e) => {
                         error!("Failed to convert to IronRDP format: {}", e);
@@ -2987,11 +3595,226 @@ impl LamcoDisplayHandler {
             .map_err(|e| anyhow::anyhow!("Bitmap conversion failed: {e}"))
     }
 
+    /// Look up a monitor's virtual-desktop position by the PipeWire node id
+    /// that produced a given frame (`VideoFrame::monitor_index`), for
+    /// mapping that frame's stream-local coordinates into the shared
+    /// `CoordinateTransformer`'s space (see `process_cursor_update` and
+    /// `convert_to_iron_format`).
+    ///
+    /// This is a `node_id` lookup, not an array index: `stream_info`'s
+    /// order isn't guaranteed to match monitor_index numerically (PipeWire
+    /// node ids are arbitrary, globally-assigned object ids, not a 0-based
+    /// enumeration), so indexing directly would silently resolve to the
+    /// wrong monitor's offset — or an unrelated one — the moment more than
+    /// one stream is live. Falls back to `(0, 0)` (no offset) when no
+    /// matching stream is found, which is also the correct behavior for
+    /// today's single-monitor reality (a `monitor_index` of the one active
+    /// stream's node id, offset `(0, 0)` unless the primary is actually
+    /// positioned away from the virtual desktop origin).
+    fn stream_offset_for(&self, monitor_index: u32) -> (i32, i32) {
+        self.stream_info
+            .iter()
+            .find(|s| s.node_id == monitor_index)
+            .map_or((0, 0), |s| s.position)
+    }
+
+    /// Reposition a stream-local damage rectangle's origin into RDP
+    /// virtual-desktop coordinates via the shared `CoordinateTransformer`,
+    /// the same one `process_cursor_update` uses for cursor position.
+    ///
+    /// Transforms only `(left, top)`, then preserves the rectangle's
+    /// original width/height exactly rather than independently
+    /// transforming `(right, bottom)` too: `rect_data.data`'s byte length
+    /// is fixed by the actual captured pixel buffer, and the RDP Bitmap
+    /// Update wire format has no separate scale factor, only a declared
+    /// width/height the client reads that many pixels for — if the
+    /// transform ever applies real DPI scaling (today's monitor
+    /// construction always has `scale_factor: 1.0`, so it doesn't), a
+    /// scaled `right`/`bottom` would describe a region the pixel data
+    /// doesn't actually match, not a resized one.
+    ///
+    /// Passes `rect` through unchanged (still correct for today's
+    /// single-monitor-at-the-origin reality) if no `CoordinateTransformer`
+    /// is wired yet, or if the transformed origin doesn't fit `u16`.
+    async fn transform_rectangle_to_rdp(&self, monitor_index: u32, rect: Rectangle) -> Rectangle {
+        let Some(transformer) = self
+            .input_handler
+            .read()
+            .await
+            .as_ref()
+            .map(|h| Arc::clone(&h.coordinate_transformer))
+        else {
+            return rect;
+        };
+        let offset = self.stream_offset_for(monitor_index);
+        let global_x = f64::from(i32::from(rect.left) + offset.0);
+        let global_y = f64::from(i32::from(rect.top) + offset.1);
+        let Ok((rdp_x, rdp_y)) = transformer.lock().await.stream_to_rdp(global_x, global_y) else {
+            return rect;
+        };
+        let (Ok(left), Ok(top)) = (u16::try_from(rdp_x), u16::try_from(rdp_y)) else {
+            return rect;
+        };
+        let width = rect.right.saturating_sub(rect.left);
+        let height = rect.bottom.saturating_sub(rect.top);
+        Rectangle {
+            left,
+            top,
+            right: left.saturating_add(width),
+            bottom: top.saturating_add(height),
+        }
+    }
+
+    /// Handle a frame's `SPA_META_Cursor`: update cursor position/shape and
+    /// emit the corresponding IronRDP pointer `DisplayUpdate`s.
+    ///
+    /// `monitor_index` identifies which capture stream this frame came from
+    /// (`VideoFrame::monitor_index`, the stream's real PipeWire node id — not
+    /// a 0-based array index, see `stream_offset_for`), used to recover the
+    /// stream-space offset for the shared `CoordinateTransformer`. Whether
+    /// this ever resolves more than one distinct monitor depends on the RDP
+    /// server actually advertising multi-monitor DisplayControl capability
+    /// (currently pinned to a single monitor, a separate gap from this
+    /// lookup); this call is correct for whatever `stream_info` it's given
+    /// and will reflect real multi-monitor layout once that's wired up.
+    ///
+    /// `CursorMode::Painted` (server-side compositing into the video frame)
+    /// is not implemented yet — `CursorMode::requires_compositing()` exists
+    /// for a future caller that does the compositing, but nothing calls it
+    /// today. Until that lands, Painted falls through to the same
+    /// client-side metadata path as Metadata/Predictive rather than sending
+    /// no cursor at all; that's a deliberate temporary fallback, not the
+    /// intended final behavior for that mode.
+    async fn process_cursor_update(
+        &self,
+        cursor: Option<lamco_pipewire::meta::CursorMeta>,
+        monitor_index: u32,
+    ) {
+        let Some(cursor) = cursor else {
+            return;
+        };
+
+        let sender = self.get_update_sender();
+        let mut strategy = self.cursor_strategy.lock().await;
+
+        // id == 0 is the compositor's "invalid/no cursor" sentinel (e.g. the
+        // pointer left the captured surface). Hide once, regardless of mode.
+        let mode_hidden = strategy.mode() == crate::cursor::CursorMode::Hidden;
+        if cursor.id == 0 || mode_hidden {
+            if strategy.needs_hide_update() {
+                let sender = sender.lock().await;
+                if let Err(e) = sender.send(DisplayUpdate::HidePointer).await {
+                    debug!("Failed to send cursor hide update: {e}");
+                }
+            }
+            return;
+        }
+        strategy.note_visible();
+
+        // Map the frame-local cursor position into RDP virtual-desktop space:
+        // add this monitor's stream-space offset, then the shared
+        // CoordinateTransformer (already built and maintained per-connection
+        // by the input handler) does offset-recovery, monitor lookup, and
+        // DPI/virtual-desktop normalization in one step.
+        let transformer = self
+            .input_handler
+            .read()
+            .await
+            .as_ref()
+            .map(|h| Arc::clone(&h.coordinate_transformer));
+        if let Some(transformer) = transformer {
+            let offset = self.stream_offset_for(monitor_index);
+            let global_x = f64::from(cursor.position.0 + offset.0);
+            let global_y = f64::from(cursor.position.1 + offset.1);
+            match transformer.lock().await.stream_to_rdp(global_x, global_y) {
+                Ok((rdp_x, rdp_y)) => strategy.update_position(rdp_x as i32, rdp_y as i32),
+                Err(e) => {
+                    debug!("Cursor position transform failed, keeping last known position: {e}");
+                }
+            }
+        }
+
+        // Compositors resend the bitmap only on a real shape change; most
+        // frames carry a position-only cursor update. The shape cache lets
+        // a shape that recurs after other shapes were sent in between (not
+        // just the immediately-previous one) skip re-encoding entirely.
+        // Lookup is checked before touching cursor.bitmap: a cache hit needs
+        // no bitmap at all, and a slot is only ever claimed (cache_shape)
+        // once a shape has actually been encoded and is about to be sent —
+        // see CursorShapeCache::insert's doc for why that ordering matters.
+        if let Some(cache_index) = strategy.lookup_shape_cache(cursor.id) {
+            let sender = sender.lock().await;
+            if let Err(e) = sender.send(DisplayUpdate::CachedPointer(cache_index)).await {
+                debug!("Failed to send cached cursor pointer update: {e}");
+            }
+        } else if let Some(ref bitmap) = cursor.bitmap {
+            match crate::cursor::convert_cursor_bitmap(bitmap, cursor.hotspot) {
+                Ok(wire_pointer) => {
+                    strategy.update_shape(crate::cursor::CursorShape {
+                        width: u32::from(wire_pointer.width),
+                        height: u32::from(wire_pointer.height),
+                        hotspot_x: u32::from(wire_pointer.hot_x),
+                        hotspot_y: u32::from(wire_pointer.hot_y),
+                        data: wire_pointer.data.clone(),
+                    });
+                    let needs_top_down_rows = self.gfx_handler_state.as_ref().is_some_and(|s| {
+                        s.needs_android_pointer_updates
+                            .load(std::sync::atomic::Ordering::Acquire)
+                    });
+                    let cache_index = strategy.cache_shape(cursor.id);
+                    let update = match wire_pointer
+                        .into_display_update(cache_index, needs_top_down_rows)
+                    {
+                        crate::cursor::WireDisplayUpdate::Rgba(p) => DisplayUpdate::RGBAPointer(p),
+                        crate::cursor::WireDisplayUpdate::Large(p) => {
+                            DisplayUpdate::LargePointer(p)
+                        }
+                    };
+                    let sender = sender.lock().await;
+                    if let Err(e) = sender.send(update).await {
+                        debug!("Failed to send cursor shape update: {e}");
+                    }
+                }
+                Err(e) => {
+                    debug!("Skipping cursor shape update: {e}");
+                }
+            }
+        } else {
+            debug!(
+                "Cursor id {} not cached and no bitmap attached this frame; skipping shape update",
+                cursor.id
+            );
+        }
+
+        let (render_x, render_y) = strategy.render_position();
+        if render_x >= 0
+            && render_y >= 0
+            && render_x <= i32::from(u16::MAX)
+            && render_y <= i32::from(u16::MAX)
+        {
+            let position = ironrdp_pdu::pointer::PointerPositionAttribute {
+                x: render_x as u16,
+                y: render_y as u16,
+            };
+            let sender = sender.lock().await;
+            if let Err(e) = sender.send(DisplayUpdate::PointerPosition(position)).await {
+                debug!("Failed to send cursor position update: {e}");
+            }
+        }
+    }
+
     /// Convert our BitmapUpdate format to IronRDP's BitmapUpdate format
-    async fn convert_to_iron_format(&self, update: &BitmapUpdate) -> Result<Vec<IronBitmapUpdate>> {
+    async fn convert_to_iron_format(
+        &self,
+        update: &BitmapUpdate,
+        monitor_index: u32,
+    ) -> Result<Vec<IronBitmapUpdate>> {
         let mut iron_updates = Vec::new();
 
         for rect_data in &update.rectangles {
+            let rectangle = self
+                .transform_rectangle_to_rdp(monitor_index, rect_data.rectangle)
+                .await;
             let iron_format = match rect_data.format {
                 RdpPixelFormat::BgrX32 => IronPixelFormat::BgrX32,
                 RdpPixelFormat::Bgr24 => {
@@ -3011,22 +3834,16 @@ impl LamcoDisplayHandler {
                 }
             };
 
-            let width = rect_data
-                .rectangle
-                .right
-                .saturating_sub(rect_data.rectangle.left);
-            let height = rect_data
-                .rectangle
-                .bottom
-                .saturating_sub(rect_data.rectangle.top);
+            let width = rectangle.right.saturating_sub(rectangle.left);
+            let height = rectangle.bottom.saturating_sub(rectangle.top);
 
             let bytes_per_pixel = iron_format.bytes_per_pixel() as usize;
             let stride = NonZeroUsize::new(width as usize * bytes_per_pixel)
                 .ok_or_else(|| anyhow::anyhow!("Invalid stride calculation: width={width}"))?;
 
             let iron_bitmap = IronBitmapUpdate {
-                x: rect_data.rectangle.left,
-                y: rect_data.rectangle.top,
+                x: rectangle.left,
+                y: rectangle.top,
                 width: NonZeroU16::new(width)
                     .ok_or_else(|| anyhow::anyhow!("Invalid width: {width}"))?,
                 height: NonZeroU16::new(height)
@@ -3057,7 +3874,7 @@ impl RdpServerDisplay for LamcoDisplayHandler {
         clippy::expect_used,
         reason = "mutex poisoning is unrecoverable; receiver guaranteed after reset"
     )]
-    async fn updates(&mut self) -> Result<Box<dyn RdpServerDisplayUpdates>> {
+    async fn updates(&mut self) -> ServerResult<Box<dyn RdpServerDisplayUpdates>> {
         let mut receiver_option = self.update_receiver.lock().await;
 
         // If receiver was already taken by a previous connection, create a new channel
@@ -3279,6 +4096,8 @@ impl Clone for LamcoDisplayHandler {
             update_receiver: Arc::clone(&self.update_receiver),
             graphics_tx: self.graphics_tx.clone(),
             stream_info: self.stream_info.clone(),
+            cursor_strategy: Arc::clone(&self.cursor_strategy),
+            autodetect_rtt: Arc::clone(&self.autodetect_rtt),
             // EGFX fields
             gfx_server_handle: Arc::clone(&self.gfx_server_handle),
             gfx_handler_state: self.gfx_handler_state.as_ref().map(Arc::clone),
@@ -3302,9 +4121,13 @@ impl Clone for LamcoDisplayHandler {
             pipewire_sensor: Arc::clone(&self.pipewire_sensor),
             egfx_snapshot: Arc::clone(&self.egfx_snapshot),
             fps_state: Arc::clone(&self.fps_state),
+            encoder_state: Arc::clone(&self.encoder_state),
             stream_active_flag: parking_lot::RwLock::new(self.stream_active_flag.read().clone()),
+            compositor_scale: parking_lot::RwLock::new(*self.compositor_scale.read()),
             direct_channel_mode: self.direct_channel_mode,
             use_dmabuf: self.use_dmabuf,
+            #[cfg(feature = "wayland")]
+            wayland_observers: self.wayland_observers.clone(),
         }
     }
 }
@@ -3322,7 +4145,7 @@ impl DisplayUpdatesStream {
 #[async_trait::async_trait]
 impl RdpServerDisplayUpdates for DisplayUpdatesStream {
     /// Cancellation-safe as required by IronRDP.
-    async fn next_update(&mut self) -> Result<Option<DisplayUpdate>> {
+    async fn next_update(&mut self) -> ServerResult<Option<DisplayUpdate>> {
         match self.receiver.recv().await {
             Some(update) => {
                 trace!("Providing display update: {:?}", update);

@@ -181,6 +181,28 @@ pub enum HealthEvent {
     /// Video frame timing recovered after a stall
     VideoFrameResumed,
 
+    /// The compositor is delivering buffers flagged `SPA_CHUNK_FLAG_CORRUPTED`
+    /// in bulk. Unlike a stall, this is not idle-ambiguous: the compositor is
+    /// producing buffers and marking every one of them unusable, which is the
+    /// signature of the Mutter direct-scanout screencast freeze
+    /// (GNOME/mutter#3903) and points at the compositor rather than at us.
+    VideoFramesCorrupted {
+        /// Corrupted frames counted in the measurement window
+        count: u32,
+        /// Length of that window, in milliseconds
+        window_ms: u64,
+    },
+
+    /// The EGFX flow controller broke a frame-ack stall: the client stopped
+    /// acknowledging frames while frames were outstanding (a decoder stall or a
+    /// dropped ack, unlike an idle desktop which has nothing outstanding), so
+    /// the encoder was resumed and an IDR forced. Distinct from
+    /// `VideoFrameStalled`, which is idle-ambiguous and stays informational.
+    VideoAckStalled {
+        /// How long the client left the frame unacked before recovery, in ms
+        stalled_ms: u64,
+    },
+
     /// Input injection failed with a transient or permanent error
     InputFailed { reason: String, permanent: bool },
 
@@ -205,6 +227,12 @@ pub enum HealthEvent {
     /// A subsystem is not available in this session configuration
     SubsystemNotAvailable { subsystem: String },
 
+    /// The pointer input backend a session settled on at startup (e.g.
+    /// "wlr-virtual-pointer", "uinput", "none"). Fired once per session so a
+    /// fleet-scale audit can tell which sessions are relying on a fallback
+    /// path without grepping logs.
+    InputBackendSelected { backend: String },
+
     /// EGFX DVC channel closed — H.264 delivery interrupted.
     /// The client may fall back to V8 bitmap mode if supported.
     EgfxChannelClosed { reason: String },
@@ -212,6 +240,18 @@ pub enum HealthEvent {
     /// EGFX DVC channel ready — H.264 delivery can begin.
     /// Fired when capabilities are negotiated AND a surface exists.
     EgfxChannelReady { version: String },
+
+    /// Compositor-supplied video damage-region hints diverged from the
+    /// server's own pixel-diff calibration probe by more than the
+    /// configured threshold for several consecutive samples. The server
+    /// has switched to pixel-diff as the primary damage source for the
+    /// rest of this connection — video keeps working, just via a more
+    /// expensive (but accurate) detection path. Sticky for the
+    /// connection's lifetime; no paired "recovered" event.
+    CompositorDamageHintsDistrusted {
+        /// Divergence (percentage points) that triggered the distrust.
+        divergence_pp: f32,
+    },
 }
 
 /// PipeWire stream states relevant to health monitoring

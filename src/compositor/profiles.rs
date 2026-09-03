@@ -196,8 +196,12 @@ impl CompositorProfile {
             ],
             portal_backend: Some("gnome".to_string()),
             recommended_capture: CaptureBackend::Portal,
-            // GNOME works best with MemFd (shm) - DMA-BUF support varies
-            recommended_buffer_type: BufferType::MemFd,
+            // DMA-BUF all-zero-data bug fixed upstream in lamco-pipewire 2026-06-09
+            // (MOD_LINEAR now negotiated explicitly instead of MOD_INVALID). GNOME's
+            // DMA-BUF reliability still trails KDE's across driver/version combos, so
+            // this stays best-effort rather than guaranteed; is_display_gpu_virgl()
+            // in server/mod.rs remains the hardware-capability gate for virtual GPUs.
+            recommended_buffer_type: BufferType::Any,
             supports_damage_hints: is_modern, // GNOME 45+ has better damage tracking
             supports_explicit_sync: false,    // Not yet in GNOME
             quirks,
@@ -345,6 +349,18 @@ impl CompositorProfile {
     }
 
     /// Weston reference compositor profile
+    ///
+    /// Weston is not a practical target for this project: it isn't
+    /// wlroots-based, implements no xdg-desktop-portal backend at all, and
+    /// uses its own weston-output-capture protocol rather than
+    /// wlr-screencopy or ext-image-copy-capture. It also ships its own
+    /// FreeRDP-based weston-rdp backend for RDP *hosting*, which is
+    /// architecturally non-overlapping with this project. The Portal/None
+    /// combination below is therefore not a working recommendation — there
+    /// is no capture path we support on Weston — it's the same conservative
+    /// "safest known default" fallback unknown_profile() uses, kept honest
+    /// by declaring zero protocols and zero portal backend rather than
+    /// implying a real one exists. See docs/FEATURE-SUPPORT-MATRIX.md.
     fn weston_profile() -> Self {
         Self {
             compositor: CompositorType::Weston,
@@ -382,10 +398,16 @@ impl CompositorProfile {
 
     /// Niri compositor profile (Smithay-based with wlroots-compatible protocols)
     ///
-    /// Niri is built on Smithay but exposes wlroots-compatible protocols
-    /// (zwlr_screencopy, zwlr_virtual_pointer, zwp_virtual_keyboard,
-    /// ext_data_control). It uses portal-gnome as its portal backend,
-    /// providing full RemoteDesktop + ScreenCast support.
+    /// Niri has no RemoteDesktop portal and none is coming (niri#390, dormant
+    /// since 2024; a native xdg-desktop-portal-niri attempt was declared
+    /// stalled by the maintainer in Feb 2026). It runs a private
+    /// org.gnome.Mutter.ScreenCast D-Bus shim so xdg-desktop-portal-gnome
+    /// treats it as Mutter, but that only ever yields ScreenCast video, never
+    /// RemoteDesktop input. The working, permanent path is portal-generic /
+    /// wlr-direct via niri's own wlroots-compatible protocols (zwlr_screencopy,
+    /// zwlr_virtual_pointer, zwp_virtual_keyboard, ext_data_control) — same
+    /// model as any other wlroots-family compositor, not a fallback. See
+    /// docs/FEATURE-SUPPORT-MATRIX.md and issue #64.
     fn niri_profile(version: Option<&str>) -> Self {
         Self {
             compositor: CompositorType::Niri {
@@ -408,12 +430,88 @@ impl CompositorProfile {
         }
     }
 
-    /// Generic Smithay-based compositor profile (jay, xfwl4, etc.)
+    /// Smithay-based compositor profile, dispatched by name
     ///
-    /// Smithay compositors typically expose wlroots-compatible protocols
-    /// (zwlr_screencopy, zwlr_virtual_pointer, ext_data_control) and
-    /// use portal-gnome or portal-gtk as portal backends.
+    /// Smithay itself provides no protocol implementations — each compositor
+    /// built on it chooses its own protocol surface, and Jay and xfwl4 have
+    /// diverged enough that one shared profile misrepresented both (Jay was
+    /// undersold, xfwl4 was oversold with a clipboard protocol it doesn't
+    /// have — see docs/FEATURE-SUPPORT-MATRIX.md, 2026-08-17 sweep). Known
+    /// names get a dedicated profile; anything else falls back to the
+    /// conservative generic one.
     fn smithay_profile(name: &str) -> Self {
+        match name {
+            "jay" => Self::jay_profile(),
+            "xfwl4" => Self::xfwl4_profile(),
+            _ => Self::smithay_generic_profile(name),
+        }
+    }
+
+    /// Jay compositor profile
+    ///
+    /// Jay is a first-class target for Lamco's own xdg-desktop-portal-generic
+    /// (embedded, not a system portal): RemoteDesktop v2 via EIS primary with
+    /// wlr-virtual-pointer/keyboard fallback, ScreenCast v6 via
+    /// ext-image-copy-capture-v1 primary with wlr-screencopy-v1 fallback, and
+    /// clipboard via ext-data-control-v1. No distro packages exist yet
+    /// (cargo/AUR-only, jay-compositor 1.7.0), so this profile is effectively
+    /// unverified in real deployments.
+    fn jay_profile() -> Self {
+        Self {
+            compositor: CompositorType::Smithay {
+                name: "jay".to_string(),
+            },
+            wayland_protocols: vec![
+                "wl_compositor".to_string(),
+                "xdg_wm_base".to_string(),
+                "ext_image_copy_capture_manager_v1".to_string(),
+                "zwlr_screencopy_manager_v1".to_string(),
+                "zwp_virtual_keyboard_manager_v1".to_string(),
+                "zwlr_virtual_pointer_manager_v1".to_string(),
+                "ext_data_control_manager_v1".to_string(),
+            ],
+            // Driven by the embedded portal-generic strategy, not a system portal.
+            portal_backend: None,
+            recommended_capture: CaptureBackend::ExtImageCopyCapture,
+            recommended_buffer_type: BufferType::Any,
+            supports_damage_hints: true,
+            supports_explicit_sync: true,
+            quirks: vec![],
+            recommended_fps_cap: 60,
+            portal_timeout_ms: 15000,
+        }
+    }
+
+    /// xfwl4 (Xfce's Rust/Smithay compositor, early preview) profile
+    ///
+    /// As of the 4.21.1 preview (2026-08-11) xfwl4 only implements the legacy
+    /// wlr-screencopy-unstable-v1 capture path and exposes no
+    /// virtual-keyboard, virtual-pointer, or clipboard protocol of any kind.
+    /// Explicitly not for everyday use per the project itself.
+    fn xfwl4_profile() -> Self {
+        Self {
+            compositor: CompositorType::Smithay {
+                name: "xfwl4".to_string(),
+            },
+            wayland_protocols: vec![
+                "wl_compositor".to_string(),
+                "xdg_wm_base".to_string(),
+                "zwlr_screencopy_manager_v1".to_string(),
+            ],
+            portal_backend: None,
+            recommended_capture: CaptureBackend::WlrScreencopy,
+            recommended_buffer_type: BufferType::MemFd,
+            supports_damage_hints: false,
+            supports_explicit_sync: false,
+            quirks: vec![Quirk::NeedsExplicitCursorComposite],
+            recommended_fps_cap: 30,
+            portal_timeout_ms: 30000,
+        }
+    }
+
+    /// Generic Smithay-based compositor profile for anything not named above
+    /// (smallvil and any future/unrecognized Smithay compositor)
+    fn smithay_generic_profile(name: &str) -> Self {
         Self {
             compositor: CompositorType::Smithay {
                 name: name.to_string(),
@@ -488,7 +586,7 @@ mod tests {
     #[test]
     fn test_gnome_profile() {
         let profile = CompositorProfile::gnome_profile(Some("46.0"));
-        assert_eq!(profile.recommended_buffer_type, BufferType::MemFd);
+        assert_eq!(profile.recommended_buffer_type, BufferType::Any);
         assert!(profile.supports_damage_hints);
         assert!(profile.has_quirk(&Quirk::RequiresWaylandSession));
     }
@@ -512,6 +610,53 @@ mod tests {
         let profile = CompositorProfile::unknown_profile(None);
         assert_eq!(profile.recommended_capture, CaptureBackend::Portal);
         assert!(profile.has_quirk(&Quirk::NeedsExplicitCursorComposite));
+    }
+
+    #[test]
+    fn test_smithay_profile_dispatches_jay() {
+        let profile = CompositorProfile::smithay_profile("jay");
+        assert_eq!(
+            profile.recommended_capture,
+            CaptureBackend::ExtImageCopyCapture
+        );
+        assert!(
+            profile
+                .wayland_protocols
+                .iter()
+                .any(|p| p == "ext_data_control_manager_v1")
+        );
+        assert!(
+            profile
+                .wayland_protocols
+                .iter()
+                .any(|p| p == "zwp_virtual_keyboard_manager_v1")
+        );
+    }
+
+    #[test]
+    fn test_smithay_profile_dispatches_xfwl4() {
+        let profile = CompositorProfile::smithay_profile("xfwl4");
+        assert_eq!(profile.recommended_capture, CaptureBackend::WlrScreencopy);
+        // xfwl4 4.21.1 has no clipboard protocol at all — must not claim one.
+        assert!(
+            !profile
+                .wayland_protocols
+                .iter()
+                .any(|p| p == "ext_data_control_manager_v1")
+        );
+        assert!(
+            !profile
+                .wayland_protocols
+                .iter()
+                .any(|p| p == "zwp_virtual_keyboard_manager_v1")
+        );
+    }
+
+    #[test]
+    fn test_smithay_profile_falls_back_for_unknown_name() {
+        let profile = CompositorProfile::smithay_profile("smallvil");
+        assert_eq!(profile.portal_backend, Some("gtk".to_string()));
+        assert_eq!(profile.recommended_capture, CaptureBackend::Portal);
     }
 
     #[test]

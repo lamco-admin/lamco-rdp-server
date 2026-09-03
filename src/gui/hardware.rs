@@ -401,7 +401,7 @@ mod tests {
 
     #[test]
     fn test_parse_vaapi_capabilities() {
-        let sample_output = r#"
+        let sample_output = r"
 vainfo: VA-API version: 1.18 (libva 2.18.0)
 vainfo: Driver version: Intel iHD driver for Intel(R) Gen Graphics - 23.2.4
 vainfo: Supported profile and entrypoints
@@ -414,7 +414,7 @@ vainfo: Supported profile and entrypoints
       VAProfileH264High               : VAEntrypointVLD
       VAProfileH264High               : VAEntrypointEncSlice
       VAProfileH264High               : VAEntrypointEncSliceLP
-"#;
+";
 
         let caps = parse_vaapi_capabilities(sample_output);
         assert!(caps.contains(&"H.264 High Profile".to_string()));

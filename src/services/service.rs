@@ -67,6 +67,11 @@ pub enum ServiceId {
     /// Enables portal-free capture on Sway, Hyprland, Labwc
     WlrScreencopy,
 
+    /// ext-image-copy-capture-v1 protocol availability (standardized wlr-screencopy successor)
+    /// Enables portal-free capture on compositors that migrated off wlr-screencopy
+    /// (Mir, phoc, Jay, Treeland, Labwc, Wayfire 0.11+) without needing that legacy protocol
+    ExtImageCopyCapture,
+
     /// wlr-direct input protocols (virtual keyboard/pointer)
     /// Enables portal-free input injection on wlroots compositors
     WlrDirectInput,
@@ -111,6 +116,7 @@ impl ServiceId {
             Self::CredentialStorage => "Credential Storage",
             Self::UnattendedAccess => "Unattended Access",
             Self::WlrScreencopy => "wlr-screencopy",
+            Self::ExtImageCopyCapture => "ext-image-copy-capture",
             Self::WlrDirectInput => "wlr-direct Input",
             Self::LibeiInput => "libei/EIS Input",
             // Authentication services
@@ -142,6 +148,7 @@ impl ServiceId {
             Self::CredentialStorage,
             Self::UnattendedAccess,
             Self::WlrScreencopy,
+            Self::ExtImageCopyCapture,
             Self::WlrDirectInput,
             Self::LibeiInput,
             // Authentication services

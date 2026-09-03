@@ -38,6 +38,7 @@ impl ClipboardOrchestrator {
             RwLock<Box<dyn crate::clipboard::file_transfer::FileTransferBackend>>,
         >,
         rdp_ready: &Arc<std::sync::atomic::AtomicBool>,
+        remote_owns_selection: &Arc<std::sync::atomic::AtomicBool>,
     ) -> Result<()> {
         use std::time::{Duration, SystemTime};
 
@@ -57,6 +58,17 @@ impl ClipboardOrchestrator {
             crate::clipboard::sync::PortalSyncDecision::Allow => {
                 // Normal Linux → Windows sync
                 debug!("Sync decision: Allow - proceeding with normal sync");
+                // A real local copy, so the selection is no longer ours and the
+                // compositor will answer reads for it again. This must happen
+                // here rather than on entry: Mutter echoes SelectionOwnerChanged
+                // about our own SetSelection within a millisecond of it, and
+                // clearing on that echo handed the next read straight back to
+                // the compositor, which then refused it.
+                if remote_owns_selection.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                    debug!(
+                        "Local application took clipboard ownership; compositor reads re-enabled"
+                    );
+                }
             }
 
             crate::clipboard::sync::PortalSyncDecision::Block => {
@@ -314,7 +326,8 @@ impl ClipboardOrchestrator {
             }
         };
 
-        let paths = parse_file_uris(&uri_data);
+        let mut paths = parse_file_uris(&uri_data);
+        paths.retain(|p| !crate::clipboard::file_transfer::is_stale_foreign_fuse_path(p));
         if paths.is_empty() {
             warn!("File copy announced but no resolvable file URIs on the Linux clipboard");
             return None;

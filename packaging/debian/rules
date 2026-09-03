@@ -1,5 +1,19 @@
 #!/usr/bin/make -f
 
+# Cross builds (dpkg-buildpackage -a arm64 on an amd64 builder): cargo needs an
+# explicit --target and puts the binaries under target/<triple>/release/.
+# DEB_HOST_RUST_TYPE normally comes from /usr/share/rustc/architecture.mk, which
+# the rustup toolchain does not ship, so derive it from the GNU triplet.
+include /usr/share/dpkg/architecture.mk
+RUST_TARGET := $(subst -linux-gnu,-unknown-linux-gnu,$(DEB_HOST_GNU_TYPE))
+ifeq ($(DEB_BUILD_GNU_TYPE),$(DEB_HOST_GNU_TYPE))
+CARGO_TARGET_ARG :=
+CARGO_OUT := target/release
+else
+CARGO_TARGET_ARG := --target $(RUST_TARGET)
+CARGO_OUT := target/$(RUST_TARGET)/release
+endif
+
 %:
 	dh $@
 
@@ -11,13 +25,13 @@ override_dh_auto_build:
 	done
 	CARGO_PROFILE_RELEASE_LTO=thin \
 	CARGO_PROFILE_RELEASE_CODEGEN_UNITS=4 \
-	cargo build --release --frozen --features "default,vaapi,gui,vsock,websocket"
+	cargo build --release --frozen $(CARGO_TARGET_ARG) --features "default,vaapi,gui,vsock,websocket"
 
 override_dh_auto_install:
 	# --- lamco-rdp-server binary package (Wayland desktop sharing) ---
-	install -Dm755 target/release/lamco-rdp-server debian/lamco-rdp-server/usr/bin/lamco-rdp-server
-	install -Dm755 target/release/lamco-rdp-server-gui debian/lamco-rdp-server/usr/bin/lamco-rdp-server-gui
-	install -Dm644 packaging/systemd/lamco-rdp-server.service debian/lamco-rdp-server/usr/lib/systemd/user/lamco-rdp-server.service
+	install -Dm755 $(CARGO_OUT)/lamco-rdp-server debian/lamco-rdp-server/usr/bin/lamco-rdp-server
+	install -Dm755 $(CARGO_OUT)/lamco-rdp-server-gui debian/lamco-rdp-server/usr/bin/lamco-rdp-server-gui
+	install -Dm644 packaging/systemd/app-io.lamco.rdp-server.service debian/lamco-rdp-server/usr/lib/systemd/user/app-io.lamco.rdp-server.service
 	install -dm755 debian/lamco-rdp-server/etc/lamco-rdp-server
 	install -Dm644 data/io.lamco.rdp-server.desktop debian/lamco-rdp-server/usr/share/applications/io.lamco.rdp-server.desktop
 	install -Dm644 data/io.lamco.rdp-server.metainfo.xml debian/lamco-rdp-server/usr/share/metainfo/io.lamco.rdp-server.metainfo.xml

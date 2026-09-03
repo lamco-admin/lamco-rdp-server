@@ -17,7 +17,10 @@ use std::sync::{
 };
 
 use ironrdp_egfx::{
-    pdu::{CapabilitiesAdvertisePdu, CapabilitiesV8Flags, CapabilitiesV81Flags, CapabilitySet},
+    pdu::{
+        CapabilitiesAdvertisePdu, CapabilitiesV8Flags, CapabilitiesV10Flags, CapabilitiesV81Flags,
+        CapabilitiesV103Flags, CapabilitiesV104Flags, CapabilitiesV107Flags, CapabilitySet,
+    },
     server::{GraphicsPipelineHandler, QoeMetrics, Surface},
 };
 use parking_lot::RwLock;
@@ -64,6 +67,11 @@ pub struct LamcoGraphicsHandler {
 
     /// Whether AVC444 was negotiated (V10+ with AVC420)
     avc444_enabled: AtomicBool,
+
+    /// Whether the client negotiated EGFX with `AVC_DISABLED` set (identifies
+    /// the Android Microsoft RD Client's pointer-rendering quirks; see
+    /// `SharedHandlerState::needs_android_pointer_updates`).
+    needs_android_pointer_updates: AtomicBool,
 
     /// Whether the channel is ready for frames (local fast access)
     ready: AtomicBool,
@@ -119,6 +127,7 @@ impl LamcoGraphicsHandler {
             height,
             avc420_enabled: AtomicBool::new(false),
             avc444_enabled: AtomicBool::new(false),
+            needs_android_pointer_updates: AtomicBool::new(false),
             ready: AtomicBool::new(false),
             has_surface: AtomicBool::new(false),
             primary_surface_id: AtomicU16::new(0),
@@ -138,6 +147,7 @@ impl LamcoGraphicsHandler {
             height,
             avc420_enabled: AtomicBool::new(false),
             avc444_enabled: AtomicBool::new(false),
+            needs_android_pointer_updates: AtomicBool::new(false),
             ready: AtomicBool::new(false),
             has_surface: AtomicBool::new(false),
             primary_surface_id: AtomicU16::new(0),
@@ -157,6 +167,7 @@ impl LamcoGraphicsHandler {
             height,
             avc420_enabled: AtomicBool::new(false),
             avc444_enabled: AtomicBool::new(false),
+            needs_android_pointer_updates: AtomicBool::new(false),
             ready: AtomicBool::new(false),
             has_surface: AtomicBool::new(false),
             primary_surface_id: AtomicU16::new(0),
@@ -198,6 +209,7 @@ impl LamcoGraphicsHandler {
             height,
             avc420_enabled: AtomicBool::new(false),
             avc444_enabled: AtomicBool::new(false),
+            needs_android_pointer_updates: AtomicBool::new(false),
             ready: AtomicBool::new(false),
             has_surface: AtomicBool::new(false),
             primary_surface_id: AtomicU16::new(0),
@@ -253,6 +265,10 @@ impl LamcoGraphicsHandler {
                 self.primary_surface_id.load(Ordering::Acquire),
                 Ordering::Release,
             );
+            shared.needs_android_pointer_updates.store(
+                self.needs_android_pointer_updates.load(Ordering::Acquire),
+                Ordering::Release,
+            );
         }
     }
 
@@ -262,6 +278,10 @@ impl LamcoGraphicsHandler {
 
     pub fn client_supports_avc420(&self) -> bool {
         self.avc420_enabled.load(Ordering::Acquire)
+    }
+
+    pub fn needs_android_pointer_updates(&self) -> bool {
+        self.needs_android_pointer_updates.load(Ordering::Acquire)
     }
 
     pub fn primary_surface_id(&self) -> u16 {
@@ -376,9 +396,36 @@ impl GraphicsPipelineHandler for LamcoGraphicsHandler {
             avc444
         };
 
+        // Client-requested AVC disable, independent of the avc420/avc444
+        // codec selection above: V10.1 carries no flags at all (unit
+        // variant) and V8/V8.1 have no AVC_DISABLED concept, so both report
+        // false here. All other V10.x variants use one of four flag types
+        // that each define the same bit (0x20).
+        let needs_android_pointer_updates = match negotiated {
+            CapabilitySet::V10 { flags } | CapabilitySet::V10_2 { flags } => {
+                flags.contains(CapabilitiesV10Flags::AVC_DISABLED)
+            }
+            CapabilitySet::V10_3 { flags } => flags.contains(CapabilitiesV103Flags::AVC_DISABLED),
+            CapabilitySet::V10_4 { flags }
+            | CapabilitySet::V10_5 { flags }
+            | CapabilitySet::V10_6 { flags }
+            | CapabilitySet::V10_6Err { flags } => {
+                flags.contains(CapabilitiesV104Flags::AVC_DISABLED)
+            }
+            CapabilitySet::V10_7 { flags } => flags.contains(CapabilitiesV107Flags::AVC_DISABLED),
+            _ => false,
+        };
+        if needs_android_pointer_updates {
+            info!(
+                "EGFX: client negotiated AVC_DISABLED — applying Android RD Client pointer quirks"
+            );
+        }
+
         self.avc420_enabled.store(avc420, Ordering::Release);
         self.avc444_enabled
             .store(effective_avc444, Ordering::Release);
+        self.needs_android_pointer_updates
+            .store(needs_android_pointer_updates, Ordering::Release);
         self.ready.store(true, Ordering::Release);
 
         // Sync to shared state for EgfxFrameSender visibility
@@ -424,6 +471,19 @@ impl GraphicsPipelineHandler for LamcoGraphicsHandler {
     }
 
     fn on_frame_ack(&mut self, frame_id: u32, queue_depth: u32, total_frames_decoded: u32) {
+        // Client-reported; clamp to a plausible range so a garbage value can't
+        // skew backpressure/flow-control or the telemetry gauge. Real depths are
+        // single digits (backpressure thresholds are 3/6).
+        const MAX_PLAUSIBLE_QUEUE_DEPTH: u32 = 256;
+        let queue_depth = if queue_depth > MAX_PLAUSIBLE_QUEUE_DEPTH {
+            debug!(
+                "EGFX: clamping implausible client queue_depth {queue_depth} to {MAX_PLAUSIBLE_QUEUE_DEPTH}"
+            );
+            MAX_PLAUSIBLE_QUEUE_DEPTH
+        } else {
+            queue_depth
+        };
+
         trace!(
             "EGFX: frame_ack id={}, queue_depth={}",
             frame_id, queue_depth
@@ -617,5 +677,87 @@ impl SharedGraphicsHandler {
 
     pub fn client_supports_avc420(&self) -> bool {
         self.inner.read().is_ok_and(|h| h.client_supports_avc420())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn avc_disabled_flag_is_detected_across_all_v10_variants() {
+        let cases = [
+            CapabilitySet::V10 {
+                flags: CapabilitiesV10Flags::AVC_DISABLED,
+            },
+            CapabilitySet::V10_2 {
+                flags: CapabilitiesV10Flags::AVC_DISABLED,
+            },
+            CapabilitySet::V10_3 {
+                flags: CapabilitiesV103Flags::AVC_DISABLED,
+            },
+            CapabilitySet::V10_4 {
+                flags: CapabilitiesV104Flags::AVC_DISABLED,
+            },
+            CapabilitySet::V10_5 {
+                flags: CapabilitiesV104Flags::AVC_DISABLED,
+            },
+            CapabilitySet::V10_6 {
+                flags: CapabilitiesV104Flags::AVC_DISABLED,
+            },
+            CapabilitySet::V10_6Err {
+                flags: CapabilitiesV104Flags::AVC_DISABLED,
+            },
+            CapabilitySet::V10_7 {
+                flags: CapabilitiesV107Flags::AVC_DISABLED,
+            },
+        ];
+        for negotiated in cases {
+            let mut handler = LamcoGraphicsHandler::new(1920, 1080);
+            handler.on_ready(&negotiated);
+            assert!(
+                handler.needs_android_pointer_updates(),
+                "{negotiated:?} should have set needs_android_pointer_updates"
+            );
+        }
+    }
+
+    #[test]
+    fn without_avc_disabled_flag_no_android_quirk_is_applied() {
+        let cases = [
+            CapabilitySet::V10 {
+                flags: CapabilitiesV10Flags::empty(),
+            },
+            CapabilitySet::V10_1,
+            CapabilitySet::V10_7 {
+                flags: CapabilitiesV107Flags::empty(),
+            },
+            CapabilitySet::V8_1 {
+                flags: CapabilitiesV81Flags::AVC420_ENABLED,
+            },
+        ];
+        for negotiated in cases {
+            let mut handler = LamcoGraphicsHandler::new(1920, 1080);
+            handler.on_ready(&negotiated);
+            assert!(
+                !handler.needs_android_pointer_updates(),
+                "{negotiated:?} should NOT have set needs_android_pointer_updates"
+            );
+        }
+    }
+
+    #[test]
+    fn needs_android_pointer_updates_syncs_to_shared_state() {
+        let shared = Arc::new(SharedHandlerState::new());
+        let mut handler = LamcoGraphicsHandler::with_shared_state_and_quirks(
+            1920,
+            1080,
+            Arc::clone(&shared),
+            false,
+        );
+        handler.on_ready(&CapabilitySet::V10 {
+            flags: CapabilitiesV10Flags::AVC_DISABLED,
+        });
+        assert!(shared.needs_android_pointer_updates.load(Ordering::Acquire));
     }
 }

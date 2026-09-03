@@ -346,7 +346,9 @@ impl ClipboardProvider for MutterClipboardProvider {
         self.clipboard_mgr
             .set_selection(&mime_types)
             .await
-            .map_err(|e| ClipboardError::PortalError(format!("Mutter SetSelection failed: {e}")))?;
+            .map_err(|e| {
+                ClipboardError::PortalError(format!("Mutter SetSelection failed: {e:#}"))
+            })?;
         Ok(())
     }
 
@@ -354,7 +356,7 @@ impl ClipboardProvider for MutterClipboardProvider {
         self.clipboard_mgr
             .read_selection(mime_type)
             .await
-            .map_err(|e| ClipboardError::PortalError(format!("Mutter SelectionRead failed: {e}")))
+            .map_err(|e| ClipboardError::PortalError(format!("Mutter SelectionRead failed: {e:#}")))
     }
 
     async fn on_remote_gone(&self) -> Result<()> {
@@ -379,7 +381,7 @@ impl ClipboardProvider for MutterClipboardProvider {
             .write_selection(serial, &data)
             .await
             .map_err(|e| {
-                ClipboardError::PortalError(format!("Mutter SelectionWrite failed: {e}"))
+                ClipboardError::PortalError(format!("Mutter SelectionWrite failed: {e:#}"))
             })?;
         Ok(())
     }

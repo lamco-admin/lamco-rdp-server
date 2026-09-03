@@ -624,8 +624,8 @@ impl EgfxFrameSender {
     pub async fn send_frame_with_regions(
         &self,
         h264_data: &[u8],
-        _encoded_width: u16,
-        _encoded_height: u16,
+        encoded_width: u16,
+        encoded_height: u16,
         display_width: u16,
         display_height: u16,
         damage_regions: &[DamageRegion],
@@ -647,10 +647,13 @@ impl EgfxFrameSender {
             return Err(SendError::NoSurface);
         };
 
-        let mut regions = if damage_regions.is_empty() {
+        let mut regions = if is_full_frame_update(damage_regions, display_width, display_height) {
+            // Full-frame regions must cover the 16-aligned encoded bitstream, not
+            // just the (possibly unaligned) visible display area. See
+            // is_full_frame_update's doc comment.
             vec![Avc420Region::full_frame(
-                display_width,
-                display_height,
+                encoded_width,
+                encoded_height,
                 self.qp(),
             )]
         } else {
@@ -666,8 +669,8 @@ impl EgfxFrameSender {
                 damage_regions.len()
             );
             regions = vec![Avc420Region::full_frame(
-                display_width,
-                display_height,
+                encoded_width,
+                encoded_height,
                 self.qp(),
             )];
         }
@@ -737,8 +740,8 @@ impl EgfxFrameSender {
         &self,
         stream1_data: &[u8],
         stream2_data: Option<&[u8]>, // Now optional!
-        _encoded_width: u16,
-        _encoded_height: u16,
+        encoded_width: u16,
+        encoded_height: u16,
         display_width: u16,
         display_height: u16,
         damage_regions: &[DamageRegion],
@@ -760,10 +763,12 @@ impl EgfxFrameSender {
             return Err(SendError::NoSurface);
         };
 
-        let mut regions = if damage_regions.is_empty() {
+        let mut regions = if is_full_frame_update(damage_regions, display_width, display_height) {
+            // See send_frame_with_regions: full-frame regions must cover the
+            // 16-aligned encoded bitstream, not the raw display area.
             vec![Avc420Region::full_frame(
-                display_width,
-                display_height,
+                encoded_width,
+                encoded_height,
                 self.qp(),
             )]
         } else {
@@ -777,8 +782,8 @@ impl EgfxFrameSender {
                 damage_regions.len()
             );
             regions = vec![Avc420Region::full_frame(
-                display_width,
-                display_height,
+                encoded_width,
+                encoded_height,
                 self.qp(),
             )];
         }
@@ -834,6 +839,27 @@ impl EgfxFrameSender {
     }
 }
 
+/// Whether `regions` represents a full-frame update, either as the legacy empty-slice
+/// convention or as a single region covering the whole display (how `display_handler.rs`
+/// actually signals a forced full frame today, for periodic IDR and the first frame after
+/// init). MS-RDPEGFX §2.2.4.4: the AVC420 bitstream is always encoded at 16-pixel-aligned
+/// dimensions, and the regionRects metadata — while informational — must stay consistent
+/// with what's actually in the bitstream. A full-frame region must therefore cover the
+/// full *encoded* (aligned/padded) area, not the raw display size, or mstsc will reject or
+/// black-screen the frame on any resolution not already a multiple of 16 (1920×1080 among
+/// them). See `send_frame_with_regions`/`send_avc444_frame_with_regions`.
+fn is_full_frame_update(regions: &[DamageRegion], display_width: u16, display_height: u16) -> bool {
+    if regions.is_empty() {
+        return true;
+    }
+
+    regions.len() == 1
+        && regions[0].x == 0
+        && regions[0].y == 0
+        && regions[0].width >= u32::from(display_width)
+        && regions[0].height >= u32::from(display_height)
+}
+
 /// Convert DamageRegion list to Avc420Region list
 ///
 /// Clamps regions to display bounds and assigns QP values.
@@ -851,8 +877,8 @@ fn damage_regions_to_avc420(
             let left = r.x.min(display_width as u32) as u16;
             let top = r.y.min(display_height as u32) as u16;
             // Right and bottom are inclusive, so subtract 1 from the exclusive bounds
-            let right = (r.x + r.width).min(display_width as u32).saturating_sub(1) as u16;
-            let bottom = (r.y + r.height)
+            let mut right = (r.x + r.width).min(display_width as u32).saturating_sub(1) as u16;
+            let mut bottom = (r.y + r.height)
                 .min(display_height as u32)
                 .saturating_sub(1) as u16;
 
@@ -860,12 +886,27 @@ fn damage_regions_to_avc420(
             // bottom (MS-RDPEGFX). FreeRDP and mstsc reject a degenerate
             // (zero-width/zero-height) or inverted rect with ERROR_INVALID_DATA
             // and tear down the GFX channel — the user sees a blank screen and
-            // the session disconnects. IronRDP's own decoder does not validate
-            // this, so such a rect rides through our own tools (rdpsee/rdpdo)
-            // undetected; only real clients expose it.
+            // the session disconnects. A one-pixel-tall or one-pixel-wide damage
+            // rect (a scrolling text row, a progress-bar line) collapses to
+            // left==right / top==bottom after the inclusive conversion, which is
+            // ambiguous across client interpretations. Expand it by a pixel
+            // toward the display interior rather than drop it — dropping loses a
+            // real update and leaves that strip stale; expanding costs one row or
+            // column of encode and is unambiguously valid.
+            let max_x = display_width.saturating_sub(1);
+            let max_y = display_height.saturating_sub(1);
+            if right <= left {
+                right = left.saturating_add(1).min(max_x);
+            }
+            if bottom <= top {
+                bottom = top.saturating_add(1).min(max_y);
+            }
+            // Only unavoidable at the very last row/column, where a 1px strip
+            // cannot expand outward. There the update is a single edge line; drop
+            // it rather than emit an inverted rect.
             if right <= left || bottom <= top {
                 debug!(
-                    "EGFX: dropping degenerate damage region x{} y{} w{} h{} (LTRB {},{},{},{})",
+                    "EGFX: dropping edge damage region x{} y{} w{} h{} (LTRB {},{},{},{})",
                     r.x, r.y, r.width, r.height, left, top, right, bottom
                 );
                 return None;
@@ -934,5 +975,80 @@ mod tests {
         state.primary_surface_id.store(5, Ordering::Release);
         assert!(state.has_surface.load(Ordering::Acquire));
         assert_eq!(state.primary_surface_id.load(Ordering::Acquire), 5);
+    }
+
+    #[test]
+    fn full_display_damage_region_is_full_frame_update() {
+        // Legacy empty-slice convention.
+        assert!(is_full_frame_update(&[], 1920, 1080));
+
+        // Current convention: a single region covering the whole display
+        // (how display_handler.rs signals a forced full frame).
+        assert!(is_full_frame_update(
+            &[DamageRegion {
+                x: 0,
+                y: 0,
+                width: 1920,
+                height: 1080
+            }],
+            1920,
+            1080
+        ));
+
+        // A region that over-covers (e.g. already aligned to 16) still counts.
+        assert!(is_full_frame_update(
+            &[DamageRegion {
+                x: 0,
+                y: 0,
+                width: 1920,
+                height: 1088
+            }],
+            1920,
+            1080
+        ));
+
+        // Not full-frame: doesn't reach the bottom edge.
+        assert!(!is_full_frame_update(
+            &[DamageRegion {
+                x: 0,
+                y: 0,
+                width: 1920,
+                height: 1079
+            }],
+            1920,
+            1080
+        ));
+
+        // Not full-frame: offset from the origin.
+        assert!(!is_full_frame_update(
+            &[DamageRegion {
+                x: 10,
+                y: 0,
+                width: 1910,
+                height: 1080
+            }],
+            1920,
+            1080
+        ));
+
+        // Not full-frame: multiple regions, even if they'd union to the whole display.
+        assert!(!is_full_frame_update(
+            &[
+                DamageRegion {
+                    x: 0,
+                    y: 0,
+                    width: 960,
+                    height: 1080
+                },
+                DamageRegion {
+                    x: 960,
+                    y: 0,
+                    width: 960,
+                    height: 1080
+                },
+            ],
+            1920,
+            1080
+        ));
     }
 }

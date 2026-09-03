@@ -409,6 +409,24 @@ fn validate_damage_tracking_config(
             message: "Diff threshold should be in 0.0-1.0 range. Values above 1.0 effectively disable damage tracking.".to_string(),
         });
     }
+
+    if config.damage_tracking.compositor_hint_distrust_threshold_pp <= 0.0 {
+        warnings.push(ValidationWarning {
+            field: "damage_tracking.compositor_hint_distrust_threshold_pp".to_string(),
+            message: "Threshold should be above 0.0pp. A value at or below 0 will distrust compositor damage hints on almost any noise.".to_string(),
+        });
+    }
+
+    if config
+        .damage_tracking
+        .compositor_hint_distrust_consecutive_samples
+        == 0
+    {
+        warnings.push(ValidationWarning {
+            field: "damage_tracking.compositor_hint_distrust_consecutive_samples".to_string(),
+            message: "Consecutive samples should be at least 1. A value of 0 defeats the anti-noise guard and distrusts on the very first high-divergence sample.".to_string(),
+        });
+    }
 }
 
 /// Validate hardware encoding configuration

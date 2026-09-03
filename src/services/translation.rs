@@ -6,7 +6,7 @@
 use super::{
     rdp_capabilities::RdpCapability,
     service::{AdvertisedService, PerformanceHints, ServiceId, ServiceLevel},
-    wayland_features::{DamageMethod, DrmFormat, HdrTransfer, WaylandFeature},
+    wayland_features::{DamageMethod, DrmFormat, WaylandFeature},
 };
 use crate::compositor::{
     BufferType, CompositorCapabilities, CompositorType, CursorMode, Quirk, SourceType,
@@ -32,6 +32,7 @@ pub(super) fn translate_capabilities(caps: &CompositorCapabilities) -> Vec<Adver
     services.push(translate_direct_compositor_api(caps));
     services.push(translate_credential_storage(caps));
     services.push(translate_wlr_screencopy(caps));
+    services.push(translate_ext_image_copy_capture(caps));
     services.push(translate_wlr_direct_input(caps));
     services.push(translate_libei_input(caps));
     services.push(translate_unattended_access(caps));
@@ -245,18 +246,18 @@ fn translate_window_capture(caps: &CompositorCapabilities) -> AdvertisedService 
 }
 
 fn translate_hdr_color_space(caps: &CompositorCapabilities) -> AdvertisedService {
-    if caps.has_color_management() {
-        // wp-color-management-v1 protocol detected (KDE 6.3+, experimental Sway)
-        // Server doesn't negotiate HDR with RDP clients yet, so BestEffort
-        let feature = WaylandFeature::HdrColorSpace {
-            transfer: HdrTransfer::Pq,
-            gamut: "bt2020".to_string(),
-        };
-        AdvertisedService::best_effort(ServiceId::HdrColorSpace, feature)
-            .with_note("Compositor supports HDR but server HDR path not yet implemented")
-    } else {
-        AdvertisedService::unavailable(ServiceId::HdrColorSpace)
+    if !caps.has_color_management() {
+        return AdvertisedService::unavailable(ServiceId::HdrColorSpace);
     }
+    // The compositor exposes wp-color-management, so each output's real color
+    // state (SDR vs HDR PQ/HLG, gamut) is readable, and the display handler
+    // reads it live at capture. But RDP is 8-bit SDR with no tone-mapping yet,
+    // so an HDR source is not delivered as HDR. Protocol presence is a
+    // compositor capability, not a claim that any display is currently HDR.
+    AdvertisedService::unavailable(ServiceId::HdrColorSpace).with_note(
+        "Compositor exposes color management (per-output HDR state read live at capture); \
+         RDP encodes 8-bit SDR with no tone-mapping yet, so HDR is not delivered",
+    )
 }
 
 fn translate_clipboard(caps: &CompositorCapabilities) -> AdvertisedService {
@@ -707,6 +708,34 @@ fn translate_wlr_screencopy(caps: &CompositorCapabilities) -> AdvertisedService 
     }
 }
 
+fn translate_ext_image_copy_capture(caps: &CompositorCapabilities) -> AdvertisedService {
+    use crate::session::DeploymentContext;
+
+    // Not available in Flatpak (no direct Wayland socket access) — same
+    // sandbox restriction as wlr-screencopy, its predecessor protocol.
+    if matches!(caps.deployment, DeploymentContext::Flatpak) {
+        return AdvertisedService::unavailable(ServiceId::ExtImageCopyCapture)
+            .with_note("ext-image-copy-capture blocked by Flatpak sandbox");
+    }
+
+    // Check protocol presence directly — this is the standardized successor
+    // to wlr-screencopy, adopted by compositors that never had (Mir, phoc)
+    // or have since deprecated (Wayfire 0.11+) the legacy protocol.
+    if let Some(version) = caps.get_protocol_version("ext_image_copy_capture_manager_v1") {
+        let feature = WaylandFeature::ExtImageCopyCapture {
+            version,
+            dmabuf_supported: caps.has_protocol("linux_dmabuf_v1", 1),
+            damage_supported: true, // damage tracking is part of the base protocol, not gated by version
+        };
+
+        AdvertisedService::guaranteed(ServiceId::ExtImageCopyCapture, feature)
+            .with_note("Direct capture without portal permission dialog")
+    } else {
+        AdvertisedService::unavailable(ServiceId::ExtImageCopyCapture)
+            .with_note("ext-image-copy-capture protocol not found")
+    }
+}
+
 fn translate_wlr_direct_input(caps: &CompositorCapabilities) -> AdvertisedService {
     use crate::session::DeploymentContext;
 
@@ -899,12 +928,14 @@ fn translate_unattended_access(caps: &CompositorCapabilities) -> AdvertisedServi
     let session_persist_level = translate_session_persistence(caps).level;
     let direct_api_level = translate_direct_compositor_api(caps).level;
     let wlr_screencopy_level = translate_wlr_screencopy(caps).level;
+    let ext_image_copy_capture_level = translate_ext_image_copy_capture(caps).level;
     let cred_storage_level = translate_credential_storage(caps).level;
 
     // Can we avoid dialog?
     let can_avoid_dialog = session_persist_level >= ServiceLevel::BestEffort
         || direct_api_level >= ServiceLevel::BestEffort
-        || wlr_screencopy_level >= ServiceLevel::Guaranteed;
+        || wlr_screencopy_level >= ServiceLevel::Guaranteed
+        || ext_image_copy_capture_level >= ServiceLevel::Guaranteed;
 
     // Can we store credentials?
     let can_store_credentials = cred_storage_level >= ServiceLevel::BestEffort;

@@ -286,7 +286,7 @@ impl InitQuirkRegistry {
     /// Bug 515465: Threading violations in portal-kde clipboard implementation
     /// Affected: v6.3.90 through v6.5.x (May 2025 - February 2026)
     /// Fixed in: v6.6.0 (NOT backported to 6.5.x branch)
-    fn is_affected_kde_version(version: &str) -> bool {
+    pub(crate) fn is_affected_kde_version(version: &str) -> bool {
         // Parse version string (e.g., "6.5.5", "6.4.0", "6.3.90")
         let parts: Vec<&str> = version.split('.').collect();
         if parts.len() < 2 {
@@ -365,6 +365,28 @@ mod tests {
         // KDE 6.5 has clipboard threading bug quirk
         assert!(quirks.contains(&InitQuirk::KdePortalClipboardThreadingBug));
         assert!(quirks.contains(&InitQuirk::ClipboardBeforeSession));
+    }
+
+    #[test]
+    fn test_is_affected_kde_version_boundaries() {
+        // Below the introduced-in version: not affected.
+        assert!(!InitQuirkRegistry::is_affected_kde_version("6.3.89"));
+        // Exactly the introduced-in version: affected.
+        assert!(InitQuirkRegistry::is_affected_kde_version("6.3.90"));
+        // Mid-range affected versions.
+        assert!(InitQuirkRegistry::is_affected_kde_version("6.4.0"));
+        assert!(InitQuirkRegistry::is_affected_kde_version("6.5.5"));
+        assert!(InitQuirkRegistry::is_affected_kde_version("6.5.99"));
+        // Exactly the fixed-in version: not affected.
+        assert!(!InitQuirkRegistry::is_affected_kde_version("6.6.0"));
+        // Past the fixed-in version: not affected.
+        assert!(!InitQuirkRegistry::is_affected_kde_version("6.7.0"));
+        // Different major version: not affected.
+        assert!(!InitQuirkRegistry::is_affected_kde_version("5.27.0"));
+        assert!(!InitQuirkRegistry::is_affected_kde_version("7.0.0"));
+        // Unparseable input: assume not affected rather than panic.
+        assert!(!InitQuirkRegistry::is_affected_kde_version("unknown"));
+        assert!(!InitQuirkRegistry::is_affected_kde_version(""));
     }
 
     #[test]

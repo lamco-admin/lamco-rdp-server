@@ -11,6 +11,25 @@ fn run_command(program: &str, args: &[&str], fallback: &str) -> String {
     }
 }
 
+/// Reads the resolved version of a dependency straight from Cargo.lock, so
+/// diagnostics report what this build actually linked rather than the
+/// (possibly range-based) requirement in Cargo.toml.
+fn cargo_lock_pkg_version(name: &str) -> String {
+    let Ok(lock) = std::fs::read_to_string("Cargo.lock") else {
+        return "unknown".to_string();
+    };
+    let needle = format!("name = \"{name}\"");
+    lock.split("[[package]]")
+        .find(|block| block.contains(&needle))
+        .and_then(|block| {
+            block
+                .lines()
+                .find_map(|line| line.trim().strip_prefix("version = \"")?.strip_suffix('"'))
+        })
+        .unwrap_or("unknown")
+        .to_string()
+}
+
 fn main() {
     let date_output = run_command("date", &["+%Y-%m-%d"], "unknown");
     println!("cargo:rustc-env=BUILD_DATE={date_output}");
@@ -20,6 +39,10 @@ fn main() {
 
     let git_hash = run_command("git", &["rev-parse", "--short", "HEAD"], "unknown");
     println!("cargo:rustc-env=GIT_HASH={git_hash}");
+
+    let pipewire_crate_version = cargo_lock_pkg_version("lamco-pipewire");
+    println!("cargo:rustc-env=LAMCO_PIPEWIRE_VERSION={pipewire_crate_version}");
+    println!("cargo:rerun-if-changed=Cargo.lock");
 
     // Re-run when HEAD or the resolved ref target changes.
     //

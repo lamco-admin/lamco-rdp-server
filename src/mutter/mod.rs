@@ -38,6 +38,7 @@
 //! ```
 
 pub(crate) mod clipboard;
+pub mod display_config;
 pub mod pipewire_helper;
 pub mod remote_desktop;
 pub mod screencast;
@@ -45,6 +46,7 @@ pub mod session_manager;
 
 // Re-exports
 pub(crate) use clipboard::MutterClipboard;
+pub use display_config::{StageArea, area_moved, logical_monitor_count, stage_area_for_connector};
 pub use pipewire_helper::{connect_to_pipewire_daemon, get_pipewire_fd_for_mutter};
 pub use remote_desktop::{MutterRemoteDesktop, MutterRemoteDesktopSession};
 pub use screencast::{MutterScreenCast, MutterScreenCastSession, MutterScreenCastStream};

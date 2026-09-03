@@ -8,20 +8,36 @@ use std::{collections::HashMap, sync::Arc};
 
 use lamco_clipboard_core::{
     ClipboardFormat, FormatConverter, TransferEngine,
+    formats::{CF_DIB, CF_DIBV5, CF_GIF, CF_HTML, CF_JPEG, CF_PNG},
+    image::{dib_to_png, dibv5_to_png},
     sanitize::{parse_file_uris, sanitize_text_for_linux, sanitize_text_for_windows},
 };
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, trace, warn};
 
 use super::{
-    ClipboardOrchestrator, ClipboardOrchestratorConfig, EAGER_FETCH_SERIAL, PendingPortalRequests,
-    ServerEventSender, SharedClipboardProvider,
+    ClipboardOrchestrator, ClipboardOrchestratorConfig, EAGER_FETCH_SERIAL, EagerFetchKind,
+    PendingEagerFetches, PendingPortalRequests, ServerEventSender, SharedClipboardProvider,
 };
 use crate::clipboard::{
     FormatConverterExt,
     error::{ClipboardError, Result},
     sync::SyncManager,
 };
+
+/// Last provider read failure, its first occurrence, and how many identical
+/// failures have followed it.
+///
+/// Clients retry a failed `FormatDataRequest` in a tight burst: a single broken
+/// paste on GNOME 50.4 produced 64 requests about 10ms apart, and each one
+/// logged a full ERROR with the same D-Bus message. Collapsing the repeats
+/// keeps the one line that carries information visible in the log.
+static READ_FAILURE_LOG: std::sync::Mutex<Option<(String, std::time::Instant, u32)>> =
+    std::sync::Mutex::new(None);
+
+/// Window within which an identical failure counts as a repeat of the burst
+/// rather than a new event.
+const READ_FAILURE_WINDOW: std::time::Duration = std::time::Duration::from_secs(5);
 
 impl ClipboardOrchestrator {
     /// Handle RDP format list announcement
@@ -42,7 +58,9 @@ impl ClipboardOrchestrator {
         >,
         server_event_sender: &ServerEventSender,
         pending_portal_requests: &PendingPortalRequests,
+        pending_eager_fetches: &PendingEagerFetches,
         local_advertised_formats: &Arc<RwLock<Vec<ClipboardFormat>>>,
+        remote_owns_selection: &Arc<std::sync::atomic::AtomicBool>,
     ) -> Result<()> {
         debug!("RDP format list received: {:?}", formats);
 
@@ -141,46 +159,61 @@ impl ClipboardOrchestrator {
                 .map_err(|e| {
                     ClipboardError::PortalError(format!("Provider announce_formats failed: {e}"))
                 })?;
+            // We are the selection owner from here. A compositor will refuse to
+            // let an owner read its own selection, so Linux→Windows requests
+            // must be served from what the remote gave us until a local
+            // application takes ownership back.
+            remote_owns_selection.store(true, std::sync::atomic::Ordering::SeqCst);
             debug!(
                 "RDP clipboard formats announced via {} provider",
                 provider.name()
             );
 
             // Data-control path: Wayland `send` is synchronous, so data must be in memory
-            // before the compositor requests it. Eagerly fetch text from the RDP client now.
+            // before the compositor requests it. Eagerly fetch text, HTML, and images from
+            // the RDP client now. IronRDP only supports one outstanding data request at a
+            // time, so these are queued and fired one at a time, chained from
+            // handle_rdp_data_response (see fire_eager_fetch).
             if provider.requires_upfront_data() {
                 let has_text = mime_types.iter().any(|m| m.starts_with("text/plain"));
                 let has_cf_unicodetext = formats.iter().any(|f| f.id == 13);
 
+                let mut eager_queue: std::collections::VecDeque<EagerFetchKind> =
+                    std::collections::VecDeque::new();
+
                 if has_text && has_cf_unicodetext {
-                    info!("Data-control provider: eagerly fetching CF_UNICODETEXT from RDP client");
+                    eager_queue.push_back(EagerFetchKind::Text);
+                }
 
-                    // Queue a sentinel entry so handle_rdp_data_response knows this is eager fetch
-                    pending_portal_requests.write().await.push_back((
-                        EAGER_FETCH_SERIAL,
-                        "text/plain".to_string(),
-                        std::time::Instant::now(),
-                    ));
-
-                    let sender_opt = server_event_sender.read().await.clone();
-                    if let Some(sender) = sender_opt {
-                        use ironrdp_cliprdr::{backend::ClipboardMessage, pdu::ClipboardFormatId};
-
-                        if let Err(e) = sender.send(ironrdp_server::ServerEvent::Clipboard(
-                            ClipboardMessage::SendInitiatePaste(ClipboardFormatId(13)),
-                        )) {
-                            warn!("Failed to send eager fetch for CF_UNICODETEXT: {:?}", e);
-                            // Remove the sentinel we just pushed
-                            let mut pending = pending_portal_requests.write().await;
-                            pending.retain(|(s, _, _)| *s != EAGER_FETCH_SERIAL);
-                        }
-                    } else {
-                        warn!("ServerEvent sender not available for eager fetch");
-                        pending_portal_requests
-                            .write()
-                            .await
-                            .retain(|(s, _, _)| *s != EAGER_FETCH_SERIAL);
+                if config.enable_html && mime_types.iter().any(|m| m == "text/html") {
+                    let html_format_id = formats
+                        .iter()
+                        .find(|f| f.id == CF_HTML || f.name.as_deref() == Some("HTML Format"))
+                        .map(|f| f.id);
+                    if let Some(format_id) = html_format_id {
+                        eager_queue.push_back(EagerFetchKind::Html { format_id });
                     }
+                }
+
+                if config.enable_images {
+                    // Prefer formats that need no conversion, then richest-to-plainest DIB.
+                    let image_format_id = [CF_PNG, CF_DIBV5, CF_DIB, CF_JPEG, CF_GIF]
+                        .into_iter()
+                        .find_map(|wanted| formats.iter().find(|f| f.id == wanted).map(|f| f.id));
+                    if let Some(format_id) = image_format_id {
+                        eager_queue.push_back(EagerFetchKind::Image { format_id });
+                    }
+                }
+
+                if let Some(first) = eager_queue.pop_front() {
+                    *pending_eager_fetches.write().await = eager_queue;
+                    Self::fire_eager_fetch(
+                        first,
+                        pending_portal_requests,
+                        pending_eager_fetches,
+                        server_event_sender,
+                    )
+                    .await;
                 }
 
                 // Files: trigger the FileGroupDescriptorW paste so IronRDP fetches
@@ -220,6 +253,107 @@ impl ClipboardOrchestrator {
         Ok(())
     }
 
+    /// Fire the RDP data request for one data-control eager-fetch item, encoding which
+    /// kind it is into the pending-request's mime-type slot so `handle_rdp_data_response`
+    /// can decode it correctly when the response arrives (IronRDP doesn't correlate
+    /// requests/responses itself, hence the existing FIFO queue).
+    ///
+    /// On send failure, drops the sentinel and tries the next queued item instead of
+    /// stalling the rest of the round eager-fetch entirely.
+    async fn fire_eager_fetch(
+        first: EagerFetchKind,
+        pending_portal_requests: &PendingPortalRequests,
+        pending_eager_fetches: &PendingEagerFetches,
+        server_event_sender: &ServerEventSender,
+    ) {
+        let mut kind = first;
+        loop {
+            let (format_id, encoded_mime) = match kind {
+                EagerFetchKind::Text => (13, "text/plain".to_string()),
+                EagerFetchKind::Html { format_id } => {
+                    (format_id, format!("eager-html:{format_id}"))
+                }
+                EagerFetchKind::Image { format_id } => {
+                    (format_id, format!("eager-image:{format_id}"))
+                }
+            };
+
+            info!(
+                "Data-control provider: eagerly fetching {:?} (format {}) from RDP client",
+                kind, format_id
+            );
+
+            pending_portal_requests.write().await.push_back((
+                EAGER_FETCH_SERIAL,
+                encoded_mime,
+                std::time::Instant::now(),
+            ));
+
+            let sender_opt = server_event_sender.read().await.clone();
+            let Some(sender) = sender_opt else {
+                warn!("ServerEvent sender not available for eager fetch");
+                pending_portal_requests
+                    .write()
+                    .await
+                    .retain(|(s, _, _)| *s != EAGER_FETCH_SERIAL);
+                return;
+            };
+
+            use ironrdp_cliprdr::{backend::ClipboardMessage, pdu::ClipboardFormatId};
+            let send_result = sender.send(ironrdp_server::ServerEvent::Clipboard(
+                ClipboardMessage::SendInitiatePaste(ClipboardFormatId(format_id)),
+            ));
+
+            match send_result {
+                Ok(()) => return,
+                Err(e) => {
+                    warn!("Failed to send eager fetch for {:?}: {:?}", kind, e);
+                    pending_portal_requests
+                        .write()
+                        .await
+                        .retain(|(s, _, _)| *s != EAGER_FETCH_SERIAL);
+                    match pending_eager_fetches.write().await.pop_front() {
+                        Some(next) => kind = next,
+                        None => return,
+                    }
+                }
+            }
+        }
+    }
+
+    /// Log a provider read failure, collapsing an identical retry burst.
+    ///
+    /// The first failure logs in full at ERROR. Identical failures inside the
+    /// window drop to DEBUG, with a periodic WARN carrying the running count so
+    /// the burst is still visible without repeating its text.
+    fn log_read_failure(provider_name: &str, message: &str) {
+        let mut last = READ_FAILURE_LOG
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        let repeat = match last.as_mut() {
+            Some((prev, first, count))
+                if prev == message && first.elapsed() < READ_FAILURE_WINDOW =>
+            {
+                *count += 1;
+                Some(*count)
+            }
+            _ => {
+                *last = Some((message.to_owned(), std::time::Instant::now(), 1));
+                None
+            }
+        };
+        drop(last);
+
+        match repeat {
+            None => error!("Failed to read from {provider_name} provider: {message}"),
+            Some(count) if count.is_multiple_of(32) => warn!(
+                "Failed to read from {provider_name} provider: same failure {count} times in this burst"
+            ),
+            Some(_) => debug!("Failed to read from {provider_name} provider (repeat): {message}"),
+        }
+    }
+
     /// Handle RDP data request (Linux → Windows paste)
     #[expect(
         clippy::too_many_arguments,
@@ -236,6 +370,8 @@ impl ClipboardOrchestrator {
             tokio::sync::RwLock<Box<dyn crate::clipboard::file_transfer::FileTransferBackend>>,
         >,
         cooperation_content_cache: &Arc<RwLock<Option<Vec<u8>>>>,
+        transfer_data_cache: &Arc<RwLock<HashMap<String, Vec<u8>>>>,
+        remote_owns_selection: &Arc<std::sync::atomic::AtomicBool>,
     ) -> Result<()> {
         info!(
             "RDP data request for format ID: {} (Linux → Windows paste)",
@@ -320,12 +456,53 @@ impl ClipboardOrchestrator {
         let mime_type = match converter.format_id_to_mime(format_id) {
             Ok(m) => m,
             Err(e) => {
-                warn!("Unknown format ID {}: {:?}", format_id, e);
+                // Format ID 0 is not a valid standard clipboard format; some
+                // KDE/KWin clients request it anyway. Benign, so debug not warn.
+                if format_id == 0 {
+                    debug!("Ignoring data request for format ID 0 (not a data format)");
+                } else {
+                    warn!("Unknown format ID {}: {:?}", format_id, e);
+                }
                 Self::send_format_data_error(server_event_sender).await;
                 return Ok(());
             }
         };
         debug!("Format {} maps to MIME: {}", format_id, mime_type);
+
+        // Check the cache first, regardless of `remote_owns_selection`: if we
+        // have a recent copy of exactly what's being asked for, serving it is
+        // both faster and immune to that flag's own state-tracking races
+        // (e.g. a SelectionOwnerChanged landing right as this request
+        // arrives). This matters because asking the compositor to read back
+        // a selection this session itself just gave it is not just
+        // wasteful, it is refused: Mutter answers "Tried to read own
+        // selection", and this session is the only source of truth for data
+        // it cached itself either way.
+        if let Some(data) = transfer_data_cache.read().await.get(&mime_type).cloned() {
+            info!(
+                "Serving {} bytes from the remote's own copy ({}): cached from a recent RDP copy",
+                data.len(),
+                mime_type
+            );
+            return Self::send_converted_format_data(
+                format_id,
+                &mime_type,
+                data,
+                server_event_sender,
+            )
+            .await;
+        }
+
+        if remote_owns_selection.load(std::sync::atomic::Ordering::SeqCst) {
+            // The selection is ours because the remote copied, and nothing
+            // is cached for this exact format. Reading it back from the
+            // compositor would just be refused the same way.
+            debug!(
+                "Client asked for {mime_type} back, but the selection is ours and nothing was cached for it"
+            );
+            Self::send_format_data_error(server_event_sender).await;
+            return Ok(());
+        }
 
         let portal_data = {
             let provider_opt = clipboard_provider.read().await;
@@ -341,7 +518,7 @@ impl ClipboardOrchestrator {
                         data
                     }
                     Err(e) => {
-                        error!("Failed to read from {} provider: {:#}", provider.name(), e);
+                        Self::log_read_failure(provider.name(), &format!("{e:#}"));
                         Self::send_format_data_error(server_event_sender).await;
                         return Ok(());
                     }
@@ -353,6 +530,21 @@ impl ClipboardOrchestrator {
             }
         };
 
+        Self::send_converted_format_data(format_id, &mime_type, portal_data, server_event_sender)
+            .await
+    }
+
+    /// Convert Linux clipboard bytes to the format the RDP client asked for and
+    /// send them as a `FormatDataResponse`.
+    ///
+    /// Shared by the normal compositor-read path and the path that serves the
+    /// remote its own content back when this session owns the selection.
+    async fn send_converted_format_data(
+        format_id: u32,
+        mime_type: &str,
+        portal_data: Vec<u8>,
+        server_event_sender: &ServerEventSender,
+    ) -> Result<()> {
         let rdp_data = if format_id == 13 {
             // CF_UNICODETEXT - Convert UTF-8 to UTF-16LE with line ending conversion
             let text = String::from_utf8_lossy(&portal_data);
@@ -594,7 +786,15 @@ impl ClipboardOrchestrator {
             }
         };
 
-        let file_paths = parse_file_uris(&uri_data);
+        let mut file_paths = parse_file_uris(&uri_data);
+        let before = file_paths.len();
+        file_paths.retain(|p| !crate::clipboard::file_transfer::is_stale_foreign_fuse_path(p));
+        if file_paths.len() != before {
+            debug!(
+                "Dropped {} stale FUSE path(s) from a prior server instance",
+                before - file_paths.len()
+            );
+        }
 
         for path in &file_paths {
             trace!("Found file: {:?}", path);
@@ -686,10 +886,13 @@ impl ClipboardOrchestrator {
     )]
     pub(super) async fn handle_rdp_data_response(
         data: Vec<u8>,
+        converter: &FormatConverter,
         sync_manager: &Arc<RwLock<SyncManager>>,
         _transfer_engine: &TransferEngine,
         clipboard_provider: &SharedClipboardProvider,
         pending_portal_requests: &PendingPortalRequests,
+        pending_eager_fetches: &PendingEagerFetches,
+        config: &ClipboardOrchestratorConfig,
         file_transfer_backend: &Arc<
             tokio::sync::RwLock<Box<dyn crate::clipboard::file_transfer::FileTransferBackend>>,
         >,
@@ -738,43 +941,104 @@ impl ClipboardOrchestrator {
         if serial == EAGER_FETCH_SERIAL {
             let provider = provider_opt.as_ref().expect("provider checked above");
 
-            // Convert UTF-16LE from CF_UNICODETEXT to UTF-8
-            if data.len() >= 2 {
-                let utf16_data: Vec<u16> = data
-                    .chunks_exact(2)
-                    .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
-                    .take_while(|&c| c != 0)
-                    .collect();
+            if requested_mime == "text/plain" {
+                // Convert UTF-16LE from CF_UNICODETEXT to UTF-8
+                if data.len() >= 2 {
+                    let utf16_data: Vec<u16> = data
+                        .chunks_exact(2)
+                        .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+                        .take_while(|&c| c != 0)
+                        .collect();
 
-                let text = String::from_utf16_lossy(&utf16_data);
-                let sanitized = sanitize_text_for_linux(&text);
-                let utf8_bytes = sanitized.as_bytes().to_vec();
+                    let text = String::from_utf16_lossy(&utf16_data);
+                    let sanitized = sanitize_text_for_linux(&text);
+                    let utf8_bytes = sanitized.as_bytes().to_vec();
 
-                info!(
-                    "Eager fetch: {} UTF-16 chars → {} UTF-8 bytes for data-control source",
-                    utf16_data.len(),
-                    utf8_bytes.len()
-                );
+                    info!(
+                        "Eager fetch: {} UTF-16 chars → {} UTF-8 bytes for data-control source",
+                        utf16_data.len(),
+                        utf8_bytes.len()
+                    );
 
-                // Provide under both bare and charset-qualified MIME types so the
-                // compositor finds data regardless of which key it requests via `send`
-                if let Err(e) = provider
-                    .provide_data("text/plain", utf8_bytes.clone())
-                    .await
-                {
-                    warn!("Failed to provide eager-fetched text to data-control: {e}");
+                    // Also populate transfer_data_cache, mirroring the file-transfer
+                    // eager path below: the `remote_owns_selection` read-back serves
+                    // straight from this cache, so a get-clipboard immediately after
+                    // this set works without round-tripping to the compositor (which
+                    // would fail outright on providers that refuse to read back a
+                    // selection they don't currently own).
+                    {
+                        let mut cache = transfer_data_cache.write().await;
+                        cache.insert("text/plain".to_string(), utf8_bytes.clone());
+                        cache.insert("text/plain;charset=utf-8".to_string(), utf8_bytes.clone());
+                    }
+
+                    // Provide under both bare and charset-qualified MIME types so the
+                    // compositor finds data regardless of which key it requests via `send`
+                    if let Err(e) = provider
+                        .provide_data("text/plain", utf8_bytes.clone())
+                        .await
+                    {
+                        warn!("Failed to provide eager-fetched text to data-control: {e}");
+                    }
+                    if let Err(e) = provider
+                        .provide_data("text/plain;charset=utf-8", utf8_bytes)
+                        .await
+                    {
+                        warn!("Failed to provide eager-fetched text (charset): {e}");
+                    }
+                } else {
+                    debug!(
+                        "Eager fetch: data too small ({} bytes), skipping",
+                        data.len()
+                    );
                 }
-                if let Err(e) = provider
-                    .provide_data("text/plain;charset=utf-8", utf8_bytes)
-                    .await
-                {
-                    warn!("Failed to provide eager-fetched text (charset): {e}");
+            } else if requested_mime.starts_with("eager-html:") {
+                match converter.cf_html_to_html(&data) {
+                    Ok(html) => {
+                        info!(
+                            "Eager fetch: decoded {} bytes of CF_HTML for data-control source",
+                            html.len()
+                        );
+                        if let Err(e) = provider.provide_data("text/html", html.into_bytes()).await
+                        {
+                            warn!("Failed to provide eager-fetched HTML to data-control: {e}");
+                        }
+                    }
+                    Err(e) => warn!("Failed to decode eager-fetched CF_HTML: {e}"),
                 }
-            } else {
-                debug!(
-                    "Eager fetch: data too small ({} bytes), skipping",
-                    data.len()
-                );
+            } else if let Some(id_str) = requested_mime.strip_prefix("eager-image:") {
+                let format_id: u32 = id_str.parse().unwrap_or_default();
+                match decode_eager_image(format_id, &data, config.max_data_size) {
+                    EagerImageDecode::Publish { mime, bytes } => {
+                        info!(
+                            "Eager fetch: {} bytes decoded for data-control image source ({mime})",
+                            bytes.len()
+                        );
+                        if let Err(e) = provider.provide_data(mime, bytes).await {
+                            warn!("Failed to provide eager-fetched image to data-control: {e}");
+                        }
+                    }
+                    EagerImageDecode::TooLarge { size } => debug!(
+                        "Eager fetch: decoded image is {size} bytes, over max_data_size \
+                         ({}) - not publishing to data-control",
+                        config.max_data_size
+                    ),
+                    EagerImageDecode::Unsupported => {
+                        warn!("Failed to decode eager-fetched image (format {format_id})");
+                    }
+                }
+            }
+
+            // Chain the next queued eager fetch, if any (IronRDP only supports one
+            // outstanding data request at a time).
+            if let Some(next) = pending_eager_fetches.write().await.pop_front() {
+                Self::fire_eager_fetch(
+                    next,
+                    pending_portal_requests,
+                    pending_eager_fetches,
+                    server_event_sender,
+                )
+                .await;
             }
 
             return Ok(());
@@ -1039,11 +1303,28 @@ impl ClipboardOrchestrator {
                 );
             }
             rtf_bytes
-        } else if (requested_mime.starts_with("text/plain")
-            || requested_mime.starts_with("text/html"))
-            && data.len() >= 2
-        {
-            // text/plain and text/html from Windows are UTF-16LE (CF_UNICODETEXT)
+        } else if requested_mime.starts_with("text/html") {
+            // CF_HTML ("HTML Format") is UTF-8 text with an ASCII offset header
+            // (StartFragment/EndFragment byte offsets into the same payload),
+            // not UTF-16 — decoding it as CF_UNICODETEXT produces mojibake.
+            match converter.cf_html_to_html(&data) {
+                Ok(html) => {
+                    let sanitized = sanitize_text_for_linux(&html);
+                    let utf8_bytes = sanitized.as_bytes().to_vec();
+                    debug!(
+                        "Decoded CF_HTML: {} bytes → {} UTF-8 bytes with LF line endings",
+                        data.len(),
+                        utf8_bytes.len()
+                    );
+                    utf8_bytes
+                }
+                Err(e) => {
+                    warn!("Failed to decode CF_HTML, passing through raw bytes: {e}");
+                    data
+                }
+            }
+        } else if requested_mime.starts_with("text/plain") && data.len() >= 2 {
+            // text/plain from Windows is UTF-16LE (CF_UNICODETEXT).
             // MIME may have charset suffix like "text/plain;charset=utf-8"
             // Convert UTF-16LE to UTF-8 with line ending conversion
             let utf16_data: Vec<u16> = data
@@ -1174,5 +1455,86 @@ impl ClipboardOrchestrator {
 
         pending_portal_requests.write().await.clear();
         Ok(())
+    }
+}
+
+/// Outcome of decoding an eagerly-fetched image for the data-control clipboard source.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum EagerImageDecode {
+    /// Decoded successfully and within `max_data_size` — publish under `mime`.
+    Publish { mime: &'static str, bytes: Vec<u8> },
+    /// Decoded successfully but exceeds `max_data_size` — deliberately not published.
+    TooLarge { size: usize },
+    /// Unrecognized format ID, or the source bytes failed to decode.
+    Unsupported,
+}
+
+/// Decode an eagerly-fetched RDP image format into what the data-control source should
+/// publish, applying the `max_data_size` cap. Pure function, no I/O, so the size-cap
+/// behavior is directly testable without the full clipboard orchestrator.
+fn decode_eager_image(format_id: u32, data: &[u8], max_data_size: usize) -> EagerImageDecode {
+    let converted = match format_id {
+        CF_DIB => dib_to_png(data).ok(),
+        CF_DIBV5 => dibv5_to_png(data).ok(),
+        CF_PNG | CF_JPEG | CF_GIF => Some(data.to_vec()),
+        _ => None,
+    };
+
+    match converted {
+        Some(bytes) if bytes.len() <= max_data_size => {
+            let mime = match format_id {
+                CF_JPEG => "image/jpeg",
+                CF_GIF => "image/gif",
+                _ => "image/png",
+            };
+            EagerImageDecode::Publish { mime, bytes }
+        }
+        Some(bytes) => EagerImageDecode::TooLarge { size: bytes.len() },
+        None => EagerImageDecode::Unsupported,
+    }
+}
+
+#[cfg(test)]
+mod eager_fetch_tests {
+    use super::{CF_DIB, CF_GIF, CF_JPEG, CF_PNG, EagerImageDecode, decode_eager_image};
+
+    #[test]
+    fn passthrough_formats_publish_under_cap() {
+        let data = vec![0xFFu8; 10];
+        for (format_id, mime) in [
+            (CF_PNG, "image/png"),
+            (CF_JPEG, "image/jpeg"),
+            (CF_GIF, "image/gif"),
+        ] {
+            let decoded = decode_eager_image(format_id, &data, 1024);
+            assert_eq!(
+                decoded,
+                EagerImageDecode::Publish {
+                    mime,
+                    bytes: data.clone()
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn passthrough_over_cap_is_not_published() {
+        let data = vec![0xFFu8; 100];
+        let decoded = decode_eager_image(CF_PNG, &data, 10);
+        assert_eq!(decoded, EagerImageDecode::TooLarge { size: 100 });
+    }
+
+    #[test]
+    fn unknown_format_id_is_unsupported() {
+        let data = vec![0xFFu8; 10];
+        let decoded = decode_eager_image(0xDEAD_u32, &data, 1024);
+        assert_eq!(decoded, EagerImageDecode::Unsupported);
+    }
+
+    #[test]
+    fn invalid_dib_bytes_are_unsupported_not_a_panic() {
+        // Too short to be a valid DIB header — must fail decode cleanly, not panic.
+        let decoded = decode_eager_image(CF_DIB, &[0x01, 0x02], 1024);
+        assert_eq!(decoded, EagerImageDecode::Unsupported);
     }
 }

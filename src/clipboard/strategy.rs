@@ -171,6 +171,30 @@ impl ClipboardIntegrationMode {
                                 klipper_cooperation: true,
                             }
                         } else {
+                            // KDE bug 515465: xdg-desktop-portal-kde crashes on a Qt
+                            // threading violation whenever Klipper reads clipboard data
+                            // after a SetSelection call — this mode still calls
+                            // SetSelection (see cooperation.rs's own doc comment), so it
+                            // is not immune. Fixed upstream in Plasma 6.6.0; no data-control
+                            // fallback is available here, so there's nothing safer to fall
+                            // back to — proceed and just make the risk visible in logs.
+                            if let crate::compositor::CompositorType::Kde { version } =
+                                &caps.compositor
+                            {
+                                let affected = version.as_deref().is_none_or(|v| {
+                                    crate::session::factory::quirks::InitQuirkRegistry::is_affected_kde_version(v)
+                                });
+                                if affected {
+                                    tracing::warn!(
+                                        plasma_version = version.as_deref().unwrap_or("unknown"),
+                                        "  ⚠ This Plasma version may hit KDE bug 515465 \
+                                         (xdg-desktop-portal-kde crashes ~1-2s after \
+                                         SetSelection when Klipper reads the clipboard). \
+                                         Fixed upstream in 6.6.0 — proceeding anyway; watch \
+                                         for portal crashes if clipboard sync misbehaves."
+                                    );
+                                }
+                            }
                             Self::KlipperCooperationMode {
                                 use_prevention_tier1: config.kde_syncselection_hint,
                                 use_defensive_tier3: true,

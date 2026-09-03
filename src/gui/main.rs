@@ -89,6 +89,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 fn reexec_with_software_rendering() -> ! {
     info!("Re-executing with software rendering environment...");
 
+    // This function is diverging: it either execs or exits, so there is no
+    // error path to return through. Failing to locate our own executable means
+    // the process cannot re-exec at all.
+    #[expect(
+        clippy::expect_used,
+        reason = "diverging re-exec path has no caller to return an error to"
+    )]
     let exe = env::current_exe().expect("Failed to get current executable path");
     let args: Vec<String> = env::args().skip(1).collect();
 

@@ -129,7 +129,7 @@ impl DbusClient {
         // Check if anyone owns the well-known name without triggering activation
         let dbus_proxy = zbus::fdo::DBusProxy::new(&connection).await.ok()?;
         dbus_proxy
-            .get_name_owner(SERVICE_NAME.try_into().expect("valid bus name"))
+            .get_name_owner(SERVICE_NAME.try_into().ok()?)
             .await
             .ok()?;
 
@@ -315,10 +315,10 @@ impl DbusClient {
         // GetNameOwner returns the unique name of the owner, or an error if
         // no one owns it. Unlike method calls to the service name, this does
         // NOT trigger bus activation.
-        dbus_proxy
-            .get_name_owner(SERVICE_NAME.try_into().expect("valid bus name"))
-            .await
-            .is_ok()
+        let Ok(bus_name) = SERVICE_NAME.try_into() else {
+            return false;
+        };
+        dbus_proxy.get_name_owner(bus_name).await.is_ok()
     }
 
     /// Clone the underlying proxy for use in signal subscriptions

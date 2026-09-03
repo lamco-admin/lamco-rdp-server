@@ -72,6 +72,13 @@ pub enum Message {
     /// Cursor mode changed
     VideoCursorModeChanged(String),
 
+    /// Capture protocol changed (auto/ext/wlr)
+    CaptureProtocolChanged(String),
+    /// Allow capture protocol fallback toggled
+    CaptureAllowFallbackToggled(bool),
+    /// Ext-capture handshake timeout changed
+    CaptureHandshakeTimeoutChanged(String),
+
     /// Toggle video pipeline section expanded
     VideoPipelineToggleExpanded,
 
@@ -144,6 +151,13 @@ pub enum Message {
     PerformanceNetworkThreadsChanged(String),
     PerformanceBufferPoolSizeChanged(String),
     PerformanceZeroCopyToggled(bool),
+
+    /// Monitoring/metrics collection toggled
+    MonitoringEnabledToggled(bool),
+    /// Performance snapshot interval changed
+    MonitoringSnapshotIntervalChanged(String),
+    /// Prometheus/health HTTP bind address changed
+    MonitoringMetricsBindChanged(String),
 
     // Adaptive FPS section toggle
     PerformanceAdaptiveFpsToggleExpanded,
@@ -223,6 +237,8 @@ pub enum Message {
     DamageTrackingPixelThresholdChanged(String),
     DamageTrackingMergeDistanceChanged(String),
     DamageTrackingMinRegionAreaChanged(String),
+    DamageTrackingHintDistrustThresholdChanged(String),
+    DamageTrackingHintDistrustConsecutiveSamplesChanged(String),
 
     /// Toggle hardware encoding section expanded
     HardwareEncodingToggleExpanded,
@@ -350,6 +366,11 @@ pub enum Message {
     LogFilterLevelChanged(String),
     /// Export logs to file
     ExportLogs,
+
+    /// Notify-on-error toggled (Flatpak portal notifications)
+    NotificationsOnErrorToggled(bool),
+    /// Notify-on-certificate-expiry toggled
+    NotificationsOnCertExpiryToggled(bool),
 
     /// Show info message
     ShowInfo(String),

@@ -59,10 +59,13 @@ pub struct SecurityConfig {
     #[serde(default)]
     pub enable_nla: bool,
 
-    /// Security mode: "tls", "hybrid", "auto"
+    /// Security mode: "tls", "hybrid", "auto", "rdp"
     /// - "tls": TLS-only (standard SSL security)
     /// - "hybrid": NLA/CredSSP (Network Level Authentication)
     /// - "auto": hybrid when credentials are configured, tls otherwise
+    /// - "rdp" (alias "none"): Standard RDP Security — no TLS, no encryption.
+    ///   Required by Hyper-V Enhanced Session Mode (VMConnect speaks plaintext
+    ///   RDP). Only safe over hypervisor-isolated transports (vsock) or loopback.
     #[serde(default = "default_security_mode")]
     pub security_mode: String,
 
@@ -158,6 +161,49 @@ pub struct CaptureProtocolConfig {
     /// Set to 0 to disable the timeout.
     #[serde(default = "default_handshake_timeout")]
     pub handshake_timeout_ms: u64,
+
+    /// How to record a monitor on GNOME: "auto", "area", or "monitor".
+    ///
+    /// Mutter stops recording a `RecordMonitor` stream entirely while a
+    /// fullscreen or maximised surface is handed to direct scanout, because its
+    /// monitor source copies from the scanout buffer and gives up when it
+    /// cannot (GNOME/mutter#3903, fix in mutter!5276, unreleased). Its
+    /// `RecordArea` source re-paints the stage into its own framebuffer
+    /// instead, so it has nothing to give up on and keeps producing frames
+    /// through a fullscreen video.
+    ///
+    /// The trade is that an area stream fixes its rectangle and scale at
+    /// creation, so a resolution, scale or layout change needs the stream torn
+    /// down and rebuilt, where a monitor stream follows the monitor.
+    ///
+    /// - "auto": `RecordArea` when the compositor will give us a rectangle and
+    ///   is driving a single monitor, `RecordMonitor` otherwise. Every released
+    ///   Mutter still carries the bug, so this is area in practice today.
+    /// - "area": prefer `RecordArea`, still falling back where an area cannot
+    ///   represent the session (more than one logical monitor, or a rectangle
+    ///   the compositor will not resolve)
+    /// - "monitor": always `RecordMonitor`, accepting the freeze
+    #[serde(default = "default_record_mode_auto")]
+    pub gnome_record_mode: String,
+
+    /// Mark a headless GNOME session's virtual monitor as part of the platform.
+    ///
+    /// Sets `is-platform` on `org.gnome.Mutter.ScreenCast.RecordVirtual`, which
+    /// Mutter documents as meaning the output "will not be interpreted as if the
+    /// screen is shared, but more transparently as if it was a real monitor".
+    /// For a headless server the virtual monitor genuinely is the session's only
+    /// display, so this is the accurate description of it, and it suppresses the
+    /// screen-sharing treatment GNOME otherwise applies.
+    ///
+    /// Defaults to `false`, which is exactly the behaviour before this key
+    /// existed. It is opt-in because it changes how the compositor presents the
+    /// session rather than anything we can verify from our side.
+    ///
+    /// Requires ScreenCast API version 3 (GNOME 46 and later). Older Mutter
+    /// ignores the property rather than failing, since the handler looks up
+    /// only the keys it knows.
+    #[serde(default)]
+    pub gnome_virtual_is_platform: bool,
 }
 
 fn default_protocol_auto() -> String {
@@ -168,12 +214,18 @@ fn default_handshake_timeout() -> u64 {
     5000
 }
 
+fn default_record_mode_auto() -> String {
+    "auto".to_string()
+}
+
 impl Default for CaptureProtocolConfig {
     fn default() -> Self {
         Self {
             protocol: "auto".to_string(),
             allow_fallback: true,
             handshake_timeout_ms: 5000,
+            gnome_record_mode: "auto".to_string(),
+            gnome_virtual_is_platform: false,
         }
     }
 }
@@ -184,8 +236,11 @@ pub struct InputConfig {
     /// Input injection protocol: "auto", "libei", "wlr"
     ///
     /// - `"auto"` (default): detect from compositor type.
-    ///   GNOME/KDE → libei (EIS via Portal RemoteDesktop).
-    ///   wlroots/Smithay → wlr (virtual-keyboard + virtual-pointer).
+    ///   GNOME/KDE/COSMIC → libei (EIS via Portal RemoteDesktop).
+    ///   wlroots and other Smithay compositors → wlr (virtual-keyboard + virtual-pointer).
+    ///   COSMIC groups with the first set despite being Smithay-based: it exposes no
+    ///   wlr-virtual-pointer and will not gain one (Smithay #1350), so EIS is the only
+    ///   portal-mediated input path available to it.
     /// - `"libei"`: force EIS protocol (GNOME-native, needs Portal RemoteDesktop).
     /// - `"wlr"`: force wlr-virtual-pointer + zwp-virtual-keyboard.
     #[serde(default = "default_input_protocol")]
@@ -243,9 +298,21 @@ impl InputConfig {
             // "auto" — compositor-dependent
             _ => {
                 use crate::compositor::CompositorType;
+                // COSMIC is listed even though its RemoteDesktop portal has not shipped yet
+                // (cosmic-comp #2442, xdg-desktop-portal-cosmic #317). It has no
+                // wlr-virtual-pointer and never will (Smithay #1350), so wlr is not a
+                // future for it: EIS is the only portal-mediated input path it can get.
+                // Selecting libei here is inert until that portal lands, because the
+                // portal-generic branch that currently drives COSMIC (video plus keyboard
+                // plus the uinput pointer) is chosen earlier and does not consult this
+                // preference. Once the portal does land, that branch stops matching, and
+                // without COSMIC in this list every remaining strategy would be skipped and
+                // the session would silently drop to view-only ScreenCast.
                 matches!(
                     compositor,
-                    CompositorType::Gnome { .. } | CompositorType::Kde { .. }
+                    CompositorType::Gnome { .. }
+                        | CompositorType::Kde { .. }
+                        | CompositorType::Cosmic
                 )
             }
         }
@@ -1113,6 +1180,36 @@ pub struct DamageTrackingConfig {
     /// Set to 1 to encode all detected changes.
     #[serde(default = "default_min_region_area")]
     pub min_region_area: u64,
+
+    /// Percentage-point delta between the compositor-hint damage ratio and
+    /// the periodic pixel-diff calibration probe above which one probe
+    /// sample counts as "high divergence" (0.0-100.0).
+    ///
+    /// The server periodically cross-checks compositor-supplied damage
+    /// regions against its own pixel-diff detector. If a compositor's
+    /// hints diverge from ground truth by more than this for several
+    /// consecutive samples (see `compositor_hint_distrust_consecutive_samples`),
+    /// the server stops trusting that compositor's hints for the rest of
+    /// the connection and falls back to pixel-diff as the primary damage
+    /// source. Set well above the noise floor of legitimate hint/pixel-diff
+    /// disagreement (rounding, granularity differences between capture
+    /// protocols) — the default is derived from a live session where a
+    /// misbehaving compositor reported 91-97% damage while pixel-diff
+    /// measured ~0-0.2%.
+    #[serde(default = "default_compositor_hint_distrust_threshold_pp")]
+    pub compositor_hint_distrust_threshold_pp: f32,
+
+    /// Number of *consecutive* calibration-probe samples that must exceed
+    /// `compositor_hint_distrust_threshold_pp` before compositor damage
+    /// hints are distrusted for the rest of the connection.
+    ///
+    /// Guards against a single noisy sample (e.g. a real full-screen
+    /// redraw landing exactly on a probe frame) flipping trust. There is
+    /// no automatic recovery within a connection — each new connection
+    /// re-evaluates from trusted, so a compositor that's since been fixed
+    /// upstream gets the zero-cost fast path back automatically.
+    #[serde(default = "default_compositor_hint_distrust_consecutive_samples")]
+    pub compositor_hint_distrust_consecutive_samples: u32,
 }
 
 fn default_tile_size() -> usize {
@@ -1135,6 +1232,14 @@ fn default_min_region_area() -> u64 {
     64 // 8x8 pixel minimum
 }
 
+fn default_compositor_hint_distrust_threshold_pp() -> f32 {
+    15.0
+}
+
+fn default_compositor_hint_distrust_consecutive_samples() -> u32 {
+    3
+}
+
 impl Default for DamageTrackingConfig {
     fn default() -> Self {
         Self {
@@ -1145,6 +1250,9 @@ impl Default for DamageTrackingConfig {
             pixel_threshold: default_pixel_threshold(),
             merge_distance: default_merge_distance(),
             min_region_area: default_min_region_area(),
+            compositor_hint_distrust_threshold_pp: default_compositor_hint_distrust_threshold_pp(),
+            compositor_hint_distrust_consecutive_samples:
+                default_compositor_hint_distrust_consecutive_samples(),
         }
     }
 }
@@ -1248,6 +1356,30 @@ pub struct DisplayConfig {
     /// - `"flipped"`, `"flipped-90"`, `"flipped-180"`, `"flipped-270"`: Force flip+rotation
     #[serde(default = "default_frame_transform")]
     pub frame_transform: String,
+
+    /// Spawn the wp-color-management observer to read per-output HDR/color state
+    /// for HDR-aware encoding decisions. No effect on compositors that do not
+    /// expose the protocol.
+    #[serde(default = "default_true")]
+    pub color_management: bool,
+
+    /// Spawn the zwlr-output-management observer (wlroots-family compositors) to
+    /// read output heads/modes and drive resolution changes.
+    #[serde(default = "default_true")]
+    pub output_management: bool,
+
+    /// On a client resize, drive a real wlroots output-mode change so the source
+    /// output physically switches resolution (requires `output_management`).
+    /// When false, only the capture is re-created.
+    #[serde(default = "default_true")]
+    pub resize_drives_output_mode: bool,
+
+    /// Apply HDR->SDR tone mapping to captured frames when the source output is
+    /// HDR. Off by default: enable only if your compositor delivers PQ/HLG
+    /// pixels over the capture stream (many tone-map to SDR themselves, where
+    /// this would wash the image out). Requires `color_management`.
+    #[serde(default)]
+    pub hdr_tone_mapping: bool,
 }
 
 fn default_frame_transform() -> String {
@@ -1261,6 +1393,10 @@ impl Default for DisplayConfig {
             allowed_resolutions: vec![],
             dpi_aware: false,
             frame_transform: default_frame_transform(),
+            color_management: true,
+            output_management: true,
+            resize_drives_output_mode: true,
+            hdr_tone_mapping: false,
         }
     }
 }
@@ -1565,6 +1701,16 @@ mod tests {
             version: Some("6.6".to_string()),
         };
         assert!(config.resolve_for_compositor(&kde));
+    }
+
+    #[test]
+    fn input_protocol_auto_selects_libei_for_cosmic() {
+        // COSMIC has no wlr-virtual-pointer and cannot gain one (Smithay #1350), so EIS is
+        // its only portal-mediated input path. Resolving to wlr here would leave every
+        // strategy unselectable the moment COSMIC ships its RemoteDesktop portal, dropping
+        // the session to view-only.
+        let config = InputConfig::default();
+        assert!(config.resolve_for_compositor(&CompositorType::Cosmic));
     }
 
     #[test]

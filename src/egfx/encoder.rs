@@ -282,6 +282,48 @@ pub fn align_to_16(dimension: u32) -> u32 {
     (dimension + 15) & !15
 }
 
+/// H.264 backend for the AVC420 encoder: software OpenH264, or a VA-API encoder
+/// on a dedicated thread (VA handles are `!Send`, the display pipeline is Send).
+#[cfg(feature = "h264")]
+enum Avc420Backend {
+    Software(openh264_compat::VersionedEncoder),
+    #[cfg(feature = "vaapi")]
+    Hardware(Avc420Hardware),
+}
+
+/// VA-API AVC420 state: the shared encoder thread plus the macroblock-aligned
+/// encode size (the VA-API path signals no frame cropping, so BGRA is
+/// edge-padded to these dimensions before encoding).
+#[cfg(all(feature = "h264", feature = "vaapi"))]
+struct Avc420Hardware {
+    thread: crate::egfx::hardware::HardwareEncoderThread,
+    aligned_width: u32,
+    aligned_height: u32,
+}
+
+/// Edge-pad a BGRA frame from `(src_w, src_h)` up to `(dst_w, dst_h)` by
+/// replicating the last column and row. The VA-API AVC420 path encodes at
+/// macroblock-aligned dimensions with no frame cropping.
+#[cfg(all(feature = "h264", feature = "vaapi"))]
+fn pad_bgra_edge(bgra: &[u8], src_w: usize, src_h: usize, dst_w: usize, dst_h: usize) -> Vec<u8> {
+    if src_w == dst_w && src_h == dst_h {
+        return bgra[..src_w * src_h * 4].to_vec();
+    }
+    let mut out = vec![0u8; dst_w * dst_h * 4];
+    for row in 0..dst_h {
+        let src_row = row.min(src_h - 1);
+        let src_off = src_row * src_w * 4;
+        let dst_off = row * dst_w * 4;
+        out[dst_off..dst_off + src_w * 4].copy_from_slice(&bgra[src_off..src_off + src_w * 4]);
+        let last = &bgra[src_off + (src_w - 1) * 4..src_off + src_w * 4];
+        for col in src_w..dst_w {
+            let o = dst_off + col * 4;
+            out[o..o + 4].copy_from_slice(last);
+        }
+    }
+    out
+}
+
 /// H.264 encoder using OpenH264
 ///
 /// # Feature Gate
@@ -289,7 +331,7 @@ pub fn align_to_16(dimension: u32) -> u32 {
 /// Requires the `h264` feature to be enabled.
 #[cfg(feature = "h264")]
 pub struct Avc420Encoder {
-    encoder: openh264_compat::VersionedEncoder,
+    backend: Avc420Backend,
     config: EncoderConfig,
     frame_count: u64,
     /// Current H.264 level (determined from resolution)
@@ -434,7 +476,55 @@ impl Avc420Encoder {
             .map_err(|e| EncoderError::InitFailed(format!("OpenH264 init failed: {e}")))?;
 
         Ok(Self {
-            encoder,
+            backend: Avc420Backend::Software(encoder),
+            config,
+            frame_count: 0,
+            current_level: level,
+            diagnostics: None,
+        })
+    }
+
+    /// Create an AVC420 encoder backed by a VA-API hardware encoder.
+    ///
+    /// Built at the config's macroblock-aligned dimensions (the VA-API path
+    /// signals no frame cropping). Requires the VA-API backend; any other
+    /// backend is rejected so the caller can fall back to software.
+    #[cfg(feature = "vaapi")]
+    pub fn new_hardware(
+        config: EncoderConfig,
+        hw_config: &crate::config::HardwareEncodingConfig,
+    ) -> EncoderResult<Self> {
+        let width = config.width.ok_or_else(|| {
+            EncoderError::InitFailed("hardware AVC420 requires known dimensions".to_string())
+        })?;
+        let height = config.height.ok_or_else(|| {
+            EncoderError::InitFailed("hardware AVC420 requires known dimensions".to_string())
+        })?;
+        let w32 = u32::from(width);
+        let h32 = u32::from(height);
+
+        let thread = crate::egfx::hardware::HardwareEncoderThread::spawn(hw_config, w32, h32)
+            .map_err(EncoderError::InitFailed)?;
+        if thread.backend_name() != "vaapi" {
+            return Err(EncoderError::InitFailed(format!(
+                "hardware AVC420 requires the VA-API backend, got {}",
+                thread.backend_name()
+            )));
+        }
+
+        let level = config
+            .width
+            .zip(config.height)
+            .map(|(w, h)| super::h264_level::H264Level::for_config(w, h, config.max_fps));
+
+        info!("AVC420: VA-API hardware encoder at {}×{}", width, height);
+
+        Ok(Self {
+            backend: Avc420Backend::Hardware(Avc420Hardware {
+                thread,
+                aligned_width: w32,
+                aligned_height: h32,
+            }),
             config,
             frame_count: 0,
             current_level: level,
@@ -473,15 +563,88 @@ impl Avc420Encoder {
             )));
         }
 
-        // Color conversion: BGRA → YUV420 (pure Rust, no FFI)
+        // Hardware AVC420: pad to the aligned encode size and encode on the
+        // dedicated VA-API thread (it does its own BGRA→NV12 conversion).
+        #[cfg(feature = "vaapi")]
+        if let Avc420Backend::Hardware(hw) = &self.backend {
+            let padded = pad_bgra_edge(
+                bgra_data,
+                width as usize,
+                height as usize,
+                hw.aligned_width as usize,
+                hw.aligned_height as usize,
+            );
+            return match hw.thread.encode_bgra(
+                padded,
+                hw.aligned_width,
+                hw.aligned_height,
+                timestamp_ms,
+            ) {
+                Ok(Some((data, is_keyframe))) => {
+                    self.frame_count += 1;
+                    super::encode_diagnostics::log_nal_hex_dump(
+                        &data,
+                        self.frame_count,
+                        "AVC420-HW",
+                    );
+                    if let Some(d) = &self.diagnostics {
+                        d.dump_frame(&data);
+                        d.self_test(&data, "AVC420-HW");
+                    }
+                    Ok(Some(H264Frame {
+                        size: data.len(),
+                        data,
+                        is_keyframe,
+                        timestamp_ms,
+                    }))
+                }
+                Ok(None) => Ok(None),
+                Err(msg) => Err(EncoderError::EncodeFailed(format!(
+                    "hardware AVC420 encode: {msg}"
+                ))),
+            };
+        }
+
+        // Software path: BGRA → YUV420 → OpenH264.
+        //
+        // The match is only infallible when `vaapi` is off, since that feature
+        // is what adds the Hardware variant. Collapsing it to an irrefutable
+        // `let` would stop the crate compiling with the feature on, so the
+        // expectation is scoped to the configuration where the lint fires.
+        #[cfg_attr(
+            not(feature = "vaapi"),
+            expect(
+                clippy::infallible_destructuring_match,
+                reason = "Hardware variant exists only under the vaapi feature"
+            )
+        )]
+        let encoder = match &mut self.backend {
+            Avc420Backend::Software(enc) => enc,
+            #[cfg(feature = "vaapi")]
+            Avc420Backend::Hardware(_) => {
+                return Err(EncoderError::EncodeFailed(
+                    "AVC420 hardware path not handled".to_string(),
+                ));
+            }
+        };
+
+        // Color conversion: BGRA → YUV420 (pure Rust, no FFI).
+        //
+        // `from_bgra8_source`, not `from_rgb_source`. The latter is the generic
+        // RGBSource path: it reads one pixel at a time through a `pixel_f32`
+        // trait call and converts in floating point. The former routes to the
+        // contiguous path, which openh264 0.9.8 backed with hand-written AVX2,
+        // and `BgraSliceU8` already declares the layout it needs (pixel stride
+        // 4, channel offsets 2/1/0), so there is no reordering to do first.
+        // Upstream's own `write_yuv_by_pixel_matches_scalar` test asserts the
+        // two paths agree, so this is a speed change rather than an output one.
         let bgra_source = BgraSliceU8::new(bgra_data, (width as usize, height as usize));
-        let yuv = YUVBuffer::from_rgb_source(bgra_source);
+        let yuv = YUVBuffer::from_bgra8_source(bgra_source);
 
         // Encode via version-aware FFI (uses correct struct layouts for detected ABI)
         let (w, h) = (width as usize, height as usize);
         let (y_stride, u_stride, v_stride) = yuv.strides();
-        let encoded = self
-            .encoder
+        let encoded = encoder
             .encode(
                 yuv.y(),
                 yuv.u(),
@@ -602,14 +765,32 @@ impl Avc420Encoder {
         self.encode_bgra(&data, desc.width, desc.height, timestamp_ms)
     }
 
+    /// Name of the active encode backend, for telemetry.
+    pub fn backend_name(&self) -> &'static str {
+        match &self.backend {
+            Avc420Backend::Software(_) => "openh264",
+            #[cfg(feature = "vaapi")]
+            Avc420Backend::Hardware(_) => "vaapi",
+        }
+    }
+
     pub fn force_keyframe(&mut self) {
-        self.encoder.force_intra_frame();
+        match &mut self.backend {
+            Avc420Backend::Software(encoder) => encoder.force_intra_frame(),
+            #[cfg(feature = "vaapi")]
+            Avc420Backend::Hardware(hw) => hw.thread.force_keyframe(),
+        }
         debug!("Forced keyframe on next encode");
     }
 
     /// Get the detected ABI generation.
     pub fn abi(&self) -> openh264_compat::AbiGeneration {
-        self.encoder.abi()
+        match &self.backend {
+            Avc420Backend::Software(encoder) => encoder.abi(),
+            // The hardware path uses no OpenH264 ABI; report the current one.
+            #[cfg(feature = "vaapi")]
+            Avc420Backend::Hardware(_) => openh264_compat::AbiGeneration::Abi8,
+        }
     }
 
     pub fn stats(&self) -> EncoderStats {

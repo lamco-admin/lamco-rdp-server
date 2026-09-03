@@ -1,3 +1,28 @@
+lamco-rdp-server (1.4.5-1) unstable; urgency=medium
+
+  * New upstream release 1.4.5
+  * Cross-build aware debian/rules (arm64 via dpkg-buildpackage -a arm64)
+  * Area capture on GNOME so a fullscreen video no longer freezes the session
+    (capture.gnome_record_mode)
+  * VA-API hardware encoding now drives EGFX H.264 (AVC444 and AVC420);
+    desktop audio capture now actually starts and stays in sync
+  * Server-driven cursor shapes, multitouch over MS-RDPEI, the client's
+    keyboard layout applied, RTT and bandwidth reported to the client
+  * Fix server crash on client disconnect (lamco-pipewire no longer calls
+    pw_deinit); fix configured listen port resetting to 3389
+  * Fix a GNOME server that could stop accepting connections after a client
+    connect (EIS handshake lost its wakeup); fix the first connection after
+    an audio-enabled client disconnects failing on a stale RDPSND wave
+  * Hyper-V Enhanced Session Mode via security_mode = "rdp"; libei video
+    persistence on KDE; EIS input reliability and reconnect-storm fix
+  * Rename systemd user unit to app-io.lamco.rdp-server.service (Alias kept;
+    postinst migrates enabled state for logged-in users)
+  * New Depends: fuse3; new Recommends: vainfo; postinst enables
+    user_allow_other in /etc/fuse.conf
+  * MSRV 1.94; libpipewire >= 0.3.62 required by lamco-pipewire 0.6
+
+ -- Greg Lamberson <greg@lamco.io>  Wed, 02 Sep 2026 00:00:00 -0500
+
 lamco-rdp-server (1.4.4-1) unstable; urgency=medium
 
   * New upstream release 1.4.4

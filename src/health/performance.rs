@@ -207,7 +207,7 @@ mod tests {
     fn performance_snapshot_is_serializable() {
         let snapshot = PerformanceSnapshot {
             timestamp: SystemTime::now(),
-            uptime: Duration::from_secs(3600),
+            uptime: Duration::from_hours(1),
             fps: FpsSnapshot::default(),
             latency: LatencySnapshot::default(),
             egfx: EgfxSnapshot::default(),
@@ -226,7 +226,7 @@ mod tests {
     fn performance_snapshot_clone_is_independent() {
         let snapshot = PerformanceSnapshot {
             timestamp: SystemTime::now(),
-            uptime: Duration::from_secs(60),
+            uptime: Duration::from_mins(1),
             fps: FpsSnapshot {
                 current_fps: 25,
                 ..FpsSnapshot::default()

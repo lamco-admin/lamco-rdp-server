@@ -45,6 +45,7 @@ impl TabCategory {
             TabCategory::System => &[Tab::Performance, Tab::Advanced, Tab::Status],
             TabCategory::Media => &[
                 Tab::Video,
+                Tab::Display,
                 Tab::Egfx,
                 Tab::Audio,
                 Tab::Input,
@@ -60,6 +61,7 @@ pub enum Tab {
     Server,
     Security,
     Video,
+    Display,
     Audio,
     Input,
     Clipboard,
@@ -75,6 +77,7 @@ impl Tab {
             Tab::Server,
             Tab::Security,
             Tab::Video,
+            Tab::Display,
             Tab::Audio,
             Tab::Input,
             Tab::Clipboard,
@@ -90,6 +93,7 @@ impl Tab {
             Tab::Server => "Server",
             Tab::Security => "Security",
             Tab::Video => "Video",
+            Tab::Display => "Display",
             Tab::Audio => "Audio",
             Tab::Input => "Input",
             Tab::Clipboard => "Clipboard",
@@ -105,6 +109,7 @@ impl Tab {
             Tab::Server => "🖥",
             Tab::Security => "🔒",
             Tab::Video => "🎬",
+            Tab::Display => "🪟",
             Tab::Audio => "🔊",
             Tab::Input => "⌨",
             Tab::Clipboard => "📋",
@@ -118,7 +123,9 @@ impl Tab {
     pub fn category(&self) -> TabCategory {
         match self {
             Tab::Server | Tab::Security => TabCategory::Core,
-            Tab::Video | Tab::Audio | Tab::Input | Tab::Clipboard | Tab::Egfx => TabCategory::Media,
+            Tab::Video | Tab::Display | Tab::Audio | Tab::Input | Tab::Clipboard | Tab::Egfx => {
+                TabCategory::Media
+            }
             Tab::Performance | Tab::Advanced | Tab::Status => TabCategory::System,
         }
     }
@@ -141,6 +148,7 @@ pub struct EditStrings {
 
     // Video tab
     pub vaapi_device: String,
+    pub capture_handshake_timeout: String,
 
     // Clipboard tab
     pub max_size_mb: String,
@@ -161,6 +169,7 @@ pub struct EditStrings {
     pub quality_delay: String,
     pub balanced_delay: String,
     pub interactive_delay: String,
+    pub monitoring_snapshot_interval: String,
 
     // Video Pipeline
     pub max_frame_age: String,
@@ -184,6 +193,8 @@ pub struct EditStrings {
     pub pixel_threshold: String,
     pub merge_distance: String,
     pub min_region_area: String,
+    pub hint_distrust_threshold_pp: String,
+    pub hint_distrust_consecutive_samples: String,
 
     // Advanced tab - Display
     pub resolutions_text: String,
@@ -220,6 +231,7 @@ impl EditStrings {
 
             // Hardware Encoding
             vaapi_device: config.hardware_encoding.vaapi_device.display().to_string(),
+            capture_handshake_timeout: config.capture.handshake_timeout_ms.to_string(),
 
             // Clipboard (convert bytes to MB for display)
             max_size_mb: (config.clipboard.max_size / (1024 * 1024)).to_string(),
@@ -249,6 +261,7 @@ impl EditStrings {
                 .latency
                 .interactive_max_delay_ms
                 .to_string(),
+            monitoring_snapshot_interval: config.monitoring.snapshot_interval_secs.to_string(),
 
             // Video Pipeline
             max_frame_age: config
@@ -280,6 +293,14 @@ impl EditStrings {
             pixel_threshold: config.damage_tracking.pixel_threshold.to_string(),
             merge_distance: config.damage_tracking.merge_distance.to_string(),
             min_region_area: config.damage_tracking.min_region_area.to_string(),
+            hint_distrust_threshold_pp: config
+                .damage_tracking
+                .compositor_hint_distrust_threshold_pp
+                .to_string(),
+            hint_distrust_consecutive_samples: config
+                .damage_tracking
+                .compositor_hint_distrust_consecutive_samples
+                .to_string(),
 
             // Advanced - Display
             resolutions_text: config.display.allowed_resolutions.join("\n"),

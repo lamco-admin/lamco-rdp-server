@@ -76,6 +76,8 @@ pub mod tpm_store;
 pub mod strategies {
     #[cfg(feature = "libei")]
     pub mod eis_common;
+    #[cfg(feature = "libei")]
+    pub mod eis_stream;
     pub mod mutter_direct;
     pub mod portal_token;
     pub mod screencast_only;

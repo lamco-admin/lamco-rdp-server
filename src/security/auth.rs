@@ -123,7 +123,7 @@ impl RateLimiter {
                 0..=3 => return None,
                 4 => Duration::from_secs(5),
                 5 => Duration::from_secs(15),
-                _ => Duration::from_secs(60),
+                _ => Duration::from_mins(1),
             };
             lockout.checked_sub(entry.last_attempt.elapsed())
         } else {
@@ -160,7 +160,7 @@ impl RateLimiter {
             .entries
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        entries.retain(|_, entry| entry.last_attempt.elapsed() < Duration::from_secs(120));
+        entries.retain(|_, entry| entry.last_attempt.elapsed() < Duration::from_mins(2));
     }
 }
 
@@ -557,7 +557,7 @@ mod tests {
         let token = SessionToken::new("testuser".to_string());
         assert_eq!(token.username(), "testuser");
         assert!(!token.token().is_empty());
-        assert!(!token.is_expired(std::time::Duration::from_secs(3600)));
+        assert!(!token.is_expired(std::time::Duration::from_hours(1)));
     }
 
     #[test]

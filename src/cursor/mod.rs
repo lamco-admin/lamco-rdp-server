@@ -40,9 +40,11 @@
 
 mod predictor;
 mod strategy;
+mod wire;
 
 pub use predictor::{CursorPredictor, PredictorConfig};
-pub use strategy::{CursorMode, CursorStrategy, CursorStrategyConfig};
+pub use strategy::{CursorMode, CursorShape, CursorStrategy, CursorStrategyConfig};
+pub use wire::{CursorWireError, WireDisplayUpdate, WirePointer, convert_cursor_bitmap};
 
 /// Default lookahead for predictive cursor (ms)
 pub const DEFAULT_LOOKAHEAD_MS: f32 = 50.0;

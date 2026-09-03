@@ -102,9 +102,6 @@ struct DpbEntry {
 /// This encoder is NOT `Send` due to VA-API's thread-local design.
 /// Create and use on the same thread.
 pub struct VaapiEncoder {
-    /// VA Display handle
-    display: Rc<Display>,
-
     /// Encode context
     context: Rc<Context>,
 
@@ -153,9 +150,6 @@ pub struct VaapiEncoder {
 
     /// VA driver name (e.g., "iHD", "i965", "radeonsi")
     driver_name: String,
-
-    /// Device path
-    device_path: String,
 
     /// Target bitrate in bits per second
     bitrate_bps: u32,
@@ -335,7 +329,6 @@ impl VaapiEncoder {
         );
 
         Ok(Self {
-            display,
             context,
             input_surfaces,
             recon_surfaces,
@@ -353,7 +346,6 @@ impl VaapiEncoder {
             force_idr: true, // First frame is always IDR
             stats,
             driver_name,
-            device_path,
             bitrate_bps,
             nv12_format,
             color_space,
@@ -362,6 +354,181 @@ impl VaapiEncoder {
 
     fn is_idr_frame(&self) -> bool {
         self.force_idr || self.frame_count.is_multiple_of(self.idr_interval as u64)
+    }
+
+    /// Shared VA-API encode core: upload one NV12 frame and encode it with the
+    /// supplied IDR decision. Both `encode_bgra` and `encode_nv12` funnel
+    /// through here so picture/slice/rate-control setup and DPB tracking live in
+    /// one place. The caller owns the IDR decision and the force_idr flag reset.
+    fn encode_nv12_core(
+        &mut self,
+        nv12_data: &[u8],
+        width: u32,
+        height: u32,
+        timestamp_ms: u64,
+        is_idr: bool,
+    ) -> HardwareEncoderResult<Option<H264Frame>> {
+        let timer = EncodeTimer::start();
+
+        // Get next input surface from pool
+        let input_idx = self.current_input_surface;
+        self.current_input_surface = (self.current_input_surface + 1) % self.input_surfaces.len();
+
+        // Get next reconstructed surface (alternates between 2)
+        let recon_idx = self.current_recon_surface;
+        self.current_recon_surface = (self.current_recon_surface + 1) % self.recon_surfaces.len();
+
+        // Get next coded buffer
+        let coded_idx = self.current_coded_buffer;
+        self.current_coded_buffer = (self.current_coded_buffer + 1) % self.coded_buffers.len();
+
+        trace!(
+            "Encoding frame {} (IDR={}) input={} recon={} coded={}",
+            self.frame_count, is_idr, input_idx, recon_idx, coded_idx
+        );
+
+        // Upload NV12 via Image API
+        {
+            let mut image = libva::Image::create_from(
+                &self.input_surfaces[input_idx],
+                self.nv12_format,
+                (width, height),
+                (width, height),
+            )
+            .map_err(|e| {
+                HardwareEncoderError::EncodeFailed(format!("Failed to create image: {e}"))
+            })?;
+
+            let image_data = image.as_mut();
+            let copy_len = nv12_data.len().min(image_data.len());
+            image_data[..copy_len].copy_from_slice(&nv12_data[..copy_len]);
+            // Image dropped here, which triggers vaPutImage to upload to surface
+        }
+
+        // Build encoding parameters
+        let mb_width = width.div_ceil(16);
+        let mb_height = height.div_ceil(16);
+        let num_macroblocks = mb_width * mb_height;
+
+        // Create Picture from the INPUT surface (data source)
+        let mut picture = Picture::new(
+            timestamp_ms,
+            Rc::clone(&self.context),
+            &self.input_surfaces[input_idx],
+        );
+
+        // IDR frames: submit SPS + rate control parameters
+        if is_idr {
+            // Reset DPB on IDR
+            self.last_ref = None;
+
+            let seq_param = self.build_sequence_params(mb_width as u16, mb_height as u16);
+            let seq_buffer = self
+                .context
+                .create_buffer(BufferType::EncSequenceParameter(
+                    EncSequenceParameter::H264(seq_param),
+                ))
+                .map_err(|e| {
+                    HardwareEncoderError::EncodeFailed(format!("Failed to create seq buffer: {e}"))
+                })?;
+            picture.add_buffer(seq_buffer);
+
+            // Submit rate control parameters on IDR (driver caches them)
+            for rc_buf_type in self.build_rate_control_buffers() {
+                let buf = self.context.create_buffer(rc_buf_type).map_err(|e| {
+                    HardwareEncoderError::EncodeFailed(format!(
+                        "Failed to create rate control buffer: {e}"
+                    ))
+                })?;
+                picture.add_buffer(buf);
+            }
+        }
+
+        // Build picture params with reference frame tracking.
+        // CurrPic uses the RECONSTRUCTED surface (where the encoder writes its output).
+        // reference_frames contains the previous reconstructed frame for P-frame prediction.
+        let frame_num = (self.frame_count % 65536) as u16;
+        let poc = (self.frame_count * 2) as i32;
+
+        let pic_param = self.build_picture_params(
+            self.recon_surfaces[recon_idx].id(),
+            self.coded_buffers[coded_idx].id(),
+            is_idr,
+            frame_num,
+            poc,
+        );
+        let pic_buffer = self
+            .context
+            .create_buffer(BufferType::EncPictureParameter(EncPictureParameter::H264(
+                pic_param,
+            )))
+            .map_err(|e| {
+                HardwareEncoderError::EncodeFailed(format!("Failed to create pic buffer: {e}"))
+            })?;
+        picture.add_buffer(pic_buffer);
+
+        // Build slice params with reference list
+        let slice_param = self.build_slice_params(num_macroblocks, is_idr, frame_num, poc);
+        let slice_buffer = self
+            .context
+            .create_buffer(BufferType::EncSliceParameter(EncSliceParameter::H264(
+                slice_param,
+            )))
+            .map_err(|e| {
+                HardwareEncoderError::EncodeFailed(format!("Failed to create slice buffer: {e}"))
+            })?;
+        picture.add_buffer(slice_buffer);
+
+        // Execute encoding pipeline: begin -> render -> end -> sync
+        let picture = picture.begin().map_err(|e| {
+            HardwareEncoderError::EncodeFailed(format!("vaBeginPicture failed: {e}"))
+        })?;
+        let picture = picture.render().map_err(|e| {
+            HardwareEncoderError::EncodeFailed(format!("vaRenderPicture failed: {e}"))
+        })?;
+        let picture = picture
+            .end()
+            .map_err(|e| HardwareEncoderError::EncodeFailed(format!("vaEndPicture failed: {e}")))?;
+        let _picture = picture.sync().map_err(|(e, _)| {
+            HardwareEncoderError::EncodeFailed(format!("vaSyncSurface failed: {e}"))
+        })?;
+
+        // Update DPB: this reconstructed surface becomes the reference for the next P-frame
+        self.last_ref = Some(DpbEntry {
+            surface_id: self.recon_surfaces[recon_idx].id(),
+            frame_num,
+            poc,
+        });
+
+        // Read encoded data from coded buffer
+        let mapped = MappedCodedBuffer::new(&self.coded_buffers[coded_idx]).map_err(|e| {
+            HardwareEncoderError::EncodeFailed(format!("Failed to map coded buffer: {e}"))
+        })?;
+
+        let mut encoded_data = Vec::new();
+        for segment in mapped.iter() {
+            encoded_data.extend_from_slice(segment.buf);
+        }
+
+        // Cache SPS/PPS from IDR frames
+        if is_idr && let Some(sps_pps) = Self::extract_sps_pps(&encoded_data) {
+            self.cached_sps_pps = Some(sps_pps);
+        }
+
+        // Update statistics
+        let encode_time_ms = timer.elapsed_ms();
+        self.stats
+            .record_frame(encode_time_ms, encoded_data.len(), is_idr);
+
+        let frame_size = encoded_data.len();
+        self.frame_count += 1;
+
+        Ok(Some(H264Frame {
+            data: encoded_data,
+            is_keyframe: is_idr,
+            timestamp_ms,
+            size: frame_size,
+        }))
     }
 
     fn get_h264_level(&self) -> u8 {
@@ -495,8 +662,6 @@ impl HardwareEncoder for VaapiEncoder {
         height: u32,
         timestamp_ms: u64,
     ) -> HardwareEncoderResult<Option<H264Frame>> {
-        let timer = EncodeTimer::start();
-
         // Validate dimensions
         if width != self.width || height != self.height {
             return Err(HardwareEncoderError::InvalidDimensions {
@@ -523,179 +688,59 @@ impl HardwareEncoder for VaapiEncoder {
         }
 
         let is_idr = self.is_idr_frame();
-
-        // Get next input surface from pool
-        let input_idx = self.current_input_surface;
-        self.current_input_surface = (self.current_input_surface + 1) % self.input_surfaces.len();
-
-        // Get next reconstructed surface (alternates between 2)
-        let recon_idx = self.current_recon_surface;
-        self.current_recon_surface = (self.current_recon_surface + 1) % self.recon_surfaces.len();
-
-        // Get next coded buffer
-        let coded_idx = self.current_coded_buffer;
-        self.current_coded_buffer = (self.current_coded_buffer + 1) % self.coded_buffers.len();
-
-        trace!(
-            "Encoding frame {} (IDR={}) input={} recon={} coded={}",
-            self.frame_count, is_idr, input_idx, recon_idx, coded_idx
-        );
-
-        // Convert BGRA to NV12 using configured color space
         let nv12_data = bgra_to_nv12(
             bgra_data,
             width as usize,
             height as usize,
             &self.color_space,
         );
-
-        // Upload via Image API
-        {
-            let mut image = libva::Image::create_from(
-                &self.input_surfaces[input_idx],
-                self.nv12_format,
-                (width, height),
-                (width, height),
-            )
-            .map_err(|e| {
-                HardwareEncoderError::EncodeFailed(format!("Failed to create image: {e}"))
-            })?;
-
-            let image_data = image.as_mut();
-            let copy_len = nv12_data.len().min(image_data.len());
-            image_data[..copy_len].copy_from_slice(&nv12_data[..copy_len]);
-            // Image dropped here, which triggers vaPutImage to upload to surface
-        }
-
-        // Build encoding parameters
-        let mb_width = width.div_ceil(16);
-        let mb_height = height.div_ceil(16);
-        let num_macroblocks = mb_width * mb_height;
-
-        // Create Picture from the INPUT surface (data source)
-        let mut picture = Picture::new(
-            timestamp_ms,
-            Rc::clone(&self.context),
-            &self.input_surfaces[input_idx],
-        );
-
-        // IDR frames: submit SPS + rate control parameters
-        if is_idr {
-            // Reset DPB on IDR
-            self.last_ref = None;
-
-            let seq_param = self.build_sequence_params(mb_width as u16, mb_height as u16);
-            let seq_buffer = self
-                .context
-                .create_buffer(BufferType::EncSequenceParameter(
-                    EncSequenceParameter::H264(seq_param),
-                ))
-                .map_err(|e| {
-                    HardwareEncoderError::EncodeFailed(format!("Failed to create seq buffer: {e}"))
-                })?;
-            picture.add_buffer(seq_buffer);
-
-            // Submit rate control parameters on IDR (driver caches them)
-            for rc_buf_type in self.build_rate_control_buffers() {
-                let buf = self.context.create_buffer(rc_buf_type).map_err(|e| {
-                    HardwareEncoderError::EncodeFailed(format!(
-                        "Failed to create rate control buffer: {e}"
-                    ))
-                })?;
-                picture.add_buffer(buf);
-            }
-        }
-
-        // Build picture params with reference frame tracking.
-        // CurrPic uses the RECONSTRUCTED surface (where the encoder writes its output).
-        // reference_frames contains the previous reconstructed frame for P-frame prediction.
-        let frame_num = (self.frame_count % 65536) as u16;
-        let poc = (self.frame_count * 2) as i32;
-
-        let pic_param = self.build_picture_params(
-            self.recon_surfaces[recon_idx].id(),
-            self.coded_buffers[coded_idx].id(),
-            is_idr,
-            frame_num,
-            poc,
-        );
-        let pic_buffer = self
-            .context
-            .create_buffer(BufferType::EncPictureParameter(EncPictureParameter::H264(
-                pic_param,
-            )))
-            .map_err(|e| {
-                HardwareEncoderError::EncodeFailed(format!("Failed to create pic buffer: {e}"))
-            })?;
-        picture.add_buffer(pic_buffer);
-
-        // Build slice params with reference list
-        let slice_param = self.build_slice_params(num_macroblocks, is_idr, frame_num, poc);
-        let slice_buffer = self
-            .context
-            .create_buffer(BufferType::EncSliceParameter(EncSliceParameter::H264(
-                slice_param,
-            )))
-            .map_err(|e| {
-                HardwareEncoderError::EncodeFailed(format!("Failed to create slice buffer: {e}"))
-            })?;
-        picture.add_buffer(slice_buffer);
-
-        // Execute encoding pipeline: begin -> render -> end -> sync
-        let picture = picture.begin().map_err(|e| {
-            HardwareEncoderError::EncodeFailed(format!("vaBeginPicture failed: {e}"))
-        })?;
-        let picture = picture.render().map_err(|e| {
-            HardwareEncoderError::EncodeFailed(format!("vaRenderPicture failed: {e}"))
-        })?;
-        let picture = picture
-            .end()
-            .map_err(|e| HardwareEncoderError::EncodeFailed(format!("vaEndPicture failed: {e}")))?;
-        let _picture = picture.sync().map_err(|(e, _)| {
-            HardwareEncoderError::EncodeFailed(format!("vaSyncSurface failed: {e}"))
-        })?;
-
-        // Update DPB: this reconstructed surface becomes the reference for the next P-frame
-        self.last_ref = Some(DpbEntry {
-            surface_id: self.recon_surfaces[recon_idx].id(),
-            frame_num,
-            poc,
-        });
-
-        // Read encoded data from coded buffer
-        let mapped = MappedCodedBuffer::new(&self.coded_buffers[coded_idx]).map_err(|e| {
-            HardwareEncoderError::EncodeFailed(format!("Failed to map coded buffer: {e}"))
-        })?;
-
-        let mut encoded_data = Vec::new();
-        for segment in mapped.iter() {
-            encoded_data.extend_from_slice(segment.buf);
-        }
-
-        // Cache SPS/PPS from IDR frames
-        if is_idr && let Some(sps_pps) = Self::extract_sps_pps(&encoded_data) {
-            self.cached_sps_pps = Some(sps_pps);
-        }
-
-        // Update statistics
-        let encode_time_ms = timer.elapsed_ms();
-        self.stats
-            .record_frame(encode_time_ms, encoded_data.len(), is_idr);
-
-        // Reset IDR flag
+        let frame = self.encode_nv12_core(&nv12_data, width, height, timestamp_ms, is_idr)?;
         if self.force_idr {
             self.force_idr = false;
         }
+        Ok(frame)
+    }
 
-        let frame_size = encoded_data.len();
-        self.frame_count += 1;
+    fn encode_nv12(
+        &mut self,
+        nv12_data: &[u8],
+        width: u32,
+        height: u32,
+        timestamp_ms: u64,
+        force_keyframe: bool,
+    ) -> HardwareEncoderResult<Option<H264Frame>> {
+        if width != self.width || height != self.height {
+            return Err(HardwareEncoderError::InvalidDimensions {
+                width,
+                height,
+                reason: format!(
+                    "resolution mismatch: encoder configured for {}x{}",
+                    self.width, self.height
+                ),
+            });
+        }
 
-        Ok(Some(H264Frame {
-            data: encoded_data,
-            is_keyframe: is_idr,
-            timestamp_ms,
-            size: frame_size,
-        }))
+        let expected_size = (width as usize) * (height as usize) * 3 / 2;
+        if nv12_data.len() < expected_size {
+            return Err(HardwareEncoderError::InvalidDimensions {
+                width,
+                height,
+                reason: format!(
+                    "NV12 buffer too small: {} < {} bytes",
+                    nv12_data.len(),
+                    expected_size
+                ),
+            });
+        }
+
+        // The AVC444 dual-view caller owns the IDR cadence; still honor a
+        // pending force_keyframe() and always open the stream with an IDR.
+        let is_idr = force_keyframe || self.force_idr || self.frame_count == 0;
+        let frame = self.encode_nv12_core(nv12_data, width, height, timestamp_ms, is_idr)?;
+        if self.force_idr {
+            self.force_idr = false;
+        }
+        Ok(frame)
     }
 
     fn force_keyframe(&mut self) {
@@ -976,6 +1021,10 @@ fn bgra_to_nv12(bgra: &[u8], width: usize, height: usize, config: &ColorSpaceCon
 
 /// Compute Y plane from BGRA. Dispatches to SIMD where available.
 #[inline]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "BT.601/709 conversion coefficients and the studio-swing clamp bounds are\n              passed positionally so the SIMD and scalar kernels share one signature;\n              boxing them into a struct would add an indirection to a per-pixel hot path"
+)]
 fn bgra_to_y_plane(
     bgra: &[u8],
     y_plane: &mut [u8],
@@ -1019,6 +1068,10 @@ fn bgra_to_y_plane(
 }
 
 /// Scalar Y plane computation
+#[expect(
+    clippy::too_many_arguments,
+    reason = "BT.601/709 conversion coefficients and the studio-swing clamp bounds are\n              passed positionally so the SIMD and scalar kernels share one signature;\n              boxing them into a struct would add an indirection to a per-pixel hot path"
+)]
 fn bgra_to_y_plane_scalar(
     bgra: &[u8],
     y_plane: &mut [u8],
@@ -1048,6 +1101,10 @@ fn bgra_to_y_plane_scalar(
 /// AVX2-optimized Y plane: processes 8 pixels per iteration
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "BT.601/709 conversion coefficients and the studio-swing clamp bounds are\n              passed positionally so the SIMD and scalar kernels share one signature;\n              boxing them into a struct would add an indirection to a per-pixel hot path"
+)]
 unsafe fn bgra_to_y_plane_avx2(
     bgra: &[u8],
     y_plane: &mut [u8],
@@ -1133,13 +1190,18 @@ unsafe fn bgra_to_y_plane_avx2(
         }
 
         // Handle remaining pixels with scalar
-        for i in simd_end..total_pixels {
+        for (i, y_out) in y_plane
+            .iter_mut()
+            .enumerate()
+            .take(total_pixels)
+            .skip(simd_end)
+        {
             let base = i * 4;
             let b = bgra[base] as f32;
             let g = bgra[base + 1] as f32;
             let r = bgra[base + 2] as f32;
             let y_val = y_offset + (kr * r + kg * g + kb * b) * scale_div;
-            y_plane[i] = y_val.clamp(y_min as f32, y_max as f32) as u8;
+            *y_out = y_val.clamp(y_min as f32, y_max as f32) as u8;
         }
     }
 }
@@ -1228,6 +1290,10 @@ unsafe fn bgra_to_y_plane_neon(
 
 /// UV plane with 2x2 chroma subsampling (scalar, since the 2x2 averaging
 /// pattern doesn't vectorize as cleanly and UV is 1/4 the size of Y)
+#[expect(
+    clippy::too_many_arguments,
+    reason = "BT.601/709 conversion coefficients and the studio-swing clamp bounds are\n              passed positionally so the SIMD and scalar kernels share one signature;\n              boxing them into a struct would add an indirection to a per-pixel hot path"
+)]
 fn bgra_to_uv_plane(
     bgra: &[u8],
     uv_plane: &mut [u8],
@@ -1279,21 +1345,7 @@ fn bgra_to_uv_plane(
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
     use super::*;
-
-    fn test_config() -> HardwareEncodingConfig {
-        HardwareEncodingConfig {
-            enabled: true,
-            vaapi_device: PathBuf::from("/dev/dri/renderD128"),
-            enable_dmabuf_zerocopy: false,
-            fallback_to_software: true,
-            quality_preset: "balanced".to_string(),
-            prefer_nvenc: false,
-            ..HardwareEncodingConfig::default()
-        }
-    }
 
     #[test]
     fn test_bgra_to_nv12() {
@@ -1314,9 +1366,8 @@ mod tests {
         // Red in BT.709 limited range: Y approx 63 (Kr*255 scaled to 16-235)
         for &y in &nv12[0..16] {
             assert!(
-                y >= 50 && y <= 100,
-                "Y value {} out of range for red in BT.709",
-                y
+                (50..=100).contains(&y),
+                "Y value {y} out of range for red in BT.709"
             );
         }
     }

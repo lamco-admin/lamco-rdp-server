@@ -7,11 +7,11 @@
 use std::{fs::File, io::BufReader, path::Path, sync::Arc};
 
 use anyhow::{Context, Result};
-use ironrdp_server::tokio_rustls::rustls;
 use rustls::{
     ServerConfig,
     pki_types::{CertificateDer, PrivateKeyDer},
 };
+use tokio_rustls::rustls;
 use tracing::{debug, info};
 use x509_cert::der::Decode as _;
 
@@ -137,8 +137,8 @@ impl TlsConfig {
         let cert = x509_cert::Certificate::from_der(cert_der)
             .context("Failed to parse certificate DER")?;
 
-        cert.tbs_certificate
-            .subject_public_key_info
+        cert.tbs_certificate()
+            .subject_public_key_info()
             .subject_public_key
             .as_bytes()
             .map(ToOwned::to_owned)

@@ -50,6 +50,10 @@
 //! ```
 
 mod capabilities;
+#[cfg(feature = "wayland")]
+pub mod color_observer;
+#[cfg(feature = "wayland")]
+pub mod output_observer;
 mod portal_caps;
 mod probing;
 mod profiles;
@@ -57,6 +61,10 @@ mod profiles;
 pub use capabilities::{
     BufferType, CaptureBackend, CompositorCapabilities, CompositorType, WaylandGlobal,
 };
+#[cfg(feature = "wayland")]
+pub use color_observer::{ColorObserver, OutputColorState, OutputTransfer};
+#[cfg(feature = "wayland")]
+pub use output_observer::{OutputHead, OutputMode, OutputObserver};
 pub use portal_caps::{CursorMode, PortalCapabilities, SourceType};
 pub use probing::{OsRelease, detect_os_release, identify_compositor, probe_capabilities};
 pub use profiles::{CompositorProfile, Quirk};

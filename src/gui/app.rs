@@ -362,6 +362,27 @@ impl ConfigGuiApp {
                 self.state.mark_dirty();
                 Task::none()
             }
+            Message::CaptureProtocolChanged(protocol) => {
+                self.state.config.capture.protocol = protocol;
+                self.state.mark_dirty();
+                Task::none()
+            }
+            Message::CaptureAllowFallbackToggled(val) => {
+                self.state.config.capture.allow_fallback = val;
+                self.state.mark_dirty();
+                Task::none()
+            }
+            Message::CaptureHandshakeTimeoutChanged(val) => {
+                self.state
+                    .edit_strings
+                    .capture_handshake_timeout
+                    .clone_from(&val);
+                if let Ok(v) = val.parse() {
+                    self.state.config.capture.handshake_timeout_ms = v;
+                    self.state.mark_dirty();
+                }
+                Task::none()
+            }
             Message::VideoPipelineToggleExpanded => {
                 self.state.video_pipeline_expanded = !self.state.video_pipeline_expanded;
                 Task::none()
@@ -630,6 +651,27 @@ impl ConfigGuiApp {
             }
             Message::PerformanceZeroCopyToggled(val) => {
                 self.state.config.performance.zero_copy = val;
+                self.state.mark_dirty();
+                Task::none()
+            }
+            Message::MonitoringEnabledToggled(val) => {
+                self.state.config.monitoring.enabled = val;
+                self.state.mark_dirty();
+                Task::none()
+            }
+            Message::MonitoringSnapshotIntervalChanged(val) => {
+                self.state
+                    .edit_strings
+                    .monitoring_snapshot_interval
+                    .clone_from(&val);
+                if let Ok(v) = val.parse() {
+                    self.state.config.monitoring.snapshot_interval_secs = v;
+                    self.state.mark_dirty();
+                }
+                Task::none()
+            }
+            Message::MonitoringMetricsBindChanged(val) => {
+                self.state.config.monitoring.metrics_bind = val;
                 self.state.mark_dirty();
                 Task::none()
             }
@@ -982,6 +1024,34 @@ impl ConfigGuiApp {
                 self.state.edit_strings.min_region_area.clone_from(&val);
                 if let Ok(v) = val.parse() {
                     self.state.config.damage_tracking.min_region_area = v;
+                    self.state.mark_dirty();
+                }
+                Task::none()
+            }
+            Message::DamageTrackingHintDistrustThresholdChanged(val) => {
+                self.state
+                    .edit_strings
+                    .hint_distrust_threshold_pp
+                    .clone_from(&val);
+                if let Ok(v) = val.parse() {
+                    self.state
+                        .config
+                        .damage_tracking
+                        .compositor_hint_distrust_threshold_pp = v;
+                    self.state.mark_dirty();
+                }
+                Task::none()
+            }
+            Message::DamageTrackingHintDistrustConsecutiveSamplesChanged(val) => {
+                self.state
+                    .edit_strings
+                    .hint_distrust_consecutive_samples
+                    .clone_from(&val);
+                if let Ok(v) = val.parse() {
+                    self.state
+                        .config
+                        .damage_tracking
+                        .compositor_hint_distrust_consecutive_samples = v;
                     self.state.mark_dirty();
                 }
                 Task::none()
@@ -1608,6 +1678,16 @@ impl ConfigGuiApp {
                 Task::none()
             }
 
+            Message::NotificationsOnErrorToggled(val) => {
+                self.state.config.notifications.on_error = val;
+                self.state.mark_dirty();
+                Task::none()
+            }
+            Message::NotificationsOnCertExpiryToggled(val) => {
+                self.state.config.notifications.on_cert_expiry = val;
+                self.state.mark_dirty();
+                Task::none()
+            }
             Message::LogLineReceived(line) => {
                 self.state.add_log_line(LogLine::parse(&line));
                 Task::none()
@@ -2510,6 +2590,7 @@ impl ConfigGuiApp {
             Tab::Server => tabs::view_server_tab(&self.state),
             Tab::Security => tabs::view_security_tab(&self.state),
             Tab::Video => tabs::view_video_tab(&self.state),
+            Tab::Display => tabs::view_display_tab(&self.state),
             Tab::Audio => tabs::view_audio_tab(&self.state),
             Tab::Input => tabs::view_input_tab(&self.state),
             Tab::Clipboard => tabs::view_clipboard_tab(&self.state),

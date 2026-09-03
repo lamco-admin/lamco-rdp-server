@@ -15,9 +15,11 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use ironrdp_server::{ConnectionHandler, PostConnectionAction};
+#[cfg(test)]
+use ironrdp_server::ServerErrorExt as _;
+use ironrdp_server::{ConnectionHandler, PostConnectionAction, ServerError};
 use tokio::sync::{Mutex as AsyncMutex, mpsc};
-use tracing::{error, warn};
+use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use super::listener::PeerAddr;
@@ -138,7 +140,7 @@ impl LamcoConnectionHandler {
         &mut self,
         peer: &PeerAddr,
         duration: Duration,
-        error: Option<&anyhow::Error>,
+        error: Option<&ServerError>,
     ) -> PostConnectionAction {
         let peer_display = peer.to_display();
         let state = self.current_client.lock().await.take();
@@ -147,10 +149,61 @@ impl LamcoConnectionHandler {
         // mstsc.exe probes with a brief connection before the real session,
         // and macOS Remote Desktop does similar — these are not errors.
         if let Some(e) = error {
-            let msg = format!("{e:#}");
+            // `{e:#}` gives "I/O error" and stops: the wrapper's Display does
+            // not walk to the source. Walk it here, or every transport failure
+            // in the field is reported without the one detail that identifies
+            // it.
+            let msg = {
+                let mut out = format!("{e}");
+                let mut src: Option<&(dyn std::error::Error + 'static)> =
+                    std::error::Error::source(e);
+                while let Some(cause) = src {
+                    use std::fmt::Write as _;
+                    let _ = write!(out, ": {cause}");
+                    src = std::error::Error::source(cause);
+                }
+                out
+            };
             let is_reset = msg.contains("Connection reset by peer") || msg.contains("os error 104");
+            // A scripted client that finishes its command chain closes the
+            // socket without a Disconnect PDU, so the read in flight ends
+            // mid-frame. That is how the connection was always going to end,
+            // not a fault, and logging it at ERROR made every automated run
+            // look like it had failed. Classify on the io::ErrorKind rather
+            // than on message text: the display form is just "I/O error".
+            // TLS adds its own spelling of this: rustls surfaces a peer that
+            // vanished mid-record as ErrorKind::Other carrying "peer closed
+            // connection without sending TLS close_notify", so the kind alone
+            // is not enough to recognise it.
+            let (is_peer_closed, io_detail) = match e.kind() {
+                ironrdp_server::ServerErrorKind::Io(io_err) => {
+                    let detail = io_err.to_string();
+                    let closed = matches!(
+                        io_err.kind(),
+                        std::io::ErrorKind::UnexpectedEof
+                            | std::io::ErrorKind::BrokenPipe
+                            | std::io::ErrorKind::ConnectionAborted
+                    ) || detail.contains("close_notify")
+                        || detail.contains("unexpected eof")
+                        || detail.contains("early eof");
+                    (closed, detail)
+                }
+                _ => (
+                    msg.contains("not enough bytes")
+                        || msg.contains("early eof")
+                        || msg.contains("unexpected end of file"),
+                    msg.clone(),
+                ),
+            };
 
-            if is_reset && duration < Duration::from_secs(1) {
+            if is_peer_closed && !is_reset {
+                info!(
+                    "Client {} closed the connection after {:.1}s without a disconnect PDU: {}",
+                    peer_display,
+                    duration.as_secs_f64(),
+                    io_detail
+                );
+            } else if is_reset && duration < Duration::from_secs(1) {
                 warn!(
                     "Connection from {} reset during handshake (likely client probe, lasted {:.0}ms)",
                     peer_display,
@@ -232,7 +285,7 @@ impl ConnectionHandler for LamcoConnectionHandler {
         &mut self,
         _peer: std::net::SocketAddr,
         _duration: Duration,
-        _error: Option<&anyhow::Error>,
+        _error: Option<&ServerError>,
     ) -> PostConnectionAction {
         unreachable!(
             "LamcoConnectionHandler sync on_disconnected invoked; Phase 1 uses on_disconnected_async via AcceptDispatcher"
@@ -364,7 +417,7 @@ mod tests {
         let peer = test_peer();
 
         let _ = handler.on_accept_async(&peer).await;
-        let err = anyhow::anyhow!("Connection reset by peer (os error 104)");
+        let err = ServerError::reason("test", "Connection reset by peer (os error 104)");
         let action = handler
             .on_disconnected_async(&peer, Duration::from_millis(50), Some(&err))
             .await;

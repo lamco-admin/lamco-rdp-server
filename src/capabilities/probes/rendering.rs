@@ -8,6 +8,10 @@
 //! VMs without GPU passthrough typically have virtual GPUs (virtio-gpu, QXL)
 //! that don't support the advanced shader features required by wgpu/iced.
 //! This probe detects such situations and recommends software rendering.
+#![expect(
+    unsafe_code,
+    reason = "DRM_IOCTL_VIRTGPU_GETPARAM for Venus capset detection"
+)]
 
 use std::path::Path;
 
@@ -130,6 +134,135 @@ pub fn is_display_gpu_virgl() -> bool {
     }
 
     false
+}
+
+/// Raw kernel UAPI layout for `DRM_IOCTL_VIRTGPU_GETPARAM`.
+///
+/// Matches `struct drm_virtgpu_getparam` in `linux/drm/virtgpu_drm.h` exactly
+/// (two `__u64` fields, no padding needed).
+#[repr(C)]
+struct DrmVirtgpuGetparam {
+    param: u64,
+    value: u64,
+}
+
+/// `VIRTGPU_PARAM_SUPPORTED_CAPSET_IDs` — asks the driver for the bitmask of
+/// capset IDs the host virtio-gpu backend advertised at probe time.
+/// (`linux/drm/virtgpu_drm.h`)
+const VIRTGPU_PARAM_SUPPORTED_CAPSET_IDS: u64 = 7;
+
+/// Capset ID for Venus (Vulkan-over-virtio), used as a bit position in the
+/// mask returned above. (`linux/virtio_gpu.h`: `VIRTIO_GPU_CAPSET_VENUS`)
+const VIRTIO_GPU_CAPSET_VENUS: u64 = 4;
+
+// DRM_IOCTL_VIRTGPU_GETPARAM = DRM_IOWR(DRM_COMMAND_BASE + DRM_VIRTGPU_GETPARAM, ...)
+// DRM_IOCTL_BASE = 'd', DRM_COMMAND_BASE = 0x40, DRM_VIRTGPU_GETPARAM = 0x03.
+nix::ioctl_readwrite!(virtgpu_getparam_ioctl, b'd', 0x43, DrmVirtgpuGetparam);
+
+/// Check whether a specific `/dev/dri/renderD*` node's virtio-gpu backing
+/// actually advertises Venus capability, via a single `GETPARAM` ioctl.
+///
+/// This queries a bitmask the kernel driver populates once at device probe
+/// time from the host's `VIRTIO_GPU_CMD_GET_CAPSET_INFO` handshake — no host
+/// round-trip, microseconds. Returns `None` if the node can't be opened or
+/// the ioctl fails (e.g. not a virtio-gpu device at all).
+fn query_venus_capset(render_node: &Path) -> Option<bool> {
+    use std::os::fd::AsRawFd;
+
+    let file = std::fs::File::open(render_node).ok()?;
+
+    // `value` is NOT a scalar output slot despite the flat two-`__u64`
+    // struct shape — the kernel's virtio_gpu_getparam_ioctl() ends every
+    // branch with `copy_to_user(u64_to_user_ptr(param->value), &value,
+    // sizeof(int))`, so `value` must hold the ADDRESS of a caller-owned
+    // 4-byte (`int`-sized) output buffer, not the result itself. Leaving it
+    // 0 makes the kernel copy_to_user(NULL, ...), which unconditionally
+    // faults regardless of param ID. Mesa's virgl_drm_winsys.c uses this
+    // exact out-param pattern.
+    let mut out_value: i32 = 0;
+    let mut arg = DrmVirtgpuGetparam {
+        param: VIRTGPU_PARAM_SUPPORTED_CAPSET_IDS,
+        value: (&raw mut out_value) as u64,
+    };
+    // SAFETY: `arg` is a valid, correctly-sized `drm_virtgpu_getparam` for
+    // the duration of this call, and `arg.value` points at `out_value`,
+    // which outlives the call. The DRM driver reads `param` and writes 4
+    // bytes to the address in `value`, matching DRM_IOCTL_VIRTGPU_GETPARAM's
+    // documented contract; `file` stays open (and the fd valid) throughout.
+    unsafe { virtgpu_getparam_ioctl(file.as_raw_fd(), &raw mut arg) }.ok()?;
+
+    Some(u64::from(out_value as u32) & (1 << VIRTIO_GPU_CAPSET_VENUS) != 0)
+}
+
+/// Find the render node paired with a connected virtio-gpu display card.
+///
+/// `cardN`'s connector directories live directly under `/sys/class/drm/`,
+/// but the render node shares `cardN`'s `device/drm/` parent — walk that to
+/// find the sibling `renderD*` entry.
+fn connected_virtio_render_node() -> Option<std::path::PathBuf> {
+    let drm_path = Path::new("/sys/class/drm");
+    let entries = std::fs::read_dir(drm_path).ok()?;
+
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+
+        if !name_str.contains('-') || name_str.starts_with("render") {
+            continue;
+        }
+
+        let status = std::fs::read_to_string(entry.path().join("status")).unwrap_or_default();
+        if !status.trim().eq_ignore_ascii_case("connected") {
+            continue;
+        }
+
+        let card_name = name_str.split('-').next().unwrap_or("");
+        let driver_link = drm_path.join(card_name).join("device/driver");
+        let Ok(target) = std::fs::read_link(&driver_link) else {
+            continue;
+        };
+        let driver = target
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        if driver != "virtio-pci" && driver != "virtio-gpu" {
+            continue;
+        }
+
+        let render_dir = drm_path.join(card_name).join("device/drm");
+        let Ok(render_entries) = std::fs::read_dir(&render_dir) else {
+            continue;
+        };
+        for render_entry in render_entries.flatten() {
+            let render_name = render_entry.file_name();
+            let render_name_str = render_name.to_string_lossy();
+            if render_name_str.starts_with("render") {
+                return Some(Path::new("/dev/dri").join(render_name_str.as_ref()));
+            }
+        }
+    }
+
+    None
+}
+
+/// Check whether the connected display's virtio-gpu backing actually has
+/// Venus (Vulkan-over-virtio) capability, rather than treating every
+/// virtio-gpu driver match the same way. Plain 2D or virgl-3D-without-Venus
+/// virtio-gpu genuinely can't back CPU-readable DMA-BUF export; Venus-capable
+/// setups (`venus=on,blob=on` on the host) can. Unlike `is_display_gpu_virgl`
+/// (kept as-is for its original GUI wgpu-probe-skip use), this queries the
+/// kernel's real capset bitmask instead of matching on driver name alone.
+pub fn is_display_gpu_venus_capable() -> bool {
+    let Some(render_node) = connected_virtio_render_node() else {
+        return false;
+    };
+    let capable = query_venus_capset(&render_node).unwrap_or(false);
+    tracing::debug!(
+        "Venus capset check on {}: {}",
+        render_node.display(),
+        capable
+    );
+    capable
 }
 
 /// GPU vendor identification
@@ -510,5 +643,26 @@ impl RenderingProbe {
             },
             None,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn drm_virtgpu_getparam_matches_kernel_uapi_layout() {
+        // struct drm_virtgpu_getparam { __u64 param; __u64 value; } — two
+        // u64s, no padding. A mismatch here means the ioctl call would read
+        // or write past the kernel's expected struct bounds.
+        assert_eq!(std::mem::size_of::<DrmVirtgpuGetparam>(), 16);
+        assert_eq!(std::mem::align_of::<DrmVirtgpuGetparam>(), 8);
+    }
+
+    #[test]
+    fn venus_capable_check_does_not_panic_without_virtio_gpu() {
+        // Dev machines and CI runners have no virtio-gpu render node; this
+        // must degrade to `false`, never panic.
+        let _ = is_display_gpu_venus_capable();
     }
 }

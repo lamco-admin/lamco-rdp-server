@@ -26,6 +26,23 @@ pub fn view_status_tab(state: &AppState) -> Element<'_, Message> {
         space().height(8.0),
         view_server_status(state),
         space().height(20.0),
+        // Notifications section
+        widgets::subsection_header("Notifications"),
+        space().height(8.0),
+        widgets::toggle_with_help(
+            "Notify on Server Errors",
+            state.config.notifications.on_error,
+            "Desktop notification when the server reports an error (Flatpak portal notifications)",
+            Message::NotificationsOnErrorToggled,
+        ),
+        space().height(8.0),
+        widgets::toggle_with_help(
+            "Notify on Certificate Expiry",
+            state.config.notifications.on_cert_expiry,
+            "Desktop notification when the TLS certificate is nearing expiry",
+            Message::NotificationsOnCertExpiryToggled,
+        ),
+        space().height(20.0),
     ]
     .spacing(4);
 

@@ -256,7 +256,7 @@ pub fn tab_button_style(active: bool) -> impl Fn(&Theme, button::Status) -> butt
                 } else {
                     Color::TRANSPARENT
                 },
-                width: if active { 0.0 } else { 0.0 },
+                width: 0.0,
                 radius: 8.0.into(),
             },
             shadow: Shadow::default(),

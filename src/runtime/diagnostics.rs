@@ -193,18 +193,24 @@ pub fn detect_portal_backend() -> Option<String> {
     None
 }
 
-/// Get PipeWire version
+/// Get the system's linked libpipewire version (e.g. "1.6.8").
+///
+/// `pipewire --version` prints multiple lines ("pipewire" / "Compiled
+/// with libpipewire X" / "Linked with libpipewire X"); only the "Linked
+/// with" line is returned so the diagnostics banner stays one line per
+/// field instead of embedding raw unprefixed continuation lines in the
+/// log.
 pub fn get_pipewire_version() -> Option<String> {
-    // Try to execute pipewire --version
-    std::process::Command::new("pipewire")
+    let output = std::process::Command::new("pipewire")
         .arg("--version")
         .output()
-        .ok()
-        .and_then(|output| {
-            String::from_utf8(output.stdout)
-                .ok()
-                .map(|s| s.trim().to_string())
-        })
+        .ok()?;
+    let stdout = String::from_utf8(output.stdout).ok()?;
+    stdout
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("Linked with libpipewire "))
+        .map(str::to_string)
+        .or_else(|| stdout.lines().next().map(str::trim).map(str::to_string))
 }
 
 /// Log complete diagnostics on startup
@@ -232,13 +238,17 @@ pub fn log_startup_diagnostics() {
     }
 
     if let Some(pw_version) = get_pipewire_version() {
-        info!("  PipeWire: {}", pw_version);
+        info!("  System libpipewire (linked): {}", pw_version);
     } else {
-        info!("  PipeWire: Not found in PATH");
+        info!("  System libpipewire: Not found in PATH");
     }
 
     info!("=== Server Configuration ===");
     info!("  Version: {}", env!("CARGO_PKG_VERSION"));
+    info!(
+        "  lamco-pipewire (crate): {}",
+        env!("LAMCO_PIPEWIRE_VERSION")
+    );
     #[cfg(debug_assertions)]
     info!("  Build: debug");
     #[cfg(not(debug_assertions))]

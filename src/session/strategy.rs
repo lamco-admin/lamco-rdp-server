@@ -108,7 +108,70 @@ pub trait SessionHandle: Send + Sync {
 
     async fn notify_pointer_axis(&self, dx: f64, dy: f64) -> Result<()>;
 
+    /// Inject a discrete (notch-based) scroll. `dx_120`/`dy_120` are RDP wheel
+    /// 120-units (one notch = 120).
+    ///
+    /// Default: convert to a continuous axis event so strategies without native
+    /// discrete-scroll support keep their existing behavior. EIS strategies
+    /// override this to emit true `scroll_discrete` detents.
+    async fn notify_pointer_axis_discrete(&self, dx_120: i32, dy_120: i32) -> Result<()> {
+        let dx = (dx_120 as f64 / 120.0) * 15.0;
+        let dy = (dy_120 as f64 / 120.0) * 15.0;
+        self.notify_pointer_axis(dx, dy).await
+    }
+
     async fn notify_pointer_motion_relative(&self, _dx: f64, _dy: f64) -> Result<()> {
+        Ok(())
+    }
+
+    // === Batched pointer-device injection ===
+    //
+    // A caller with several logically-coupled pointer-device events to
+    // deliver together (e.g. a drag: relative motion immediately followed by
+    // a button press, both read from one coalesced RDP input batch) should
+    // stage each one via `stage_pointer_*` and call `commit_input_batch`
+    // once at the end, instead of calling the immediate `notify_pointer_*`
+    // methods for each. On a strategy with no native "commit" concept, the
+    // `stage_*` defaults just call the existing immediate `notify_pointer_*`
+    // methods, so this is a no-op behavior change for those strategies.
+    // EIS-based strategies override both halves to defer the EIS `frame()`
+    // commit until `commit_input_batch` is called, so the whole group lands
+    // as one atomic frame instead of one frame per event.
+    //
+    // Only pointer-device events (relative motion, button, scroll) benefit:
+    // absolute motion is a separate EIS device from these, so batching it
+    // alongside them would not be atomic anyway (EIS `frame()` is
+    // per-device). Keyboard and touch stay on their existing immediate path.
+
+    /// Stage a relative-motion sample without necessarily committing it yet.
+    /// Default: same as [`Self::notify_pointer_motion_relative`].
+    async fn stage_pointer_motion_relative(&self, dx: f64, dy: f64) -> Result<()> {
+        self.notify_pointer_motion_relative(dx, dy).await
+    }
+
+    /// Stage a button press/release without necessarily committing it yet.
+    /// Default: same as [`Self::notify_pointer_button`].
+    async fn stage_pointer_button(&self, button: i32, pressed: bool) -> Result<()> {
+        self.notify_pointer_button(button, pressed).await
+    }
+
+    /// Stage a continuous-scroll sample without necessarily committing it
+    /// yet. Default: same as [`Self::notify_pointer_axis`].
+    async fn stage_pointer_axis(&self, dx: f64, dy: f64) -> Result<()> {
+        self.notify_pointer_axis(dx, dy).await
+    }
+
+    /// Stage a discrete-scroll notch without necessarily committing it yet.
+    /// Default: same as [`Self::notify_pointer_axis_discrete`].
+    async fn stage_pointer_axis_discrete(&self, dx_120: i32, dy_120: i32) -> Result<()> {
+        self.notify_pointer_axis_discrete(dx_120, dy_120).await
+    }
+
+    /// Commit every pointer-device event staged since the last commit as one
+    /// atomic unit. Default: no-op, matching the `stage_*` defaults above
+    /// (which already commit immediately via the existing `notify_pointer_*`
+    /// methods, so there is nothing left to flush here).
+    async fn commit_input_batch(&self) -> Result<()> {
         Ok(())
     }
 
@@ -150,6 +213,20 @@ pub trait SessionHandle: Send + Sync {
     /// PipeWire stream state.
     fn stream_active_flag(&self) -> Option<Arc<std::sync::atomic::AtomicBool>> {
         None
+    }
+
+    /// Whether the compositor session is currently valid for input injection.
+    ///
+    /// `PerConnection` backends (Mutter Direct) tear the session down between
+    /// clients and re-establish it on the next connection; there is a window
+    /// where queued input batches would otherwise be attempted against a
+    /// session the compositor has already destroyed. The input-batching task
+    /// checks this before injecting a flushed batch and discards it instead.
+    ///
+    /// Default: always valid. `Persistent` backends (Portal, wlr-direct) have
+    /// no such teardown window between clients.
+    fn is_session_valid(&self) -> bool {
+        true
     }
 
     /// Provide stream info from an external video source.

@@ -49,6 +49,9 @@ mod error;
 mod factory;
 mod stats;
 
+#[cfg(any(feature = "vaapi", feature = "nvenc", feature = "vulkan-video"))]
+mod encoder_thread;
+
 #[cfg(feature = "vaapi")]
 pub mod vaapi;
 
@@ -59,6 +62,8 @@ pub mod nvenc;
 pub mod vulkan;
 
 // Re-exports
+#[cfg(any(feature = "vaapi", feature = "nvenc", feature = "vulkan-video"))]
+pub use encoder_thread::HardwareEncoderThread;
 #[cfg(feature = "nvenc")]
 pub use error::NvencError;
 #[cfg(feature = "vaapi")]
@@ -142,6 +147,27 @@ pub trait HardwareEncoder {
         height: u32,
         timestamp_ms: u64,
     ) -> HardwareEncoderResult<Option<H264Frame>>;
+
+    /// Encode a pre-formed NV12 frame with explicit keyframe control.
+    ///
+    /// The AVC444 dual-view path packs one video frame into two YUV420 subframes
+    /// (main and aux) and drives the IDR decision itself per MS-RDPEGFX
+    /// § 3.3.8.3.2, so it needs an entry point that skips BGRA conversion and
+    /// takes the keyframe decision as a parameter. Backends that cannot accept
+    /// pre-formed NV12 return `UnsupportedConfig`; the caller then falls back to
+    /// the software AVC444 encoder.
+    fn encode_nv12(
+        &mut self,
+        _nv12_data: &[u8],
+        _width: u32,
+        _height: u32,
+        _timestamp_ms: u64,
+        _force_keyframe: bool,
+    ) -> HardwareEncoderResult<Option<H264Frame>> {
+        Err(HardwareEncoderError::UnsupportedConfig(
+            "encode_nv12 not implemented for this backend".to_string(),
+        ))
+    }
 
     /// Force the next frame to be a keyframe (IDR)
     ///
@@ -297,7 +323,7 @@ pub enum QualityPreset {
 }
 
 impl QualityPreset {
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn from_name(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "speed" | "fast" => Some(Self::Speed),
             "balanced" | "default" | "medium" => Some(Self::Balanced),
@@ -342,6 +368,10 @@ pub const fn is_hardware_encoding_available() -> bool {
     ))
 }
 
+#[expect(
+    clippy::vec_init_then_push,
+    reason = "each push is cfg-gated on a different feature, which a vec! literal cannot express"
+)]
 pub fn available_backends() -> Vec<&'static str> {
     let mut backends = Vec::new();
 
@@ -363,16 +393,19 @@ mod tests {
 
     #[test]
     fn test_quality_preset_from_str() {
-        assert_eq!(QualityPreset::from_str("speed"), Some(QualityPreset::Speed));
         assert_eq!(
-            QualityPreset::from_str("BALANCED"),
+            QualityPreset::from_name("speed"),
+            Some(QualityPreset::Speed)
+        );
+        assert_eq!(
+            QualityPreset::from_name("BALANCED"),
             Some(QualityPreset::Balanced)
         );
         assert_eq!(
-            QualityPreset::from_str("Quality"),
+            QualityPreset::from_name("Quality"),
             Some(QualityPreset::Quality)
         );
-        assert_eq!(QualityPreset::from_str("invalid"), None);
+        assert_eq!(QualityPreset::from_name("invalid"), None);
     }
 
     #[test]

@@ -12,7 +12,7 @@ use std::{future::Future, pin::Pin, sync::Arc};
 use anyhow::{Context, Result};
 use tokio::sync::{broadcast, mpsc};
 
-use super::{LamcoDisplayHandler, perform_disconnect_cleanup};
+use super::{LamcoDisplayHandler, is_standard_rdp_security, perform_disconnect_cleanup};
 use crate::{
     config::Config,
     dbus::ServerEvent,
@@ -62,7 +62,11 @@ impl WlrDirectDeployment {
 #[async_trait::async_trait]
 impl AcceptDeployment for WlrDirectDeployment {
     fn name(&self) -> &'static str {
-        "wlr-direct"
+        // Despite the type's name, this backs every desktop-sharing session
+        // strategy (Portal, Mutter Direct, libei, wlr-direct alike), not just
+        // wlr-direct — the log-visible label reflects that, matching how
+        // QemuDeployment's name() is "qemu" rather than a specific strategy.
+        "desktop"
     }
 
     async fn build_listeners(&mut self) -> Result<Vec<Box<dyn Listener>>> {
@@ -72,6 +76,31 @@ impl AcceptDeployment for WlrDirectDeployment {
             .transports
             .resolve(&self.config.server.listen_addr)
             .context("Failed to resolve transport configuration")?;
+
+        // Security-posture audit for the resolved transports (issue #52). Standard
+        // RDP Security is plaintext and only appropriate on isolated transports;
+        // Hyper-V ESM (vsock) conversely *requires* it because VMConnect never does
+        // a TLS handshake.
+        let security_mode = self.config.security.security_mode.as_str();
+        if is_standard_rdp_security(security_mode) {
+            if let Some(tcp) = transports.tcp.as_ref()
+                && !tcp.listen_addr.ip().is_loopback()
+            {
+                tracing::warn!(
+                    addr = %tcp.listen_addr,
+                    "security_mode=\"{security_mode}\" serves UNENCRYPTED RDP on a routable TCP \
+                     address. Confine Standard RDP Security to vsock/loopback: disable \
+                     [server.transports.tcp] or bind it to 127.0.0.1."
+                );
+            }
+        } else if transports.vsock.is_some() {
+            tracing::warn!(
+                "vsock transport active (Hyper-V Enhanced Session Mode) but security_mode=\
+                 \"{security_mode}\". VMConnect speaks Standard RDP Security and will fail the TLS \
+                 handshake (\"received corrupt message ... InvalidContentType\"). Set \
+                 security_mode=\"rdp\" to accept Enhanced Session Mode clients."
+            );
+        }
         #[cfg_attr(
             not(feature = "websocket"),
             expect(unused_mut, reason = "websocket cfg appends to listeners below")
@@ -85,7 +114,7 @@ impl AcceptDeployment for WlrDirectDeployment {
         // (in the deployment) rather than inside ResolvedTransports::build_listeners.
         #[cfg(feature = "websocket")]
         if let Some(ws_cfg) = transports.websocket.as_ref() {
-            use ironrdp_server::tokio_rustls::TlsAcceptor;
+            use tokio_rustls::TlsAcceptor;
 
             use crate::{security::tls::TlsConfig, transport::websocket::WebSocketListenerImpl};
 
@@ -215,11 +244,9 @@ impl AcceptDeployment for WlrDirectDeployment {
                         // re-established. The compositor can reuse the node id
                         // for a brand-new stream, so rebind unconditionally in
                         // that case rather than trusting node-number equality.
-                        if reestablished {
-                            if let Some(s) = streams.first() {
-                                dh.rebind_capture_node(old_node, s.node_id, s.width, s.height)
-                                    .await;
-                            }
+                        if reestablished && let Some(s) = streams.first() {
+                            dh.rebind_capture_node(old_node, s.node_id, s.width, s.height)
+                                .await;
                         }
                         true
                     }

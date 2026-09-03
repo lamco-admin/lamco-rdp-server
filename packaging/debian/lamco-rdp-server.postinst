@@ -1,0 +1,37 @@
+#!/bin/sh
+set -e
+
+# Clipboard file-transfer mounts a read-only FUSE filesystem with allow_other so
+# the desktop file manager can read pasted files. allow_other requires
+# user_allow_other in fuse.conf, which only root can set — hence here, not from
+# the unprivileged user service. Idempotent; left in place on removal since
+# other FUSE software may rely on it.
+if [ "$1" = "configure" ] && [ -f /etc/fuse.conf ]; then
+    if ! grep -qsE '^[[:space:]]*user_allow_other([[:space:]]|$)' /etc/fuse.conf; then
+        echo 'user_allow_other' >> /etc/fuse.conf
+    fi
+fi
+
+# The systemd user unit was renamed from lamco-rdp-server.service to
+# app-io.lamco.rdp-server.service so xdg-desktop-portal can derive a real
+# app id from it. Anyone who enabled the old unit needs that enabled state
+# carried over, or the service silently stops autostarting at login. This
+# can only reach users with an active systemd --user manager right now;
+# anyone not logged in during the upgrade needs to re-enable manually.
+if [ "$1" = "configure" ]; then
+    OLD_UNIT="lamco-rdp-server.service"
+    NEW_UNIT="app-io.lamco.rdp-server.service"
+    for socket in /run/user/*/systemd/private; do
+        [ -S "$socket" ] || continue
+        uid="${socket#/run/user/}"
+        uid="${uid%%/*}"
+        user="$(getent passwd "$uid" | cut -d: -f1)"
+        [ -n "$user" ] || continue
+        if systemctl --user --machine="${user}@" is-enabled "$OLD_UNIT" >/dev/null 2>&1; then
+            systemctl --user --machine="${user}@" disable "$OLD_UNIT" >/dev/null 2>&1 || true
+            systemctl --user --machine="${user}@" enable "$NEW_UNIT" >/dev/null 2>&1 || true
+        fi
+    done
+fi
+
+#DEBHELPER#

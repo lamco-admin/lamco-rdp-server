@@ -380,7 +380,8 @@ impl RdpServerManager {
     /// Request the server to reload its configuration from disk.
     ///
     /// If a command channel is configured, sends a ReloadConfig command
-    /// to the server runtime. Otherwise writes the config and returns success.
+    /// to the server runtime. Otherwise there is no live runtime to notify,
+    /// so this reports failure rather than claiming a reload that didn't happen.
     async fn reload_config(&self) -> (bool, String) {
         tracing::info!("Configuration reload requested via D-Bus");
 
@@ -390,11 +391,11 @@ impl RdpServerManager {
                 Err(_) => (false, "Server command channel closed".to_string()),
             }
         } else {
-            // No command channel: config was written by set_config(),
-            // server will pick it up on next connection
             (
-                true,
-                "Config saved; will take effect on next connection".to_string(),
+                false,
+                "Hot-reload not available in this process; config was written to disk by \
+                 SetConfig and will take effect on next connection"
+                    .to_string(),
             )
         }
     }
@@ -724,7 +725,7 @@ mod tests {
         let manager = RdpServerManager::new(state);
 
         let (success, msg) = manager.reload_config().await;
-        assert!(success);
+        assert!(!success);
         assert!(msg.contains("next connection"));
     }
 

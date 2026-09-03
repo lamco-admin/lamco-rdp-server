@@ -58,6 +58,25 @@
 //! without a full forensic pass. If recalibration is ever undertaken, prefer
 //! thresholds relative to a rolling per-source baseline over the current
 //! fixed absolute percentages, which is what actually broke here.
+//!
+//! # A different, more severe failure mode is now self-corrected
+//!
+//! The archie/Hyprland case above is ordinary granularity drift between two
+//! legitimate protocols — both report *roughly* the right thing, just at
+//! different precision. A separate, more severe case was found on GNOME
+//! Mutter (llvmpipe/SHM capture, no DMA-BUF): the compositor-hint damage
+//! ratio was wrong by 90+ percentage points (reporting ~92% changed when
+//! the true change was ~0%), sustained for an entire session, not a
+//! transient blip. `display_handler.rs`'s damage-source selection now acts
+//! on its own cross-check: when consecutive probe samples diverge by more
+//! than `damage_tracking.compositor_hint_distrust_threshold_pp` (default
+//! 15pp — well above ordinary granularity drift, which stays in the single
+//! digits), it stops trusting that connection's compositor hints and uses
+//! the pixel-diff detector as primary for the rest of the connection
+//! (`damage_source = "pixel-diff-distrust"`). This does not change the
+//! calibration guidance above — it only prevents `AdaptiveFpsController`
+//! from ever seeing a damage ratio that's off by an order of magnitude in
+//! the first place.
 
 use std::{
     collections::VecDeque,

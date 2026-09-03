@@ -6,7 +6,7 @@
 use std::{path::Path, time::Instant};
 
 use serde::{Deserialize, Serialize};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use super::environment::run_command;
 use crate::capabilities::{fallback::AttemptResult, state::ServiceLevel};
@@ -159,11 +159,18 @@ impl EncodingProbe {
     fn probe_vaapi() -> (Option<EncoderBackend>, AttemptResult) {
         let start = Instant::now();
 
+        // Track why detection failed so the startup log can name the specific
+        // cause, and its fix, rather than a generic "not found".
+        let mut render_node_present = false;
+        let mut vainfo_missing = false;
+        let mut driver_lacks_h264 = false;
+
         for i in 128..=135 {
             let device = format!("/dev/dri/renderD{i}");
             if !Path::new(&device).exists() {
                 continue;
             }
+            render_node_present = true;
 
             match run_command("vainfo", &["--display", "drm", "--device", &device]) {
                 Ok(output) => {
@@ -171,7 +178,7 @@ impl EncodingProbe {
                     let caps = Self::parse_vaapi_caps(&output);
 
                     if caps.h264 {
-                        debug!("VA-API found on {}: driver={}", device, driver);
+                        info!("VA-API H.264 encode available on {device} (driver: {driver})");
                         return (
                             Some(EncoderBackend {
                                 backend_type: EncoderBackendType::VaApi {
@@ -189,19 +196,52 @@ impl EncodingProbe {
                             },
                         );
                     }
+
+                    // vainfo ran but this device exposes no H.264 encode entrypoint.
+                    driver_lacks_h264 = true;
+                    debug!("VA-API on {device} (driver: {driver}) has no H.264 encode entrypoint");
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    // The device node exists (checked above), so this NotFound is
+                    // the `vainfo` binary itself being absent, not the device.
+                    vainfo_missing = true;
+                    debug!("vainfo (libva-utils) not installed; cannot probe {device}");
                 }
                 Err(e) => {
-                    debug!("vainfo failed for {}: {}", device, e);
+                    debug!("vainfo failed for {device}: {e}");
                 }
             }
         }
+
+        // Emit one categorized startup line naming the actual blocker and its
+        // fix. Startup-only, so it adds nothing to per-frame log volume.
+        let reason = if vainfo_missing {
+            warn!(
+                "GPU render node present but 'vainfo' (libva-utils) is not installed, so the \
+                 VA-API hardware encoder cannot be detected; using software encoding. Install \
+                 libva-utils to enable detection."
+            );
+            "vainfo (libva-utils) not installed"
+        } else if driver_lacks_h264 {
+            warn!(
+                "VA-API is present but the driver exposes no H.264 encode entrypoint; using \
+                 software encoding. On Fedora, install mesa-va-drivers-freeworld (RPM Fusion) \
+                 to enable GPU H.264 encoding."
+            );
+            "VA-API driver has no H.264 encode entrypoint"
+        } else if !render_node_present {
+            info!("No GPU render node (/dev/dri/renderD12x) found; using software encoding.");
+            "no GPU render node present"
+        } else {
+            "No VA-API devices with H.264 encoding support found"
+        };
 
         (
             None,
             AttemptResult {
                 strategy_name: "VA-API".into(),
                 success: false,
-                error: Some("No VA-API devices with H.264 encoding support found".into()),
+                error: Some(reason.into()),
                 duration_ms: start.elapsed().as_millis() as u64,
             },
         )

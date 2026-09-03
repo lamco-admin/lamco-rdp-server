@@ -310,6 +310,7 @@ mod tests {
             position: (x, y),
             size: (width, height),
             source_type: SourceType::Monitor,
+            mapping_id: None,
         }
     }
 

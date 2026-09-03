@@ -130,9 +130,10 @@ pub struct SharedHandlerState {
     /// mstsc emits a fresh CapsAdvertise (+ CacheImportOffer) when its EGFX
     /// decoder loses sync — typically after a long P-slice chain under load
     /// where one corrupt frame becomes unrecoverable. The expected server
-    /// response is a full re-init: DeleteSurface + ResetGraphics + CreateSurface
-    /// + MapSurfaceToOutput + fresh IDR. Without this, mstsc waits ~ms, then
-    /// closes the Graphics DVC channel and RSTs the TCP connection.
+    /// response is a full re-init: DeleteSurface + ResetGraphics +
+    /// CreateSurface + MapSurfaceToOutput + fresh IDR. Without this, mstsc
+    /// waits ~ms, then closes the Graphics DVC channel and RSTs the TCP
+    /// connection.
     ///
     /// When this flag is set, the display loop performs the full re-init
     /// sequence and clears the flag.
@@ -154,6 +155,15 @@ pub struct SharedHandlerState {
     /// minimal. The display loop checks `should_throttle()` before encoding;
     /// the handler calls `ack_frame()` on each inbound FrameAcknowledge.
     pub flow_controller: std::sync::Mutex<crate::egfx::flow_controller::FlowController>,
+    /// Whether the connected client negotiated EGFX with the `AVC_DISABLED`
+    /// flag set (RDPGFX Capability Set V10/V10.2-V10.7). In practice this
+    /// identifies the Android Microsoft RD Client, which has two pointer
+    /// rendering quirks other clients don't: it shows no cursor at all from
+    /// `DefaultPointer` alone, and it renders `RGBAPointer`'s XOR mask rows
+    /// vertically flipped relative to MS-RDPBCGR 2.2.9.1.1.4.4's bottom-up
+    /// requirement. Used by the cursor pipeline to skip the normal
+    /// bottom-up row flip for this connection.
+    pub needs_android_pointer_updates: std::sync::atomic::AtomicBool,
 }
 
 impl SharedHandlerState {
@@ -172,6 +182,7 @@ impl SharedHandlerState {
                     crate::egfx::flow_controller::FlowControllerConfig::default(),
                 ),
             ),
+            needs_android_pointer_updates: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -193,6 +204,8 @@ impl SharedHandlerState {
             .store(0, std::sync::atomic::Ordering::Release);
         self.last_client_queue_depth
             .store(0, std::sync::atomic::Ordering::Release);
+        self.needs_android_pointer_updates
+            .store(false, std::sync::atomic::Ordering::Release);
         if let Ok(mut fc) = self.flow_controller.lock() {
             fc.clear_all_unacked();
         }

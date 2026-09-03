@@ -6,7 +6,12 @@
 #
 
 Name:           lamco-rdp-server
-Version:        1.4.4
+# Named app-<app-id>, not %{name}, so xdg-desktop-portal's
+# sd_pid_get_user_unit()-based app-id derivation resolves us to
+# io.lamco.rdp-server instead of the empty string, which is what portal
+# restore-token scoping keys on.
+%global unitname app-io.lamco.rdp-server
+Version:        1.4.5
 Release:        1%{?dist}
 Summary:        Wayland RDP server for Linux desktop sharing with GUI
 
@@ -20,12 +25,25 @@ License:        0BSD AND Apache-2.0 AND Apache-2.0 WITH LLVM-exception AND BSD-1
 URL:            https://www.lamco.ai/products/lamco-rdp-server/
 Source0:        https://github.com/lamco-admin/lamco-rdp-server/releases/download/v%{version}/%{name}-%{version}.tar.xz
 
-# Reduce debuginfo on ppc64le to avoid OOM during linking.
-# ppc64le Koji builders have less memory; full debuginfo with codegen-units=1
-# (from cargo-rpm-macros) exceeds available RAM at link time.
-# Standard Fedora pattern (used by Thunderbird, uv, etc.)
-%ifarch ppc64le
+# Large Rust GUI binary (~900 crates, iced/wgpu). Fedora's %build exports
+# %build_rustflags (-Cdebuginfo=2 -Ccodegen-units=1); RUSTFLAGS codegen-units
+# overrides the Cargo profile (rust-lang/rust#53658), so the defaults peak past
+# builder RAM and OOM (SIGKILL) at codegen/link, even on x86_64 when the builder
+# is busy. Reduce debuginfo to line-tables on ALL arches for headroom (uv does
+# the same); ppc64le is tighter still, so drop it to 0, split codegen to 256,
+# disable the debug subpackage, and turn LTO off (in %build below).
 %global rustflags_debuginfo 1
+%ifarch ppc64le
+%global rustflags_debuginfo 0
+%global rustflags_codegen_units 256
+%global debug_package %{nil}
+%endif
+
+# EL/RHEL: line-tables Rust debuginfo yields an empty debugsourcefiles.list, which
+# EL treats as a fatal empty-files error (Fedora tolerates it). Ship EL without a
+# separate debuginfo/debugsource subpackage, same as ppc64le.
+%if 0%{?rhel}
+%global debug_package %{nil}
 %endif
 
 # Disable Fedora's system-level LTO flags to prevent double-LTO interaction
@@ -42,9 +60,9 @@ Patch0:         cros-libva-vp9-compat.patch
 # License tag enumerates all licenses found in vendored crates.
 # Generated from: cargo metadata + vendor/*/Cargo.toml
 
-# Rust toolchain (MSRV 1.88: iced 0.14 requires edition 2024 features)
-BuildRequires:  rust >= 1.88
-BuildRequires:  cargo >= 1.88
+# Rust toolchain (MSRV 1.94: edition 2024 plus the IronRDP 0.17 floor)
+BuildRequires:  rust >= 1.94
+BuildRequires:  cargo >= 1.94
 
 # System libraries
 BuildRequires:  pkgconfig
@@ -92,11 +110,16 @@ BuildRequires:  systemd-rpm-macros
 Requires:       pipewire
 Requires:       xdg-desktop-portal
 Requires:       pam
+# fusermount3 helper + /etc/fuse.conf owner (clipboard file-transfer FUSE mount)
+Requires:       fuse3
 
 # Weak dependencies for hardware encoding
 Recommends:     libva
 Recommends:     intel-media-driver
 Recommends:     mesa-va-drivers
+# vainfo (libva-utils) lets the server detect the GPU H.264 encoder at
+# startup; without it VA-API is undetected and encoding silently uses software.
+Recommends:     libva-utils
 
 
 # Bundled crate provides (920 vendored Rust crates)
@@ -1052,6 +1075,9 @@ export CARGO_TARGET_DIR="$PWD/target"
 # of runtime performance. No features are affected.
 export CARGO_PROFILE_RELEASE_LTO=thin
 export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=4
+%ifarch ppc64le
+export CARGO_PROFILE_RELEASE_LTO=off
+%endif
 
 # Build release binaries (server + GUI).
 # vsock + websocket activate the AF_VSOCK (Hyper-V Enhanced
@@ -1067,7 +1093,7 @@ install -Dm755 target/release/%{name}-gui %{buildroot}%{_bindir}/%{name}-gui
 install -dm755 %{buildroot}%{_sysconfdir}/%{name}
 
 # Systemd user service
-install -Dm644 packaging/systemd/%{name}.service %{buildroot}%{_userunitdir}/%{name}.service
+install -Dm644 packaging/systemd/%{unitname}.service %{buildroot}%{_userunitdir}/%{unitname}.service
 
 # Desktop file (validated by desktop-file-install)
 desktop-file-install \
@@ -1086,13 +1112,44 @@ done
 appstream-util validate-relax --nonet %{buildroot}%{_metainfodir}/io.lamco.rdp-server.metainfo.xml
 
 %post
-%systemd_user_post %{name}.service
+%systemd_user_post %{unitname}.service
+# Clipboard file-transfer mounts a read-only FUSE filesystem with allow_other so
+# the desktop file manager can read pasted files. allow_other requires
+# user_allow_other in fuse.conf, which only root can set — hence here, not from
+# the unprivileged user service. Idempotent; left in place on uninstall since
+# other FUSE software may rely on it.
+if [ -f %{_sysconfdir}/fuse.conf ]; then
+    grep -qsE '^[[:space:]]*user_allow_other([[:space:]]|$)' %{_sysconfdir}/fuse.conf || \
+        echo 'user_allow_other' >> %{_sysconfdir}/fuse.conf
+fi
 
 %preun
-%systemd_user_preun %{name}.service
+%systemd_user_preun %{unitname}.service
 
 %postun
-%systemd_user_postun_with_restart %{name}.service
+%systemd_user_postun_with_restart %{unitname}.service
+
+# %preun/%postun run before/after this package's own files change, not after
+# the whole transaction — a rename mid-upgrade isn't visible to them yet.
+# %posttrans runs once both old and new files are on disk, which is the
+# only point where "was the old unit enabled" is answerable. Best-effort:
+# only reaches users with an active systemd --user manager right now; anyone
+# not logged in during the upgrade needs to re-enable manually.
+%posttrans
+OLD_UNIT="%{name}.service"
+NEW_UNIT="%{unitname}.service"
+for socket in /run/user/*/systemd/private; do
+    [ -S "$socket" ] || continue
+    uid="${socket#/run/user/}"
+    uid="${uid%%/*}"
+    user="$(getent passwd "$uid" | cut -d: -f1)"
+    [ -n "$user" ] || continue
+    if systemctl --user --machine="${user}@" is-enabled "$OLD_UNIT" >/dev/null 2>&1; then
+        systemctl --user --machine="${user}@" disable "$OLD_UNIT" >/dev/null 2>&1 || true
+        systemctl --user --machine="${user}@" enable "$NEW_UNIT" >/dev/null 2>&1 || true
+    fi
+done
+exit 0
 
 %files
 %license LICENSE
@@ -1101,13 +1158,25 @@ appstream-util validate-relax --nonet %{buildroot}%{_metainfodir}/io.lamco.rdp-s
 %{_bindir}/%{name}
 %{_bindir}/%{name}-gui
 %dir %{_sysconfdir}/%{name}
-%{_userunitdir}/%{name}.service
+%{_userunitdir}/%{unitname}.service
 %{_datadir}/applications/io.lamco.rdp-server.desktop
 %{_metainfodir}/io.lamco.rdp-server.metainfo.xml
 %{_datadir}/icons/hicolor/scalable/apps/io.lamco.rdp-server.svg
 %{_datadir}/icons/hicolor/*/apps/io.lamco.rdp-server.png
 
 %changelog
+* Wed Sep 02 2026 Greg Lamberson <greg@lamco.io> - 1.4.5-1
+- New upstream release 1.4.5
+- Community Edition sandboxes: the GUI can start the server (D-Bus name grant, non-fatal registration)
+- Area capture on GNOME so a fullscreen video no longer freezes (capture.gnome_record_mode)
+- VA-API hardware encoding now drives EGFX H.264; desktop audio capture now starts and stays in sync
+- Fix a GNOME server that could stop accepting connections (EIS handshake lost wakeup); fix the first connect after an audio client disconnects failing on a stale RDPSND wave
+- Server-driven cursor shapes, MS-RDPEI multitouch, client keyboard layout, RTT reporting
+- Fix crash on client disconnect; fix listen port resetting to 3389; Hyper-V ESM via security_mode rdp
+- Rename systemd user unit to app-io.lamco.rdp-server.service; %posttrans migrates enabled state
+- Requires: fuse3 (%post enables user_allow_other); Recommends: libva-utils for VA-API detection
+- MSRV 1.94; libpipewire >= 0.3.62; no debuginfo subpackage on ppc64le and EL
+
 * Fri Jul 03 2026 Greg Lamberson <greg@lamco.io> - 1.4.4-1
 - New upstream release 1.4.4
 - Unified multi-transport: AF_VSOCK (Hyper-V) and experimental WebSocket/RDCleanPath

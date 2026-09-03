@@ -48,6 +48,7 @@ mod avc444_encoder;
 mod color_convert;
 mod color_space;
 pub(crate) mod encode_diagnostics;
+pub mod tone_map;
 mod yuv444_packing;
 
 #[cfg(any(feature = "vaapi", feature = "nvenc"))]

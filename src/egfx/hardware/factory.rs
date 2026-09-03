@@ -65,7 +65,7 @@ pub fn create_hardware_encoder(
     }
 
     // Parse quality preset
-    let preset = QualityPreset::from_str(&config.quality_preset).unwrap_or_else(|| {
+    let preset = QualityPreset::from_name(&config.quality_preset).unwrap_or_else(|| {
         warn!(
             "Invalid quality preset '{}', using 'balanced'",
             config.quality_preset
@@ -182,86 +182,14 @@ fn try_vulkan_video(
     Ok(Box::new(encoder))
 }
 
-/// Performs quick checks without actually initializing an encoder.
-///
-/// Returns (vaapi_available, nvenc_available)
-pub(super) fn probe_backends() -> (bool, bool) {
-    let vaapi = probe_vaapi();
-    let nvenc = probe_nvenc();
-
-    debug!("Hardware encoding probe: vaapi={}, nvenc={}", vaapi, nvenc);
-
-    (vaapi, nvenc)
-}
-
-/// Quick probe for VA-API availability
-#[cfg(feature = "vaapi")]
-fn probe_vaapi() -> bool {
-    use std::path::Path;
-
-    // Check if render device exists
-    let render_devices = [
-        "/dev/dri/renderD128",
-        "/dev/dri/renderD129",
-        "/dev/dri/renderD130",
-    ];
-
-    for device in &render_devices {
-        if Path::new(device).exists() {
-            debug!("VA-API: Found render device {}", device);
-            return true;
-        }
-    }
-
-    debug!("VA-API: No render devices found");
-    false
-}
-
-#[cfg(not(feature = "vaapi"))]
-fn probe_vaapi() -> bool {
-    false
-}
-
-/// Quick probe for NVENC availability
-#[cfg(feature = "nvenc")]
-fn probe_nvenc() -> bool {
-    use std::path::Path;
-
-    // NVENC requires direct GPU access not available in Flatpak sandbox
-    if crate::config::is_flatpak() {
-        debug!("NVENC: Skipping probe in Flatpak sandbox");
-        return false;
-    }
-
-    // Check for NVIDIA driver presence
-    let nvidia_indicators = [
-        "/dev/nvidia0",
-        "/dev/nvidiactl",
-        "/proc/driver/nvidia/version",
-    ];
-
-    for indicator in &nvidia_indicators {
-        if Path::new(indicator).exists() {
-            debug!("NVENC: Found NVIDIA indicator {}", indicator);
-            return true;
-        }
-    }
-
-    debug!("NVENC: No NVIDIA driver indicators found");
-    false
-}
-
-#[cfg(not(feature = "nvenc"))]
-fn probe_nvenc() -> bool {
-    false
-}
-
 #[cfg(test)]
 mod tests {
+    #[cfg(not(any(feature = "vaapi", feature = "nvenc")))]
     use std::path::PathBuf;
 
     use super::*;
 
+    #[cfg(not(any(feature = "vaapi", feature = "nvenc")))]
     fn test_config() -> HardwareEncodingConfig {
         HardwareEncodingConfig {
             enabled: true,
@@ -272,13 +200,6 @@ mod tests {
             prefer_nvenc: true,
             ..HardwareEncodingConfig::default()
         }
-    }
-
-    #[test]
-    fn test_probe_backends() {
-        let (vaapi, nvenc) = probe_backends();
-        // Just check it doesn't panic
-        println!("Probe results: vaapi={}, nvenc={}", vaapi, nvenc);
     }
 
     #[test]
@@ -294,7 +215,10 @@ mod tests {
 
     #[test]
     fn test_quality_preset_parsing() {
-        assert_eq!(QualityPreset::from_str("speed"), Some(QualityPreset::Speed));
-        assert_eq!(QualityPreset::from_str("invalid"), None);
+        assert_eq!(
+            QualityPreset::from_name("speed"),
+            Some(QualityPreset::Speed)
+        );
+        assert_eq!(QualityPreset::from_name("invalid"), None);
     }
 }

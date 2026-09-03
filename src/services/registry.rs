@@ -151,39 +151,6 @@ impl ServiceRegistry {
         )
     }
 
-    /// Codec names suitable for IronRDP's `server_codecs_capabilities()`.
-    /// Order reflects preference based on available services.
-    pub fn recommended_codecs(&self) -> Vec<&'static str> {
-        let video_level = self.service_level(ServiceId::VideoCapture);
-        let dmabuf_level = self.service_level(ServiceId::DmaBufZeroCopy);
-        let damage_level = self.service_level(ServiceId::DamageTracking);
-
-        let mut codecs = Vec::new();
-
-        if video_level >= ServiceLevel::Guaranteed {
-            // H.264 encoder verified available
-            if dmabuf_level >= ServiceLevel::Guaranteed && damage_level >= ServiceLevel::Guaranteed
-            {
-                codecs.push("avc444");
-            }
-            codecs.push("avc420");
-        }
-
-        // RemoteFX bitmap is always available as fallback
-        codecs.push("remotefx");
-
-        codecs
-    }
-
-    /// AVC444 requires reliable damage tracking and preferably zero-copy buffers.
-    pub fn should_enable_avc444(&self) -> bool {
-        let dmabuf_level = self.service_level(ServiceId::DmaBufZeroCopy);
-        let damage_level = self.service_level(ServiceId::DamageTracking);
-
-        // AVC444 is more demanding - require guaranteed services
-        dmabuf_level >= ServiceLevel::Guaranteed && damage_level >= ServiceLevel::Guaranteed
-    }
-
     pub fn recommended_fps(&self) -> u32 {
         self.compositor_caps.profile.recommended_fps_cap
     }
@@ -222,20 +189,23 @@ impl ServiceRegistry {
         self.service_level(ServiceId::WlrScreencopy) >= ServiceLevel::Guaranteed
     }
 
-    pub fn credential_storage_level(&self) -> ServiceLevel {
-        self.service_level(ServiceId::CredentialStorage)
+    /// Compositor with the standardized ext-image-copy-capture-v1 protocol
+    /// (bypasses portal). Equivalent bypass to wlr-screencopy, but present on
+    /// compositors that never had wlr-screencopy at all (Mir, phoc, Jay,
+    /// Treeland) or have since migrated off it (Wayfire 0.11+).
+    pub fn has_ext_image_copy_capture(&self) -> bool {
+        self.service_level(ServiceId::ExtImageCopyCapture) >= ServiceLevel::Guaranteed
     }
 
-    /// Portal restore tokens, Mutter Direct API, or wlr-screencopy can bypass the dialog.
-    pub fn can_avoid_permission_dialog(&self) -> bool {
-        self.supports_session_persistence()
-            || self.has_mutter_direct_api()
-            || self.has_wlr_screencopy()
+    pub fn credential_storage_level(&self) -> ServiceLevel {
+        self.service_level(ServiceId::CredentialStorage)
     }
 
     pub fn recommended_session_strategy(&self) -> &'static str {
         if self.has_wlr_screencopy() {
             "wlr-screencopy (no dialog)"
+        } else if self.has_ext_image_copy_capture() {
+            "ext-image-copy-capture (no dialog)"
         } else if self.has_mutter_direct_api() {
             "Mutter Direct API (no dialog)"
         } else if self.supports_session_persistence() {

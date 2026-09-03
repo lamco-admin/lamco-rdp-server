@@ -126,6 +126,43 @@ pub(crate) fn evaluate_stress_idr_trigger(
     }
 }
 
+/// Result of the compositor-hint trust evaluation.
+pub(crate) struct CompositorTrustEval {
+    /// Updated consecutive-high-divergence counter (feed back into the next call).
+    pub new_consecutive_count: u32,
+    /// Whether compositor damage hints should now be distrusted for the rest
+    /// of this connection.
+    pub should_distrust: bool,
+}
+
+/// Decide whether the periodic compositor-hint-vs-pixel-diff calibration
+/// probe has diverged enough, consecutively enough, to stop trusting
+/// compositor-supplied damage regions for the rest of this connection.
+///
+/// `divergence_pp` is the absolute delta (percentage points) between the
+/// compositor-hint damage ratio and the pixel-diff damage ratio for one
+/// probe sample. A single high-divergence sample does not distrust — only
+/// `required_consecutive` samples in a row do, so one real full-screen
+/// redraw landing on a probe frame can't misfire this. Any sample within
+/// threshold resets the counter to 0 (consecutive, not cumulative).
+pub(crate) fn evaluate_compositor_trust(
+    divergence_pp: f32,
+    consecutive_high_divergence: u32,
+    threshold_pp: f32,
+    required_consecutive: u32,
+) -> CompositorTrustEval {
+    let exceeds = divergence_pp.abs() > threshold_pp;
+    let new_consecutive_count = if exceeds {
+        consecutive_high_divergence + 1
+    } else {
+        0
+    };
+    CompositorTrustEval {
+        new_consecutive_count,
+        should_distrust: new_consecutive_count >= required_consecutive,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -150,7 +187,7 @@ mod tests {
 
     #[test]
     fn damage_ratio_empty_is_zero() {
-        assert_eq!(compute_damage_ratio(&[], 1920, 1080), 0.0);
+        assert!(compute_damage_ratio(&[], 1920, 1080).abs() < 1e-6);
     }
 
     #[test]
@@ -169,7 +206,7 @@ mod tests {
     #[test]
     fn damage_ratio_guards_zero_area_frame() {
         let regions = [DamageRegion::new(0, 0, 10, 10)];
-        assert_eq!(compute_damage_ratio(&regions, 0, 0), 0.0);
+        assert!(compute_damage_ratio(&regions, 0, 0).abs() < 1e-6);
     }
 
     #[test]
@@ -181,7 +218,7 @@ mod tests {
 
     #[test]
     fn avc444_requested_and_supported() {
-        assert_eq!(resolve_avc444_enabled("avc444", true, true).0, true);
+        assert!(resolve_avc444_enabled("avc444", true, true).0);
     }
 
     #[test]
@@ -200,15 +237,15 @@ mod tests {
 
     #[test]
     fn avc444_auto_picks_best_available() {
-        assert_eq!(resolve_avc444_enabled("auto", true, true).0, true);
-        assert_eq!(resolve_avc444_enabled("auto", false, true).0, false);
-        assert_eq!(resolve_avc444_enabled("auto", true, false).0, false);
+        assert!(resolve_avc444_enabled("auto", true, true).0);
+        assert!(!resolve_avc444_enabled("auto", false, true).0);
+        assert!(!resolve_avc444_enabled("auto", true, false).0);
     }
 
     #[test]
     fn avc444_unrecognized_pref_behaves_as_auto() {
         // An unknown codec string falls through to the auto branch.
-        assert_eq!(resolve_avc444_enabled("nonsense", true, true).0, true);
+        assert!(resolve_avc444_enabled("nonsense", true, true).0);
     }
 
     #[test]
@@ -248,6 +285,54 @@ mod tests {
     fn stress_drop_rate_zero_on_empty_window() {
         let eval = evaluate_stress_idr_trigger(0, 0, 0.5, 2000, 1000, 2000, 1500);
         assert!(!eval.should_trigger);
-        assert_eq!(eval.drop_rate, 0.0);
+        assert!(eval.drop_rate.abs() < 1e-6);
+    }
+
+    #[test]
+    fn trust_below_threshold_never_distrusts() {
+        let eval = evaluate_compositor_trust(5.0, 0, 15.0, 3);
+        assert_eq!(eval.new_consecutive_count, 0);
+        assert!(!eval.should_distrust);
+    }
+
+    #[test]
+    fn trust_single_high_sample_does_not_distrust() {
+        // One sample over threshold is below required_consecutive=3.
+        let eval = evaluate_compositor_trust(90.0, 0, 15.0, 3);
+        assert_eq!(eval.new_consecutive_count, 1);
+        assert!(!eval.should_distrust);
+    }
+
+    #[test]
+    fn trust_consecutive_samples_trigger_distrust() {
+        let mut count = 0;
+        for _ in 0..2 {
+            let eval = evaluate_compositor_trust(90.0, count, 15.0, 3);
+            count = eval.new_consecutive_count;
+            assert!(!eval.should_distrust);
+        }
+        let eval = evaluate_compositor_trust(90.0, count, 15.0, 3);
+        assert_eq!(eval.new_consecutive_count, 3);
+        assert!(eval.should_distrust);
+    }
+
+    #[test]
+    fn trust_interrupting_low_sample_resets_counter() {
+        let first = evaluate_compositor_trust(90.0, 0, 15.0, 3);
+        assert_eq!(first.new_consecutive_count, 1);
+        let second = evaluate_compositor_trust(90.0, first.new_consecutive_count, 15.0, 3);
+        assert_eq!(second.new_consecutive_count, 2);
+        // An in-range sample interrupts the streak — counter resets, not decrements.
+        let reset = evaluate_compositor_trust(2.0, second.new_consecutive_count, 15.0, 3);
+        assert_eq!(reset.new_consecutive_count, 0);
+        assert!(!reset.should_distrust);
+    }
+
+    #[test]
+    fn trust_negative_divergence_uses_absolute_value() {
+        // Compositor under-reporting damage is just as untrustworthy as
+        // over-reporting; divergence is compared by magnitude.
+        let eval = evaluate_compositor_trust(-90.0, 0, 15.0, 3);
+        assert_eq!(eval.new_consecutive_count, 1);
     }
 }

@@ -166,11 +166,22 @@ impl SyncManager {
             format_names
         );
 
+        // A FormatList from the client is a user copying something. Two copies
+        // of the same kind of content in quick succession are two copies, not a
+        // loop, and dropping the second left the Linux side serving the older
+        // content: copy "a", "b", "c" inside the window and a paste still
+        // yielded "b".
+        //
+        // The hash check here could not have caught a real loop anyway. It
+        // compares against the opposite source in `format_history`, but this is
+        // the only direction that records format hashes at all (the Linux
+        // direction records MIME hashes, a separate space), so the only thing it
+        // ever matched was this direction's own previous announcement. The echo
+        // that genuinely needs blocking is Linux announcing back what we just
+        // pushed to it, and that is held by the RdpOwned echo-protection window
+        // in `handle_portal_mime_types`, which is untouched.
         if self.loop_detector.would_cause_loop(&formats) {
-            debug!("│ DECISION: Block (loop detection - format hash match)");
-            debug!("└────────────────────────────────────────────────────────────────");
-            warn!("Ignoring RDP format list due to loop detection");
-            return false;
+            debug!("│ Repeat of the previous format list: a second copy, allowed");
         }
 
         let now = SystemTime::now();
@@ -447,25 +458,32 @@ mod tests {
     }
 
     #[test]
-    fn test_sync_manager_loop_prevention() {
+    fn test_repeated_rdp_copies_are_not_treated_as_a_loop() {
         let config = LoopDetectionConfig {
             window_ms: 1000,
             ..Default::default()
         };
         let mut manager = SyncManager::with_config(config);
 
-        // RDP announces text formats
+        // Three copies of text in quick succession, as a user pressing Ctrl+C
+        // three times produces. Each is a distinct copy and each must reach the
+        // Linux side, or a paste serves stale content.
         let text_formats = make_text_formats();
         assert!(manager.handle_rdp_formats(text_formats.clone()));
+        assert!(manager.handle_rdp_formats(text_formats.clone()));
+        assert!(manager.handle_rdp_formats(text_formats));
+    }
 
-        // Simulate Portal echo - record it as coming from Local
-        let text_mime = vec!["text/plain".to_string()];
-        manager
-            .loop_detector
-            .record_mime_types(&text_mime, ClipboardSource::Local);
-
-        // Now RDP trying to announce same formats again should be blocked (loop)
-        assert!(!manager.handle_rdp_formats(text_formats));
+    #[test]
+    fn test_portal_echo_still_blocked_while_rdp_owns() {
+        // The echo that matters is Linux announcing back what we just pushed to
+        // it. That is held by the RdpOwned window, not by hash matching.
+        let mut manager = SyncManager::new();
+        assert!(manager.handle_rdp_formats(make_text_formats()));
+        assert_eq!(
+            manager.handle_portal_formats(vec!["text/plain".to_string()], false),
+            PortalSyncDecision::Block
+        );
     }
 
     #[test]

@@ -156,6 +156,7 @@ mod tests {
             position: (x, y),
             size: (width, height),
             source_type: SourceType::Monitor,
+            mapping_id: None,
         }
     }
 
@@ -207,6 +208,7 @@ mod tests {
             position: (0, 0),
             size: (1920, 1080),
             source_type: SourceType::Monitor,
+            mapping_id: None,
         };
 
         let monitor = MonitorInfo::from_stream_info(&stream, true);

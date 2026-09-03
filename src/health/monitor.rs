@@ -184,6 +184,16 @@ impl SessionHealthMonitor {
                     debug!("Video frames stalled for {stall_duration_ms}ms (informational)");
                 }
 
+                HealthEvent::VideoFramesCorrupted { count, window_ms } => {
+                    // Dropping these frames keeps the client's picture correct,
+                    // so video is not failed. It does mean the compositor has
+                    // stopped delivering usable content, which the user sees as
+                    // a freeze, so it is worth a warning rather than a debug.
+                    warn!(
+                        "Compositor delivered {count} corrupted buffers in {window_ms}ms; frames dropped rather than encoded (compositor-side capture fault)"
+                    );
+                }
+
                 HealthEvent::VideoFrameNeverStarted { elapsed_ms } => {
                     error!(
                         "No video frames received since session start ({}ms elapsed)",
@@ -195,9 +205,32 @@ impl SessionHealthMonitor {
                 }
 
                 HealthEvent::VideoFrameResumed => {
-                    // Informational only — video health is driven by PipeWire
-                    // stream state, not frame timing (see VideoFrameStalled).
-                    debug!("Video frames resumed");
+                    // Frame timing is idle-ambiguous, so it does not drive video
+                    // health in general. But if video was degraded by a frame-ack
+                    // stall, resumed frames mean the recovery took — clear it.
+                    if let SubsystemHealth::Degraded(ref reason) = state.video
+                        && reason.contains("frame-ack stall")
+                    {
+                        info!("Video frames resumed after frame-ack stall — recovered to healthy");
+                        state.video = SubsystemHealth::Healthy;
+                    } else {
+                        debug!("Video frames resumed");
+                    }
+                }
+
+                HealthEvent::VideoAckStalled { stalled_ms } => {
+                    // A genuinely stuck stream: frames were outstanding and the
+                    // client stopped acking (not an idle desktop, which has
+                    // nothing outstanding). The flow controller already recovered
+                    // via resume + IDR; mark video degraded for visibility and let
+                    // VideoFrameResumed clear it.
+                    warn!(
+                        "Video frame-ack stall: client left a frame unacked for \
+                         {stalled_ms}ms — recovered via IDR"
+                    );
+                    state.video = SubsystemHealth::Degraded(
+                        "client frame-ack stall — recovered via IDR".into(),
+                    );
                 }
 
                 HealthEvent::InputFailed {
@@ -286,6 +319,24 @@ impl SessionHealthMonitor {
                     {
                         state.video = SubsystemHealth::Healthy;
                     }
+                }
+
+                HealthEvent::CompositorDamageHintsDistrusted { divergence_pp } => {
+                    // Not a degradation: the pixel-diff fallback keeps video
+                    // fully correct, just via a costlier detection path.
+                    // Informational only, matching VideoFrameStalled's
+                    // treatment of a self-corrected condition.
+                    info!(
+                        "Compositor damage hints distrusted for this connection ({divergence_pp:.1}pp divergence) — using pixel-diff fallback"
+                    );
+                }
+
+                HealthEvent::InputBackendSelected { ref backend } => {
+                    // Informational only -- which pointer backend a session
+                    // is using doesn't itself indicate degraded health (the
+                    // uinput fallback is a supported, working path), but it's
+                    // worth surfacing for fleet-scale deployment audits.
+                    info!("Session pointer input backend: {backend}");
                 }
             }
 

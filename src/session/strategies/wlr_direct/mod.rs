@@ -352,6 +352,19 @@ impl SessionHandle for WlrSessionHandleImpl {
         Ok(())
     }
 
+    // notify_keyboard_keysym is deliberately not overridden here: unlike Portal
+    // RemoteDesktop and Mutter's native RemoteDesktop, `zwp_virtual_keyboard_v1`
+    // (the Wayland protocol this strategy speaks directly, bypassing portals)
+    // has no keysym-injection request at all, only per-keycode key events
+    // interpreted against the keymap this strategy itself uploaded. Non-ASCII
+    // Unicode keyboard events (CJK, Indic-phonetic IME, any character outside
+    // the negotiated scancode layout) are silently dropped on this strategy as
+    // a result, inheriting the trait's default no-op. Fixing this for real
+    // needs dynamic keymap patching (synthesizing a mapping for the specific
+    // codepoint and re-uploading the keymap) or an equivalent mechanism scoped
+    // on its own; it is not a gap in this override, it is the strategy's
+    // documented limitation.
+
     async fn notify_pointer_motion_absolute(&self, stream_id: u32, x: f64, y: f64) -> Result<()> {
         // For MVP with input-only support, we don't have stream info from video capture
         // Use default screen dimensions or accept that motion may not work without video

@@ -159,7 +159,7 @@ impl Security {
 
     /// Create TLS acceptor
     /// Get TLS server config for creating acceptor
-    pub fn server_config(&self) -> Arc<ironrdp_server::tokio_rustls::rustls::ServerConfig> {
+    pub fn server_config(&self) -> Arc<tokio_rustls::rustls::ServerConfig> {
         self.tls_config.server_config()
     }
 
@@ -195,8 +195,7 @@ mod tests {
         let result = Security::new(&config).await;
 
         // In real test environment with certs, this should pass
-        if result.is_ok() {
-            let manager = result.unwrap();
+        if let Ok(manager) = result {
             // Verify we can get the server config and authenticator
             let _server_config = manager.server_config();
             let _authenticator = manager.authenticator();

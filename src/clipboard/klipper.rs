@@ -265,7 +265,7 @@ impl KlipperMonitor {
 
             // This task keeps the match rule active
             while active.load(Ordering::SeqCst) {
-                tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
+                tokio::time::sleep(tokio::time::Duration::from_mins(1)).await;
             }
 
             info!("Klipper signal monitor stopped");
