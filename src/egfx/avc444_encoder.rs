@@ -1254,6 +1254,16 @@ impl Avc444Encoder {
 
     pub fn force_keyframe(&mut self) {}
 
+    pub fn backend_name(&self) -> &'static str {
+        "disabled"
+    }
+
+    pub fn set_diagnostics(
+        &mut self,
+        _diagnostics: Option<std::sync::Arc<super::encode_diagnostics::EncodeDiagnostics>>,
+    ) {
+    }
+
     pub fn stats(&self) -> Avc444Stats {
         Avc444Stats {
             frames_encoded: 0,
@@ -1286,6 +1296,15 @@ impl Avc444Encoder {
     ) {
     }
     pub fn request_idr(&mut self) {}
+    pub fn ms_since_last_idr(&self) -> u64 {
+        u64::MAX
+    }
+    pub fn set_aux_max_interval(&mut self, _max_interval: u32) -> u32 {
+        0
+    }
+    pub fn aux_max_interval(&self) -> u32 {
+        0
+    }
     pub fn is_periodic_idr_due(&self) -> bool {
         false
     }

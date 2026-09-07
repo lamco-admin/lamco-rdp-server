@@ -120,7 +120,7 @@ enum VideoEncoder {
 /// Result of encoding a frame - varies by codec
 enum EncodedVideoFrame {
     /// Single H.264 stream (AVC420)
-    Single(Vec<u8>),
+    Single { data: Vec<u8>, is_keyframe: bool },
     /// Dual H.264 streams (AVC444: main + auxiliary)
     /// Phase 1: aux is now Option for bandwidth optimization
     Dual {
@@ -143,7 +143,12 @@ impl VideoEncoder {
         match self {
             VideoEncoder::Avc420(encoder) => encoder
                 .encode_bgra(bgra_data, width, height, timestamp_ms)
-                .map(|opt| opt.map(|frame| EncodedVideoFrame::Single(frame.data))),
+                .map(|opt| {
+                    opt.map(|frame| EncodedVideoFrame::Single {
+                        data: frame.data,
+                        is_keyframe: frame.is_keyframe,
+                    })
+                }),
             VideoEncoder::Avc444(encoder) => encoder
                 .encode_bgra(bgra_data, width, height, timestamp_ms)
                 .map(|opt| {
@@ -184,11 +189,9 @@ impl VideoEncoder {
 
     /// Milliseconds since the last IDR was emitted.
     ///
-    /// Returns `u64::MAX` for AVC420 (no IDR tracking — every keyframe is an IDR,
-    /// so any call site that uses this is implicitly asking about AVC444 stress).
     fn ms_since_last_idr(&self) -> u64 {
         match self {
-            VideoEncoder::Avc420(_) => u64::MAX,
+            VideoEncoder::Avc420(encoder) => encoder.ms_since_last_idr(),
             VideoEncoder::Avc444(encoder) => encoder.ms_since_last_idr(),
         }
     }
@@ -197,7 +200,7 @@ impl VideoEncoder {
     /// Used to bypass damage detection and send full frame when IDR fires
     fn is_periodic_idr_due(&self) -> bool {
         match self {
-            VideoEncoder::Avc420(_) => false, // AVC420 doesn't have periodic IDR
+            VideoEncoder::Avc420(encoder) => encoder.is_periodic_idr_due(),
             VideoEncoder::Avc444(encoder) => encoder.is_periodic_idr_due(),
         }
     }
@@ -2784,6 +2787,9 @@ impl LamcoDisplayHandler {
                                     // Fall through to AVC420
                                     match Avc420Encoder::new(config) {
                                         Ok(mut encoder) => {
+                                            encoder.configure_periodic_idr(
+                                                self.config.egfx.periodic_idr_interval,
+                                            );
                                             encoder.set_diagnostics(encoder_diagnostics.clone());
                                             video_encoder = Some(VideoEncoder::Avc420(encoder));
                                             info!(
@@ -2828,6 +2834,9 @@ impl LamcoDisplayHandler {
 
                             match avc420_result {
                                 Ok(mut encoder) => {
+                                    encoder.configure_periodic_idr(
+                                        self.config.egfx.periodic_idr_interval,
+                                    );
                                     encoder.set_diagnostics(encoder_diagnostics.clone());
                                     video_encoder = Some(VideoEncoder::Avc420(encoder));
                                     info!(
@@ -3297,8 +3306,8 @@ impl LamcoDisplayHandler {
                         }
                         match encode_result {
                             Ok(Some(encoded_frame)) => {
-                                let send_result = match encoded_frame {
-                                    EncodedVideoFrame::Single(data) => {
+                                let (send_result, avc420_keyframe) = match encoded_frame {
+                                    EncodedVideoFrame::Single { data, is_keyframe } => (
                                         sender
                                             .send_frame_with_regions(
                                                 &data,
@@ -3309,21 +3318,25 @@ impl LamcoDisplayHandler {
                                                 &damage_regions,
                                                 timestamp_ms as u32,
                                             )
-                                            .await
-                                    }
+                                            .await,
+                                        is_keyframe,
+                                    ),
                                     EncodedVideoFrame::Dual { main, aux } => {
-                                        sender
-                                            .send_avc444_frame_with_regions(
-                                                &main,
-                                                aux.as_deref(), // Option<Vec<u8>> → Option<&[u8]>
-                                                aligned_width as u16,
-                                                aligned_height as u16,
-                                                frame.width as u16,
-                                                frame.height as u16,
-                                                &damage_regions,
-                                                timestamp_ms as u32,
-                                            )
-                                            .await
+                                        (
+                                            sender
+                                                .send_avc444_frame_with_regions(
+                                                    &main,
+                                                    aux.as_deref(), // Option<Vec<u8>> → Option<&[u8]>
+                                                    aligned_width as u16,
+                                                    aligned_height as u16,
+                                                    frame.width as u16,
+                                                    frame.height as u16,
+                                                    &damage_regions,
+                                                    timestamp_ms as u32,
+                                                )
+                                                .await,
+                                            false,
+                                        )
                                     }
                                 };
 
@@ -3348,6 +3361,9 @@ impl LamcoDisplayHandler {
                                         continue; // Frame sent via EGFX, skip RemoteFX path
                                     }
                                     Err(e) => {
+                                        if avc420_keyframe {
+                                            encoder.request_idr();
+                                        }
                                         // CRITICAL: Once EGFX is active, NEVER fall back to RemoteFX!
                                         // Mixing codecs causes display conflicts - EGFX surface invisible.
                                         //
