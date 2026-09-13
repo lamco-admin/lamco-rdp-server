@@ -321,14 +321,10 @@ impl EgfxFrameSender {
             }
         }
 
-        // Create region covering the DISPLAY area (not the padded encoded area)
-        // This ensures only the actual frame is visible, cropping any padding
-        // QP 22 is a good balance of quality vs bitrate for RDP
-        let regions = vec![Avc420Region::full_frame(
-            display_width,
-            display_height,
-            self.qp(),
-        )];
+        // The bitstream contains a complete predictive picture. Advertise that
+        // entire encoded picture so clients do not retain stale pixels outside
+        // compositor damage or the visible (unaligned) display bounds.
+        let regions = avc420_picture_regions(encoded_width, encoded_height, self.qp());
 
         trace!(
             "Region: Display {}×{} from encoded {}×{} (cropping: {}px right, {}px bottom)",
@@ -613,10 +609,10 @@ impl EgfxFrameSender {
         Ok(frame_id)
     }
 
-    /// Send an H.264 frame with specific damage regions
+    /// Send a complete AVC420 H.264 picture after damage-gated encoding
     ///
-    /// Damage regions tell the client which areas changed, enabling partial rendering.
-    /// Empty damage_regions = full frame update.
+    /// `damage_regions` is retained as pipeline context, but AVC420 region metadata
+    /// must describe the complete predictive picture carried in `h264_data`.
     #[expect(
         clippy::too_many_arguments,
         reason = "frame + damage regions + geometry"
@@ -626,9 +622,9 @@ impl EgfxFrameSender {
         h264_data: &[u8],
         encoded_width: u16,
         encoded_height: u16,
-        display_width: u16,
-        display_height: u16,
-        damage_regions: &[DamageRegion],
+        _display_width: u16,
+        _display_height: u16,
+        _damage_regions: &[DamageRegion],
         timestamp_ms: u32,
     ) -> SendResult<u32> {
         use std::sync::atomic::Ordering::Acquire;
@@ -647,49 +643,7 @@ impl EgfxFrameSender {
             return Err(SendError::NoSurface);
         };
 
-        let mut regions = if is_full_frame_update(damage_regions, display_width, display_height) {
-            // Full-frame regions must cover the 16-aligned encoded bitstream, not
-            // just the (possibly unaligned) visible display area. See
-            // is_full_frame_update's doc comment.
-            vec![Avc420Region::full_frame(
-                encoded_width,
-                encoded_height,
-                self.qp(),
-            )]
-        } else {
-            damage_regions_to_avc420(damage_regions, display_width, display_height, self.qp())
-        };
-
-        // Every damage region may have been dropped as degenerate above; a
-        // metablock with zero rects is itself invalid, so fall back to a single
-        // full-frame region rather than emit an empty region list.
-        if regions.is_empty() {
-            debug!(
-                "EGFX: all {} damage region(s) degenerate — sending full frame",
-                damage_regions.len()
-            );
-            regions = vec![Avc420Region::full_frame(
-                encoded_width,
-                encoded_height,
-                self.qp(),
-            )];
-        }
-
-        if regions.len() > 1 {
-            let total_area: u64 = damage_regions
-                .iter()
-                .map(super::super::damage::DamageRegion::area)
-                .sum();
-            let frame_area = display_width as u64 * display_height as u64;
-            let ratio = (total_area as f32 / frame_area as f32 * 100.0) as u32;
-            debug!(
-                "EGFX: Sending {} regions ({}% of frame) for {}×{} frame",
-                regions.len(),
-                ratio,
-                display_width,
-                display_height
-            );
-        }
+        let regions = avc420_picture_regions(encoded_width, encoded_height, self.qp());
 
         let (frame_id, dvc_messages, channel_id) = {
             let mut server = self.gfx_server.lock().map_err(|_| SendError::LockFailed)?;
@@ -839,15 +793,15 @@ impl EgfxFrameSender {
     }
 }
 
-/// Whether `regions` represents a full-frame update, either as the legacy empty-slice
-/// convention or as a single region covering the whole display (how `display_handler.rs`
-/// actually signals a forced full frame today, for periodic IDR and the first frame after
-/// init). MS-RDPEGFX §2.2.4.4: the AVC420 bitstream is always encoded at 16-pixel-aligned
-/// dimensions, and the regionRects metadata — while informational — must stay consistent
-/// with what's actually in the bitstream. A full-frame region must therefore cover the
-/// full *encoded* (aligned/padded) area, not the raw display size, or mstsc will reject or
-/// black-screen the frame on any resolution not already a multiple of 16 (1920×1080 among
-/// them). See `send_frame_with_regions`/`send_avc444_frame_with_regions`.
+/// Build region metadata for a complete AVC420 predictive picture.
+fn avc420_picture_regions(encoded_width: u16, encoded_height: u16, qp: u8) -> Vec<Avc420Region> {
+    vec![Avc420Region::full_frame(encoded_width, encoded_height, qp)]
+}
+
+/// Whether `regions` represents a full-frame update for AVC444, either as the legacy
+/// empty-slice convention or as a single region covering the whole display (how
+/// `display_handler.rs` signals a forced full frame today). Full-frame regions must cover
+/// the complete 16-aligned encoded dimensions.
 fn is_full_frame_update(regions: &[DamageRegion], display_width: u16, display_height: u16) -> bool {
     if regions.is_empty() {
         return true;
@@ -1050,5 +1004,16 @@ mod tests {
             1920,
             1080
         ));
+    }
+
+    #[test]
+    fn avc420_picture_region_covers_aligned_encoded_frame() {
+        let regions = avc420_picture_regions(1280, 720, 22);
+        assert_eq!(regions.len(), 1);
+        assert_eq!(regions[0].left, 0);
+        assert_eq!(regions[0].top, 0);
+        assert_eq!(regions[0].right, 1280);
+        assert_eq!(regions[0].bottom, 720);
+        assert_eq!(regions[0].quantization_parameter, 22);
     }
 }

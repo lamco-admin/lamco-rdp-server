@@ -334,11 +334,58 @@ pub struct Avc420Encoder {
     backend: Avc420Backend,
     config: EncoderConfig,
     frame_count: u64,
+    /// Periodic and externally requested IDR state.
+    idr_state: Avc420IdrState,
     /// Current H.264 level (determined from resolution)
     #[expect(dead_code, reason = "used when level-based bitrate scaling is enabled")]
     current_level: Option<super::h264_level::H264Level>,
     /// Optional diagnostics — None when both diagnostics flags are off (zero cost).
     diagnostics: Option<std::sync::Arc<super::encode_diagnostics::EncodeDiagnostics>>,
+}
+
+#[cfg(feature = "h264")]
+#[derive(Debug)]
+struct Avc420IdrState {
+    last_idr_time: std::time::Instant,
+    periodic_interval: std::time::Duration,
+    force_next_idr: bool,
+}
+
+#[cfg(feature = "h264")]
+impl Avc420IdrState {
+    fn new() -> Self {
+        Self {
+            last_idr_time: std::time::Instant::now(),
+            periodic_interval: std::time::Duration::ZERO,
+            force_next_idr: false,
+        }
+    }
+
+    fn configure_periodic_idr(&mut self, interval_secs: u32) {
+        self.periodic_interval = std::time::Duration::from_secs(u64::from(interval_secs));
+        self.last_idr_time = std::time::Instant::now();
+    }
+
+    fn request_idr(&mut self) {
+        self.force_next_idr = true;
+    }
+
+    fn is_idr_due(&self) -> bool {
+        self.force_next_idr
+            || (!self.periodic_interval.is_zero()
+                && self.last_idr_time.elapsed() >= self.periodic_interval)
+    }
+
+    fn record_encoded_frame(&mut self, is_keyframe: bool) {
+        if is_keyframe {
+            self.force_next_idr = false;
+            self.last_idr_time = std::time::Instant::now();
+        }
+    }
+
+    fn ms_since_last_idr(&self) -> u64 {
+        self.last_idr_time.elapsed().as_millis() as u64
+    }
 }
 
 /// Cached OpenH264 API handle, populated at probe time and reused by encoder creation.
@@ -479,6 +526,7 @@ impl Avc420Encoder {
             backend: Avc420Backend::Software(encoder),
             config,
             frame_count: 0,
+            idr_state: Avc420IdrState::new(),
             current_level: level,
             diagnostics: None,
         })
@@ -527,6 +575,7 @@ impl Avc420Encoder {
             }),
             config,
             frame_count: 0,
+            idr_state: Avc420IdrState::new(),
             current_level: level,
             diagnostics: None,
         })
@@ -563,6 +612,15 @@ impl Avc420Encoder {
             )));
         }
 
+        if self.idr_state.is_idr_due() {
+            match &mut self.backend {
+                Avc420Backend::Software(encoder) => encoder.force_intra_frame(),
+                #[cfg(feature = "vaapi")]
+                Avc420Backend::Hardware(hw) => hw.thread.force_keyframe(),
+            }
+            debug!("Forcing AVC420 IDR on next encode");
+        }
+
         // Hardware AVC420: pad to the aligned encode size and encode on the
         // dedicated VA-API thread (it does its own BGRA→NV12 conversion).
         #[cfg(feature = "vaapi")]
@@ -582,6 +640,7 @@ impl Avc420Encoder {
             ) {
                 Ok(Some((data, is_keyframe))) => {
                     self.frame_count += 1;
+                    self.idr_state.record_encoded_frame(is_keyframe);
                     super::encode_diagnostics::log_nal_hex_dump(
                         &data,
                         self.frame_count,
@@ -664,6 +723,7 @@ impl Avc420Encoder {
         }
 
         let is_keyframe = encoded.is_keyframe();
+        self.idr_state.record_encoded_frame(is_keyframe);
 
         // MS-RDPEGFX requires Annex B format (ITU-H.264 Annex B with start codes)
         // OpenH264 outputs Annex B format directly - use it as-is!
@@ -775,12 +835,28 @@ impl Avc420Encoder {
     }
 
     pub fn force_keyframe(&mut self) {
-        match &mut self.backend {
-            Avc420Backend::Software(encoder) => encoder.force_intra_frame(),
-            #[cfg(feature = "vaapi")]
-            Avc420Backend::Hardware(hw) => hw.thread.force_keyframe(),
+        self.idr_state.request_idr();
+        debug!("AVC420 IDR requested");
+    }
+
+    /// Configure periodic IDR insertion for decoder artifact recovery.
+    pub fn configure_periodic_idr(&mut self, interval_secs: u32) {
+        self.idr_state.configure_periodic_idr(interval_secs);
+        if interval_secs > 0 {
+            info!("AVC420 periodic IDR enabled: interval={interval_secs}s");
+        } else {
+            debug!("AVC420 periodic IDR disabled");
         }
-        debug!("Forced keyframe on next encode");
+    }
+
+    /// Whether the next encode must be paired with full-frame damage.
+    pub fn is_periodic_idr_due(&self) -> bool {
+        self.idr_state.is_idr_due()
+    }
+
+    /// Milliseconds since the last emitted IDR.
+    pub fn ms_since_last_idr(&self) -> u64 {
+        self.idr_state.ms_since_last_idr()
     }
 
     /// Get the detected ABI generation.
@@ -840,6 +916,26 @@ impl Avc420Encoder {
 
     pub fn force_keyframe(&mut self) {}
 
+    pub fn backend_name(&self) -> &'static str {
+        "disabled"
+    }
+
+    pub fn set_diagnostics(
+        &mut self,
+        _diagnostics: Option<std::sync::Arc<super::encode_diagnostics::EncodeDiagnostics>>,
+    ) {
+    }
+
+    pub fn configure_periodic_idr(&mut self, _interval_secs: u32) {}
+
+    pub fn is_periodic_idr_due(&self) -> bool {
+        false
+    }
+
+    pub fn ms_since_last_idr(&self) -> u64 {
+        u64::MAX
+    }
+
     pub fn stats(&self) -> EncoderStats {
         EncoderStats {
             frames_encoded: 0,
@@ -880,6 +976,27 @@ mod tests {
 
         let lb = EncoderConfig::low_bandwidth();
         assert_eq!(lb.bitrate_kbps, 1000);
+    }
+
+    #[cfg(feature = "h264")]
+    #[test]
+    fn avc420_idr_state_exposes_requested_and_periodic_idrs() {
+        let mut state = Avc420IdrState::new();
+        assert!(!state.is_idr_due());
+
+        state.request_idr();
+        assert!(state.is_idr_due());
+
+        // A skipped or non-IDR encode must not consume a recovery request.
+        state.record_encoded_frame(false);
+        assert!(state.is_idr_due());
+
+        state.record_encoded_frame(true);
+        assert!(!state.is_idr_due());
+
+        state.configure_periodic_idr(1);
+        state.last_idr_time -= std::time::Duration::from_secs(1);
+        assert!(state.is_idr_due());
     }
 
     #[cfg(feature = "h264")]
