@@ -107,6 +107,12 @@ cargo clippy --all-features
 
 ## Submitting Pull Requests
 
+### How Fixes Actually Ship
+
+This repo mirrors Lamco Development's internal pipeline. It is not the tree we merge into directly. When a PR identifies a real bug, we review it, verify the root cause (including against the relevant protocol spec where applicable), and reimplement the fix inside that pipeline. We often extend it to cover cases the original PR did not touch, since a bug found in one place usually gets checked everywhere else it could recur.
+
+This means we generally will not merge your branch as is, even when it is correct. The underlying problem does get fixed though, and it gets fixed thoroughly rather than patched in one spot. If you want to see exactly how a specific report was handled, check the issue. We comment with the full disposition (root cause, scope of the fix, target release) before closing it.
+
 ### Before Submitting
 
 - [ ] Code formatted with `cargo fmt`
